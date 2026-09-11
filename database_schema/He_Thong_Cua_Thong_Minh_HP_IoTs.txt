@@ -1,0 +1,145 @@
+================================================================================
+             HỆ THỐNG SMART LOCK IoT - SMART LOCK INTERNET OF THINGS
+                    MÔ TẢ CHI TIẾT - PHIÊN BẢN BỎ VOICE COMMAND
+================================================================================
+Ngày xuất: 11/09/2026
+Mục đích: Giải thích CẶN CẼ từng bước (không có voice)
+================================================================================
+
+1. HỆ THỐNG LÀM GÌ? (Core Purpose)
+--------------------------------------------------------------------------------
+- Đây là hệ thống khoá thông minh điều khiển từ xa bằng 3 cách:
+  1. Tap thẻ NFC (chạm trực tiếp)
+  2. Quét QR trên tem khoá
+  3. Sử dụng App (mobile)
+- Mở khoá chỉ cần một trong những cách trên.
+- Hỗ trợ cập nhật firmware từ xa (OTA).
+- Quản lý nhiều người dùng (chủ sở hữu + thành viên).
+- Ghi lại đầy đủ lịch sử ra vào, pin, nhiệt độ, tín hiệu.
+- Có cảnh báo an ninh (khi phát hiện nhiễu NFC, pin thấp, chặn phá).
+- Toàn bộ hệ thống dành riêng cho đồ án môn học: 
+  - Không có mạng internet công cộng
+  - Không cho phép hack
+  - Môi trường 100% độc lập
+
+2. AI LÀM GÌ? (Who / What)
+--------------------------------------------------------------------------------
+- Admin: Quản lý toàn hệ thống, xem mọi thứ, can thiệp hỗ trợ.
+- Owner: Chủ sở hữu khoá (người có quyền cao nhất).
+- Member: Người được chủ cho phép sử dụng (qua share code).
+- Device: Khoá vật lý thật (Druino BLK Plus).
+- Simulated Device: Khoá mô phỏng bằng phần mềm (dùng khi không có hardware thật).
+- NFC Reader: Phần cứng đầu đọc thẻ (Master và Head).
+
+3. CẤU TRÚC 3 LỚP HỆ THỐNG
+--------------------------------------------------------------------------------
+LỚP 1: HARDWARE (Arduino - Druino BLK Plus)
+- Chip: ATmega2560 + ESP32-C3
+- Module NFC: PN532
+- BLE + Wi-Fi
+- Pin sạc 18650
+- Firmware: Code C++ (Arduino IDE) – handle NFC, BLE, Wi-Fi, OTA, command queue
+
+LỚP 2: BACKEND (Supabase - PostgreSQL + Edge Functions + Realtime)
+- 15 bảng chính (users, devices, card_device_access, nfc_logs, audit_logs, totp_credentials...)
+- Trigger quan trọng:
+  - fn_maintain_is_owner(): tự động cập nhật is_owner
+  - fn_block_audit_mutation(): audit_logs chỉ append-only
+  - fn_check_card_active(): chỉ cấp card khi active
+  - fn_check_reader_config_master(): auto_register chỉ cho master
+- Command có command_token_hash chống replay
+
+LỚP 3: FRONTEND (React 18 + Vite + Tailwind + Supabase Auth + RLS)
+- App mở khoá bằng NFC, QR, App.
+- 2FA: Email OTP + TOTP + FIDO2 (Passkey).
+- Không có voice.
+
+4. QUY TRÌNH VẬN HÀNH CHI TIẾT
+--------------------------------------------------------------------------------
+
+4.1 Bước 1: Claim khoá (Owner Claim)
+- Mở app, quét QR trên tem.
+- Nhập provisioning secret (6 số).
+- Supabase xác minh.
+- Tạo owner_id, status = online.
+- Trigger tự động is_owner = true.
+
+4.2 Bước 2: Cấp thẻ NFC
+- Owner dùng Master Reader đăng ký thẻ.
+- Tạo card_uid_hash.
+- Cấp quyền cho device.
+- Kết quả: Thẻ active, chỉ tap Head reader là mở.
+
+4.3 Bước 3: Mở khoá bằng tap NFC
+- Chạm thẻ vào Head reader.
+- Tạo session token, ghi nfc_logs.
+- Kiểm tra quyền.
+- Gửi lệnh mở.
+- Khoá thực thi, ghi audit log, pin giảm 1%.
+
+4.4 Bước 4: Mở khoá từ xa bằng App
+- App gửi UNLOCK command có token.
+- Backend gửi lệnh đến khoá qua BLE/Wi-Fi.
+- Khoá mở, trả về trạng thái pin/tín hiệu.
+
+4.5 Bước 5: Chia sẻ quyền
+- Owner tạo device_access.
+- Nhận share_code 6 chữ số.
+- Thành viên nhập code + OTP 2FA.
+- Accepted = true.
+- Thành viên có quyền unlock/lock.
+
+4.6 Bước 6: Recovery khi mất quyền
+- Owner tạo support_request (RECOVERY).
+- Tạo authorization_code + recovery_code.
+- Admin xác minh.
+- Reset khoá -> provisioning.
+- Claim cho owner mới.
+- Trigger tự động is_owner mới.
+
+4.7 Bước 7: OTA Update
+- Backend push firmware mới.
+- Device nhận, update, reboot.
+- Trả về firmware_version mới.
+
+5. KẾT QUẢ CUỐI CÙNG
+--------------------------------------------------------------------------------
+- Khoá mở/nghe bằng NFC hoặc App.
+- Lịch sử đầy đủ (nfc_logs + device_status_logs + audit_logs).
+- Pin quản lý chính xác, báo low battery.
+- Mọi lệnh có token chống replay.
+- Admin không thể bỏ qua provisioning_secret.
+- Hoạt động độc lập hoàn toàn.
+
+6. NGUYÊN TẮC AN NINH
+--------------------------------------------------------------------------------
+- Không lưu bí mật plaintext.
+- Replay bị ngăn bởi sign_count + token_hash.
+- Tamper = jammed -> critical notification.
+- 2FA đa yếu tố (có thể bật cùng lúc).
+- Audit_logs chỉ append-only.
+- Recovery code bắt buộc cho RESET/RECOVERY/TRANSFER.
+
+7. CÁC LƯU Ý CHO ĐỒ ÁN (Ăn điểm)
+--------------------------------------------------------------------------------
+- Lỗi đã test:
+  - Replay Attack (bị từ chối)
+  - OTP sai (3 lần = khóa tài khoản)
+  - Tamper (status = jammed)
+  - Low Battery (<20% cấm OTA)
+  - Support Expired
+  - Invalid Provisioning Secret
+  - Card Revoked
+- Simulator mode cho demo ngay cả khi không có hardware thật.
+- Môi trường hoàn toàn độc lập, không có cách hack.
+
+8. KỊCH BẢN DEMO
+--------------------------------------------------------------------------------
+- Demo cơ bản: Claim + Tap NFC + Remote Unlock
+- Demo nâng cao: OTA + Recovery + Transfer Owner
+- Demo lỗi: Replay + OTP Fail + Battery Low + Support Expired
+- Simulator: Chạy ngay trên máy (không cần hardware)
+
+================================================================================
+               HẾT FILE TXT - PHIÊN BẢN BỎ VOICE
+================================================================================
