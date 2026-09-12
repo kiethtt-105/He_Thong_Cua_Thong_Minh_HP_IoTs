@@ -1,0 +1,12 @@
+# Supabase - PHẦN MỚI SUPABASE_HOST=db.bnfhftcunwfnlluotwsi.supabase.co
+SUPABASE_PORT=5432
+SUPABASE_USER=postgres.bnfhftcunwfnlluotwsi
+SUPABASE_PASSWORD=ZIyfATIqn05asspq
+
+# BizflyCloud Email
+EMAIL_HOST=smtp.bizflycloud.vn
+EMAIL_PORT=587
+EMAIL_USE_TLS=true
+EMAIL_HOST_USER=kietthtt@mindx.net.vn
+EMAIL_HOST_PASSWORD=Tk1005##
+DEFAULT_FROM_EMAIL=kietthtt@mindx.net.vn
