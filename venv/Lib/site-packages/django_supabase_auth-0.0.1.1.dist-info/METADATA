@@ -1,0 +1,67 @@
+Metadata-Version: 2.1
+Name: django-supabase-auth
+Version: 0.0.1.1
+Summary: Django Supabase authentication.
+Author-email: b3b <ash.b3b@gmail.com>
+License: MIT
+Project-URL: Homepage, https://github.com/b3b/django-supabase-auth
+Project-URL: Issues, https://github.com/b3b/django-supabase-auth/issues
+Project-URL: Source, https://github.com/b3b/django-supabase-auth
+Classifier: Development Status :: 2 - Pre-Alpha
+Classifier: Environment :: Web Environment
+Classifier: Framework :: Django
+Classifier: Framework :: Django :: 3.0
+Classifier: Framework :: Django :: 4.0
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Topic :: Internet :: WWW/HTTP
+Requires-Python: >=3.7
+Description-Content-Type: text/x-rst
+License-File: LICENSE
+Requires-Dist: django >=3.2
+Requires-Dist: djangorestframework >3.10
+Requires-Dist: djangorestframework-simplejwt
+Requires-Dist: tomli >=1.1.0 ; python_version < "3.11"
+Provides-Extra: database
+Requires-Dist: bcrypt >=4.0 ; extra == 'database'
+Requires-Dist: psycopg2-binary ; extra == 'database'
+Provides-Extra: dev
+Requires-Dist: supa-auth[database] ; extra == 'dev'
+Requires-Dist: black >=22.3.0 ; extra == 'dev'
+Requires-Dist: environs ; extra == 'dev'
+Requires-Dist: factory-boy ; extra == 'dev'
+Requires-Dist: pylint ; extra == 'dev'
+Requires-Dist: pytest ; extra == 'dev'
+Requires-Dist: pytest-django ; extra == 'dev'
+Requires-Dist: pytest-env ; extra == 'dev'
+Requires-Dist: pytest-mock ; extra == 'dev'
+Requires-Dist: ruff ; extra == 'dev'
+Requires-Dist: tox ; extra == 'dev'
+Requires-Dist: isort ; extra == 'dev'
+
+Django Supabase authentication
+==============================
+
+.. start-badges
+.. image:: https://img.shields.io/badge/stability-wip-lightgrey.svg
+    :target: https://github.com/b3b/django-supabase-auth
+    :alt: Stability
+.. image:: https://img.shields.io/pypi/v/django-supabase-auth.svg
+    :target: https://pypi.python.org/pypi/django-supabase-auth
+    :alt: Latest version on PyPi          
+.. end-badges
+
+
+Experimental project aimed at exploring the integration of Supabase with Django.
+
+
+Disclaimer
+----------
+
+Please note that this repository is for experimental purposes only. It may contain incomplete or unstable code. Use it at your own risk.
