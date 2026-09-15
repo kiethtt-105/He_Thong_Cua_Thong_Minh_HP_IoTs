@@ -6,35 +6,38 @@
 {% block content %}
 <div class="notifications-page">
   <h2 class="mb-4">Thông báo</h2>
-  <div class="card p-4">
-    <div class="d-flex gap-3">
-      <div class="avatar" style="width: 50px; height: 50px;">
-        <img src="https://picsum.photos/id/201/50/50" class="w-100 h-100">
-      </div>
-      <div class="flex-grow-1">
-        <h5>Thiết bị của bạn đã online</h5>
-        <p class="text-muted">10 phút trước</p>
-        <p class="mb-0">🔒 Khóa cửa phòng khách đã kết nối thành công</p>
-      </div>
-    </div>
-  </div>
-  <div class="card p-4 mt-3">
-    <div class="d-flex gap-3">
-      <div class="avatar" style="width: 50px; height: 50px;">
-        <img src="https://picsum.photos/id/29/50/50" class="w-100 h-100">
-      </div>
-      <div class="flex-grow-1">
-        <h5>Nhận được hỗ trợ từ kỹ thuật viên</h5>
-        <p class="text-muted">30 phút trước</p>
-        <p class="mb-0">Chúng tôi đã reset thiết bị cho bạn</p>
-      </div>
-    </div>
+  <div class="card p-4" id="notifications-list">
+    <!-- JS render -->
   </div>
 </div>
 
 <style>
 .notifications-page { max-width: 800px; margin: 0 auto; }
-.card { transition: all 0.3s; }
 .avatar { width: 50px; height: 50px; border-radius: 50%; overflow: hidden; }
 </style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadNotifications() {
+  const res = await fetch('/api/notifications/');
+  const notifs = await res.json();
+
+  const html = notifs.length ? notifs.map(n => `
+    <div class="card p-4 mb-3">
+      <div class="d-flex gap-3">
+        <div class="avatar"><img src="https://picsum.photos/id/${201 + n.id % 20}/50/50" class="w-100 h-100"></div>
+        <div class="flex-grow-1">
+          <h5>${n.title}</h5>
+          <p class="text-muted">${n.created_at ? new Date(n.created_at).toLocaleTimeString('vi-VN') : ''}</p>
+          <p class="mb-0">${n.message}</p>
+        </div>
+      </div>
+    </div>
+  `).join('') : `<p class="text-muted text-center py-5">Chưa có thông báo nào</p>`;
+
+  document.getElementById('notifications-list').innerHTML = html;
+}
+loadNotifications();
+</script>
 {% endblock %}

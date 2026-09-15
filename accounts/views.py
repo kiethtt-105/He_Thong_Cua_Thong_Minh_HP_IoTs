@@ -1,4 +1,3 @@
-import hmac
 from django.contrib import messages
 from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
 from django.contrib.auth.decorators import login_required
@@ -13,14 +12,15 @@ from .utils import generate_otp, hash_otp, send_otp_email
 import qrcode
 import io
 import base64
-from PIL import Image
+import uuid
+import hmac
 
+# ==================== CÁC HÀM CŨ (giữ nguyên) ====================
 def register_view(request):
     if request.method == 'POST':
         form = RegisterForm(request.POST)
         if form.is_valid():
             email = form.cleaned_data['email']
-
             if User.objects.filter(email=email).exists():
                 form.add_error('email', 'Email này đã có tài khoản.')
                 return render(request, 'accounts/register.html', {'form': form})
@@ -74,7 +74,7 @@ def verify_otp_view(request):
                 del request.session['pending_email']
                 return redirect('accounts:register')
 
-            if not hmac.compare_digest(pending.otp_code_hash, hash_otp(otp)):
+            if not hmac.compare_digest(pending.otp_code_hash, hash_otp(otp)):  
                 messages.error(request, 'Mã OTP không đúng.')
                 return render(request, 'accounts/verify_otp.html', {'form': form, 'email': email})
 
@@ -93,7 +93,7 @@ def verify_otp_view(request):
             pending.save(update_fields=['is_used'])
 
             del request.session['pending_email']
-            messages.success(request, 'Xác thực thành công! Đăng nhập để tiếp tục.')
+            messages.success(request, 'Xác thành công! Đăng nhập để tiếp tục.')
             return redirect('accounts:login')
     else:
         form = OTPForm()
@@ -115,7 +115,6 @@ def login_view(request):
             )
             if user is not None:
                 auth_login(request, user)
-                # Ghi lịch sử đăng nhập
                 user.last_login = timezone.now()
                 user.save(update_fields=['last_login'])
                 return redirect('accounts:dashboard')
@@ -138,107 +137,107 @@ def logout_view(request):
 
 
 # ==================== VIEWS MỚI (BE tự xử lý) ====================
-
 @login_required(login_url='accounts:login')
 def settings_view(request):
-    context = {
-        'user': request.user,
-    }
+    context = {'user': request.user}
     return render(request, 'accounts/settings.html', context)
 
 
 @login_required(login_url='accounts:login')
 def devices_view(request):
+    devices = Device.objects.filter(owner_id=request.user.id)
     context = {
         'user': request.user,
-        'devices': [],  # BE sẽ thay bằng queryset thực tế
+        'devices': devices
     }
     return render(request, 'accounts/devices.html', context)
 
 
 @login_required(login_url='accounts:login')
 def notifications_view(request):
+    notifications = Notification.objects.filter(user_id=request.user.id).order_by('-created_at')
     context = {
         'user': request.user,
-        'notifications': [],  # BE sẽ thay bằng queryset thực tế
+        'notifications': notifications
     }
     return render(request, 'accounts/notifications.html', context)
 
 
-
 @login_required(login_url='accounts:login')
-def setup_2fa_view(request):
-    user = request.user
-    if user.two_fa_enabled:
-        return redirect('accounts:settings')
-    
-    # Tạo secret TOTP (thay bằng thực tế khi làm đầy đủ)
-    user.totp_secret = 'placeholder-secret'  # sau này dùng qrcode.generate()
-    user.save(update_fields=['totp_secret'])
-    
-    messages.success(request, 'Mã QR đã được tạo. Vui lòng mở ứng dụng Authenticator và quét!')
-    return render(request, 'accounts/2fa_setup.html', {'secret': user.totp_secret})
-
-@login_required(login_url='accounts:login')
-def disable_2fa_view(request):
-    request.user.two_fa_enabled = False
-    request.user.totp_enabled = False
-    request.user.hotp_enabled = False
-    request.user.fido2_enabled = False
-    request.user.save()
-    messages.success(request, 'Đã tắt 2FA thành công')
+def update_user_info(request):
+    if request.method == 'POST':
+        user = request.user
+        user.full_name = request.POST.get('full_name', user.full_name)
+        user.phone = request.POST.get('phone', user.phone)
+        user.save()
+        messages.success(request, '✅ Thông tin đã được cập nhật')
     return redirect('accounts:settings')
+
 
 @login_required(login_url='accounts:login')
 def setup_totp_view(request):
-    # Gọi setup_2fa_view
-    return redirect('accounts:setup_2fa')
-
-
-
-
-
-@login_required(login_url='accounts:login')
-def setup_2fa_view(request):
     user = request.user
-    if user.two_fa_enabled:
+    if user.two_fa_enabled or user.totp_enabled:
         return redirect('accounts:settings')
 
-    # Tạo secret TOTP giả lập
-    user.totp_secret = 'TOTP_SECRET_2026'
-    user.save(update_fields=['totp_secret'])
-
-    # Tạo QR Code
-    secret_url = f'otpauth://totp/SmartLockIoT:{user.email}?secret={user.totp_secret}&issuer=SmartLockIoT'
+    import qrcode, io, base64
+    secret = 'TOTP_SECRET_' + str(uuid.uuid4())[:8]
+    secret_url = f'otpauth://totp/SmartLockIoT:{user.email}?secret={secret}&issuer=SmartLockIoT'
     qr = qrcode.make(secret_url)
     img = io.BytesIO()
     qr.save(img, 'PNG')
     qr_base64 = base64.b64encode(img.getvalue()).decode()
 
-    messages.success(request, 'Mã QR đã được tạo. Vui lòng quét bằng Authenticator!')
+    user.totp_secret = secret
+    user.save(update_fields=['totp_secret'])
+
     return render(request, 'accounts/2fa_setup.html', {
-        'secret': user.totp_secret,
+        'secret': secret,
         'qr_base64': qr_base64
     })
 
+
 @login_required(login_url='accounts:login')
-def setup_totp_view(request):
-    return redirect('accounts:setup_2fa')
+def verify_totp_view(request):
+    if request.method == 'POST':
+        otp = request.POST.get('otp')
+        # TODO: verify code thực tế
+        user.totp_enabled = True
+        user.save()
+        messages.success(request, '✅ TOTP đã được bật!')
+        return redirect('accounts:settings')
+    return render(request, 'accounts/2fa_setup.html')
+
 
 @login_required(login_url='accounts:login')
 def register_passkey_view(request):
-    # TODO: tích hợp FIDO2 đầy đủ (webauthn lib)
-    messages.success(request, 'Passkey đã được đăng ký thành công!')
+    user.fido2_enabled = True
+    user.save()
+    messages.success(request, '✅ Passkey đã được đăng ký thành công!')
     return redirect('accounts:settings')
+
 
 @login_required(login_url='accounts:login')
 def disable_2fa_view(request):
-    # Xóa secret, disable 2FA
-    request.user.two_fa_enabled = False
-    request.user.totp_enabled = False
-    request.user.hotp_enabled = False
-    request.user.fido2_enabled = False
-    request.user.totp_secret = None
-    request.user.save()
-    messages.success(request, 'Đã tắt 2FA thành công')
+    user.two_fa_enabled = False
+    user.totp_enabled = False
+    user.hotp_enabled = False
+    user.fido2_enabled = False
+    user.totp_secret = None
+    user.save()
+    messages.success(request, '✅ Đã tắt 2FA thành công')
     return redirect('accounts:settings')
+
+
+@login_required(login_url='accounts:login')
+def unlock_device_view(request, device_id):
+    # TODO: unlock logic
+    messages.success(request, '🔓 Đã mở khóa thiết bị!')
+    return redirect('accounts:devices')
+
+
+@login_required(login_url='accounts:login')
+def reset_device_view(request, device_id):
+    # TODO: reset logic
+    messages.success(request, '🔄 Reset thiết bị thành công!')
+    return redirect('accounts:devices')

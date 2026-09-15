@@ -1,4 +1,4 @@
-import uuid
+import uuid  # ← ADD DÒNG NÀY VÀO ĐẦU FILE
 
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
@@ -43,7 +43,7 @@ class User(AbstractBaseUser):
     allow_push_auth = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    last_login = models.DateTimeField(null=True, blank=True)   # ← ĐÃ THÊM
+    last_login = models.DateTimeField(null=True, blank=True)
 
     objects = UserManager()
 
@@ -56,6 +56,7 @@ class User(AbstractBaseUser):
 
     def __str__(self):
         return self.email
+
     def has_perm(self, perm, obj=None):
         return True
 
@@ -86,3 +87,45 @@ class PendingRegistration(models.Model):
 
     def __str__(self):
         return self.email
+
+
+# ==================== THIẾT BỊ (FIX CHO THIẾT BỊ) ====================
+class Device(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    device_code = models.CharField(max_length=50, unique=True)
+    provisioning_secret_hash = models.CharField(max_length=255)
+    device_mode = models.CharField(max_length=20, default='physical')
+    owner = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='devices', null=True)
+    name = models.CharField(max_length=100)
+    mac_address = models.CharField(max_length=17, null=True, blank=True)
+    firmware_version = models.CharField(max_length=30, null=True, blank=True)
+    status = models.CharField(max_length=20, default='provisioning')
+    battery_level = models.IntegerField(default=100)
+    location = models.CharField(max_length=255, null=True, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    bluetooth_enabled = models.BooleanField(default=True)
+    wifi_enabled = models.BooleanField(default=True)
+    nfc_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'devices'
+
+
+class Notification(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    device = models.ForeignKey(Device, on_delete=models.SET_NULL, null=True, blank=True)
+    type = models.CharField(max_length=50)
+    title = models.CharField(max_length=150)
+    message = models.TextField()
+    severity = models.CharField(max_length=20, default='info')
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = 'notifications'

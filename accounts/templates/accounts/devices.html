@@ -7,34 +7,11 @@
 <div class="devices-page">
   <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>Thiết bị của tôi</h2>
-    <button class="btn btn-primary">📡 Kết nối thiết bị mới</button>
+    <button onclick="connectNewDevice()" class="btn btn-primary">📡 Kết nối thiết bị mới</button>
   </div>
 
-  <div class="row g-4">
-    <div class="col-md-6">
-      <div class="card">
-        <div class="p-4 d-flex gap-4">
-          <div class="avatar" style="width: 70px; height: 70px; border-radius: 12px; overflow: hidden;">
-            <img src="https://picsum.photos/id/1015/100/100" class="w-100 h-100">
-          </div>
-          <div class="flex-1">
-            <h5>Khóa cửa phòng khách</h5>
-            <p class="text-muted small">MAC: 00:1A:2B:3C:4D:5E</p>
-            <span class="badge bg-success">Online</span>
-          </div>
-        </div>
-        <div class="p-4 d-flex gap-2">
-          <button class="btn btn-primary flex-fill">🔓 Mở khóa</button>
-          <button class="btn btn-outline-danger flex-fill">Reset</button>
-        </div>
-      </div>
-    </div>
-    <div class="col-md-6">
-      <div class="card text-center p-5">
-        <h5>Chưa có thiết bị nào</h5>
-        <button class="btn btn-primary mt-3">📡 Kết nối thiết bị mới</button>
-      </div>
-    </div>
+  <div class="row g-4" id="devices-container">
+    <!-- JS sẽ render ở đây -->
   </div>
 </div>
 
@@ -44,4 +21,75 @@
 .card:hover { transform: translateY(-6px); }
 .avatar { width: 70px; height: 70px; border-radius: 12px; overflow: hidden; }
 </style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadDevices() {
+  const res = await fetch('/api/devices/');
+  const devices = await res.json();
+
+  const container = document.getElementById('devices-container');
+  container.innerHTML = '';
+
+  if (devices.length === 0) {
+    container.innerHTML = `
+      <div class="col-md-6">
+        <div class="card text-center p-5">
+          <h5>Chưa có thiết bị nào</h5>
+          <button onclick="connectNewDevice()" class="btn btn-primary mt-3">📡 Kết nối thiết bị mới</button>
+        </div>
+      </div>`;
+    return;
+  }
+
+  devices.forEach(d => {
+    const isOnline = d.status === 'online';
+    const onlineHTML = isOnline ? 
+      `<span class="badge bg-success">Online</span>` : 
+      `<span class="badge bg-secondary">Offline</span>`;
+
+    container.innerHTML += `
+      <div class="col-md-6">
+        <div class="card">
+          <div class="p-4 d-flex gap-4">
+            <div class="avatar">
+              <img src="https://picsum.photos/id/${1015 + (d.id || 0) % 20}/100/100" class="w-100 h-100">
+            </div>
+            <div class="flex-1">
+              <h5>${d.name}</h5>
+              <p class="text-muted small">MAC: ${d.mac_address || '00:00:00:00:00:00'}</p>
+              ${onlineHTML}
+            </div>
+          </div>
+          <div class="p-4 d-flex gap-2">
+            <button onclick="unlockDevice('${d.id}')" class="btn btn-primary flex-fill">🔓 Mở khóa</button>
+            <button onclick="resetDevice('${d.id}')" class="btn btn-outline-danger flex-fill">Reset</button>
+          </div>
+        </div>
+      </div>`;
+  });
+}
+
+async function unlockDevice(id) {
+  if (!confirm('Mở khóa thiết bị?')) return;
+  await fetch(`/api/devices/${id}/unlock/`, { method: 'POST' });
+  alert('✅ Đã mở khóa!');
+  loadDevices();
+}
+
+async function resetDevice(id) {
+  if (!confirm('Reset thiết bị?')) return;
+  await fetch(`/api/devices/${id}/reset/`, { method: 'POST' });
+  alert('🔄 Reset thành công!');
+  loadDevices();
+}
+
+function connectNewDevice() {
+  alert('📡 Đang hướng dẫn pairing (full implementation sau)');
+  // TODO: pairing flow
+}
+
+loadDevices();
+</script>
 {% endblock %}

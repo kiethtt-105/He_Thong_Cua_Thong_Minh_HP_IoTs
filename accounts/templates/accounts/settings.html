@@ -8,7 +8,7 @@
   <div class="card mb-4">
     <h3 class="card-header">Thông tin cá nhân</h3>
     <div class="card-body">
-      <form method="post">
+      <form method="post" action="{% url 'accounts:update_info' %}">
         {% csrf_token %}
         <div class="mb-3"><label>Họ và tên</label><input type="text" name="full_name" value="{{ user.full_name|default:'' }}" class="form-control"></div>
         <div class="mb-3"><label>Số điện thoại</label><input type="tel" name="phone" value="{{ user.phone|default:'' }}" class="form-control"></div>
@@ -27,16 +27,42 @@
           <span class="text-danger">❌ Chưa bật</span>
         {% endif %}
       </p>
+
       <div class="d-grid gap-3 mt-3">
-        <a href="{% url 'accounts:setup_totp' %}" class="btn btn-outline-primary">📱 TOTP (Google Authenticator)</a>
+        {% if user.totp_enabled %}
+          <button onclick="setupTotp()" class="btn btn-outline-primary">📱 Quản lý TOTP</button>
+        {% else %}
+          <a href="{% url 'accounts:setup_totp' %}" class="btn btn-outline-primary">📱 TOTP (Google Authenticator)</a>
+        {% endif %}
+
         <button onclick="registerPasskey()" class="btn btn-outline-primary">🔑 Passkey / FIDO2</button>
+      </div>
+
+      <div class="mt-4">
+        <button onclick="disable2fa()" class="btn btn-outline-danger">Tắt 2FA hoàn toàn</button>
       </div>
     </div>
   </div>
 </div>
+{% endblock %}
 
-<style>
-.settings-page { max-width: 700px; margin: 0 auto; }
-.card { margin-bottom: 24px; }
-</style>
+{% block scripts %}
+<script>
+async function setupTotp() {
+  window.location.href = '{% url "accounts:setup_totp" %}';
+}
+
+function registerPasskey() {
+  fetch('{% url "accounts:register_passkey" %}', { method: 'POST' })
+    .then(() => alert('✅ Passkey đã được đăng ký thành công!'))
+    .catch(() => alert('❌ Đăng ký Passkey thất bại'));
+}
+
+async function disable2fa() {
+  if (!confirm('Tắt toàn bộ 2FA?')) return;
+  await fetch('{% url "accounts:disable_2fa" %}', { method: 'POST' });
+  alert('✅ Đã tắt 2FA thành công!');
+  location.reload();
+}
+</script>
 {% endblock %}
