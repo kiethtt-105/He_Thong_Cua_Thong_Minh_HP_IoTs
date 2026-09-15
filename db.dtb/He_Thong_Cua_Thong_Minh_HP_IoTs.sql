@@ -857,6 +857,19 @@ ALTER TABLE "public"."audit_logs"             ENABLE ROW LEVEL SECURITY;
 -- Khởi tạo dòng cấu hình singleton mặc định (nếu chưa có)
 INSERT INTO "public"."system_settings" (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
+-- Thêm cột last_login
+ALTER TABLE "public"."users" 
+ADD COLUMN IF NOT EXISTS "last_login" timestamptz NULL;
+
+-- Thêm cột is_staff
+ALTER TABLE "public"."users" 
+ADD COLUMN IF NOT EXISTS "is_staff" boolean NOT NULL DEFAULT false;
+
+-- Thêm cột is_superuser
+ALTER TABLE "public"."users" 
+ADD COLUMN IF NOT EXISTS "is_superuser" boolean NOT NULL DEFAULT false;
+
+
 -- =====================================================================
 -- NOTE: security best practices WITHIN DB (không phải hướng dẫn triển khai backend)
 -- =====================================================================

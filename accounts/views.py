@@ -111,7 +111,7 @@ def login_view(request):
             )
             if user is not None:
                 auth_login(request, user)
-                # Ghi last_login
+                # Ghi lịch sử đăng nhập
                 user.last_login = timezone.now()
                 user.save(update_fields=['last_login'])
                 return redirect('accounts:dashboard')
@@ -137,19 +137,14 @@ def logout_view(request):
 
 @login_required(login_url='accounts:login')
 def settings_view(request):
-    # TODO: BE tự làm logic (lấy thông tin user, form cập nhật, v.v.)
-    # Hiện tại chỉ render giao diện đẹp (FE tự làm sau)
     context = {
         'user': request.user,
-        'form': None,  # BE sẽ thay bằng form thực tế
     }
     return render(request, 'accounts/settings.html', context)
 
 
 @login_required(login_url='accounts:login')
 def devices_view(request):
-    # TODO: BE tự làm logic (lấy devices của user, form claim/reset, v.v.)
-    # Hiện tại chỉ render giao diện đẹp
     context = {
         'user': request.user,
         'devices': [],  # BE sẽ thay bằng queryset thực tế
@@ -159,42 +154,6 @@ def devices_view(request):
 
 @login_required(login_url='accounts:login')
 def notifications_view(request):
-    # TODO: BE tự làm logic (lấy thông báo của user, đánh dấu đọc, v.v.)
-    # Hiện tại chỉ render giao diện đẹp
-    context = {
-        'user': request.user,
-        'notifications': [],  # BE sẽ thay bằng queryset thực tế
-    }
-    return render(request, 'accounts/notifications.html', context)
-
-
-@login_required(login_url='accounts:login')
-def dashboard_view(request):
-    return render(request, 'accounts/dashboard.html')
-
-
-@login_required(login_url='accounts:login')
-def settings_view(request):
-    # TODO: BE tự làm logic (form cập nhật user, v.v.)
-    context = {
-        'user': request.user,
-    }
-    return render(request, 'accounts/settings.html', context)
-
-
-@login_required(login_url='accounts:login')
-def devices_view(request):
-    # TODO: BE tự làm logic (lấy devices của user)
-    context = {
-        'user': request.user,
-        'devices': [],  # BE sẽ thay bằng queryset thực tế
-    }
-    return render(request, 'accounts/devices.html', context)
-
-
-@login_required(login_url='accounts:login')
-def notifications_view(request):
-    # TODO: BE tự làm logic (lấy notifications của user)
     context = {
         'user': request.user,
         'notifications': [],  # BE sẽ thay bằng queryset thực tế

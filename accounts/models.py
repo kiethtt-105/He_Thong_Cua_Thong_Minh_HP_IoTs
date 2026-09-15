@@ -24,9 +24,7 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    last_login = None  # bảng "users" không có cột này, tắt tracking mặc định của Django
     email = models.EmailField(max_length=255, unique=True)
-    # password_hash bên DB <-> field "password" chuẩn của AbstractBaseUser
     password = models.CharField(max_length=255, db_column='password_hash')
     full_name = models.CharField(max_length=100, blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
@@ -45,6 +43,7 @@ class User(AbstractBaseUser):
     allow_push_auth = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    last_login = models.DateTimeField(null=True, blank=True)   # ← ĐÃ THÊM
 
     objects = UserManager()
 
@@ -57,13 +56,22 @@ class User(AbstractBaseUser):
 
     def __str__(self):
         return self.email
+    def has_perm(self, perm, obj=None):
+        return True
 
-    
+    def has_module_perms(self, app_label):
+        return True
+
+    @property
+    def is_staff(self):
+        return self.is_admin
+
+    @property
+    def is_superuser(self):
+        return self.is_admin
+
+
 class PendingRegistration(models.Model):
-    """
-    Map vào "public"."pending_registrations".
-    Lưu OTP + dữ liệu tạm trước khi user thật sự được tạo ở bảng users.
-    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(max_length=255, unique=True)
     otp_code_hash = models.CharField(max_length=64)
