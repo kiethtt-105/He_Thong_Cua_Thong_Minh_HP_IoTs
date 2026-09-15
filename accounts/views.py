@@ -166,3 +166,37 @@ def notifications_view(request):
         'notifications': [],  # BE sẽ thay bằng queryset thực tế
     }
     return render(request, 'accounts/notifications.html', context)
+
+
+@login_required(login_url='accounts:login')
+def dashboard_view(request):
+    return render(request, 'accounts/dashboard.html')
+
+
+@login_required(login_url='accounts:login')
+def settings_view(request):
+    # TODO: BE tự làm logic (form cập nhật user, v.v.)
+    context = {
+        'user': request.user,
+    }
+    return render(request, 'accounts/settings.html', context)
+
+
+@login_required(login_url='accounts:login')
+def devices_view(request):
+    # TODO: BE tự làm logic (lấy devices của user)
+    context = {
+        'user': request.user,
+        'devices': [],  # BE sẽ thay bằng queryset thực tế
+    }
+    return render(request, 'accounts/devices.html', context)
+
+
+@login_required(login_url='accounts:login')
+def notifications_view(request):
+    # TODO: BE tự làm logic (lấy notifications của user)
+    context = {
+        'user': request.user,
+        'notifications': [],  # BE sẽ thay bằng queryset thực tế
+    }
+    return render(request, 'accounts/notifications.html', context)

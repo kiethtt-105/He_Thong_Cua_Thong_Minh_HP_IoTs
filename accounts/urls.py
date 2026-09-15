@@ -9,10 +9,12 @@ urlpatterns = [
     path('verify-otp/', views.verify_otp_view, name='verify_otp'),
     path('login/', views.login_view, name='login'),
     path('logout/', views.logout_view, name='logout'),
+    
+    # Trang dashboard mặc định
     path('', views.dashboard_view, name='dashboard'),
-
-    # Trong urls.py
-    path('settings/', views.settings_view, name='accounts:settings'),
-    path('devices/', views.devices_view, name='accounts:devices'),
-    path('notifications/', views.notifications_view, name='accounts:notifications'),
+    
+    # Các trang khác (BE tự làm sau)
+    path('settings/', views.settings_view, name='settings'),
+    path('devices/', views.devices_view, name='devices'),
+    path('notifications/', views.notifications_view, name='notifications'),
 ]
