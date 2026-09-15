@@ -10,4 +10,9 @@ urlpatterns = [
     path('login/', views.login_view, name='login'),
     path('logout/', views.logout_view, name='logout'),
     path('', views.dashboard_view, name='dashboard'),
+
+    # Trong urls.py
+    path('settings/', views.settings_view, name='accounts:settings'),
+    path('devices/', views.devices_view, name='accounts:devices'),
+    path('notifications/', views.notifications_view, name='accounts:notifications'),
 ]

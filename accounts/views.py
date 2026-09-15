@@ -1,5 +1,4 @@
 import hmac
-
 from django.contrib import messages
 from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
 from django.contrib.auth.decorators import login_required
@@ -26,13 +25,9 @@ def register_view(request):
             temp_data = {
                 'full_name': form.cleaned_data['full_name'],
                 'phone': form.cleaned_data.get('phone', ''),
-                # Hash password ngay ở bước này (Argon2id theo PASSWORD_HASHERS),
-                # KHÔNG bao giờ lưu plaintext vào temp_data.
                 'password_hash': make_password(form.cleaned_data['password']),
             }
 
-            # update_or_create vì email UNIQUE bên pending_registrations:
-            # đăng ký lại trước khi OTP cũ hết hạn thì ghi đè OTP mới.
             PendingRegistration.objects.update_or_create(
                 email=email,
                 defaults={
@@ -75,8 +70,6 @@ def verify_otp_view(request):
                 del request.session['pending_email']
                 return redirect('accounts:register')
 
-            # So sánh hash bằng hmac.compare_digest để tránh timing attack,
-            # đúng kỹ thuật đã dùng ở dự án 2FA trước.
             if not hmac.compare_digest(pending.otp_code_hash, hash_otp(otp)):
                 messages.error(request, 'Mã OTP không đúng.')
                 return render(request, 'accounts/verify_otp.html', {'form': form, 'email': email})
@@ -116,12 +109,13 @@ def login_view(request):
                 username=form.cleaned_data['email'],
                 password=form.cleaned_data['password'],
             )
-            # authenticate() tự trả None nếu is_active=False (ModelBackend),
-            # nên không cần check lại is_active thủ công ở đây.
             if user is not None:
                 auth_login(request, user)
+                # Ghi last_login
+                user.last_login = timezone.now()
+                user.save(update_fields=['last_login'])
                 return redirect('accounts:dashboard')
-            messages.error(request, 'Email hoặc mật khẩu không đúng, hoặc tài khoản chưa xác thực OTP.')
+            messages.error(request, 'Email hoặc mật khẩu không đúng.')
     else:
         form = LoginForm()
 
@@ -137,3 +131,38 @@ def logout_view(request):
     auth_logout(request)
     messages.success(request, 'Đã đăng xuất.')
     return redirect('accounts:login')
+
+
+# ==================== VIEWS MỚI (BE tự xử lý) ====================
+
+@login_required(login_url='accounts:login')
+def settings_view(request):
+    # TODO: BE tự làm logic (lấy thông tin user, form cập nhật, v.v.)
+    # Hiện tại chỉ render giao diện đẹp (FE tự làm sau)
+    context = {
+        'user': request.user,
+        'form': None,  # BE sẽ thay bằng form thực tế
+    }
+    return render(request, 'accounts/settings.html', context)
+
+
+@login_required(login_url='accounts:login')
+def devices_view(request):
+    # TODO: BE tự làm logic (lấy devices của user, form claim/reset, v.v.)
+    # Hiện tại chỉ render giao diện đẹp
+    context = {
+        'user': request.user,
+        'devices': [],  # BE sẽ thay bằng queryset thực tế
+    }
+    return render(request, 'accounts/devices.html', context)
+
+
+@login_required(login_url='accounts:login')
+def notifications_view(request):
+    # TODO: BE tự làm logic (lấy thông báo của user, đánh dấu đọc, v.v.)
+    # Hiện tại chỉ render giao diện đẹp
+    context = {
+        'user': request.user,
+        'notifications': [],  # BE sẽ thay bằng queryset thực tế
+    }
+    return render(request, 'accounts/notifications.html', context)

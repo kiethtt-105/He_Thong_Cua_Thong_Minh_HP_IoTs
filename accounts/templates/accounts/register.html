@@ -23,13 +23,9 @@
   {{ form.password }}
   {{ form.password.errors }}
 
-  <label for="{{ form.password2.id_for_label }}">Nhập lại mật khẩu</label>
-  {{ form.password2 }}
-  {{ form.password2.errors }}
-
   {{ form.non_field_errors }}
 
-  <button type="submit">Đăng ký</button>
+  <button type="submit">Tạo tài khoản</button>
 </form>
 
 <p class="footer-link">Đã có tài khoản? <a href="{% url 'accounts:login' %}">Đăng nhập</a></p>

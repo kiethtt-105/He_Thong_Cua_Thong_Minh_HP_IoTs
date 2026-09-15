@@ -1,0 +1,77 @@
+{% extends 'accounts/base.html' %}
+{% block title %}Thông báo & Hỗ trợ{% endblock %}
+{% block heading %}Thông báo & Hỗ trợ{% endblock %}
+{% block subtitle %}Cập nhật hệ thống và hỗ trợ{% endblock %}
+
+{% block content %}
+<div class="notifications-page">
+    <div class="notifications-header">
+        <h2>Thông báo</h2>
+    </div>
+
+    <div class="notifications-list">
+        {% for notification in notifications %}
+        <div class="notification-card {{ notification.severity }}">
+            <div class="notification-icon">🛎️</div>
+            <div class="notification-content">
+                <div class="notification-title">{{ notification.title }}</div>
+                <div class="notification-message">{{ notification.message }}</div>
+                <div class="notification-time">{{ notification.created_at|date:"d/m/Y H:i" }}</div>
+            </div>
+        </div>
+        {% empty %}
+        <div class="empty-state">Chưa có thông báo nào</div>
+        {% endfor %}
+    </div>
+</div>
+
+<style>
+/* === NOTIFICATIONS PAGE CSS === */
+.notifications-page { max-width: 680px; margin: 0 auto; }
+
+.notifications-header { margin-bottom: 24px; }
+
+.notifications-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.notification-card {
+    background: #1e293b;
+    border-radius: 16px;
+    padding: 20px;
+    display: flex;
+    gap: 20px;
+}
+
+.notification-card.info    { border-left: 5px solid #38bdf8; }
+.notification-card.warning { border-left: 5px solid #fbbf24; }
+.notification-card.critical { border-left: 5px solid #f87171; }
+
+.notification-icon { font-size: 32px; flex-shrink: 0; }
+
+.notification-content .notification-title {
+    font-weight: 600;
+    font-size: 17px;
+    margin-bottom: 6px;
+}
+
+.notification-content .notification-message {
+    color: #cbd5e1;
+    margin-bottom: 12px;
+}
+
+.notification-content .notification-time {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #64748b;
+    font-size: 17px;
+}
+</style>
+{% endblock %}

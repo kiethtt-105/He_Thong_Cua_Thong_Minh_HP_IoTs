@@ -1,0 +1,109 @@
+{% extends 'accounts/base.html' %}
+{% block title %}Quản lý thiết bị{% endblock %}
+{% block heading %}Quản lý thiết bị{% endblock %}
+{% block subtitle %}Thiết bị của bạn{% endblock %}
+
+{% block content %}
+<div class="devices-page">
+    <div class="devices-header">
+        <h2>Thiết bị của tôi</h2>
+        <button class="claim-btn">📡 Kết nối thiết bị mới</button>
+    </div>
+
+    <div class="devices-list">
+        {% for device in devices %}
+        <div class="device-card">
+            <div class="device-icon">📱</div>
+            <div class="device-info">
+                <h3>{{ device.name }}</h3>
+                <p class="device-code">{{ device.device_code }}</p>
+                <span class="status {{ device.status }}">{{ device.status|capfirst }}</span>
+            </div>
+            <div class="device-actions">
+                <button class="btn btn-primary">🔓 Mở khóa</button>
+                <button class="btn btn-danger">⚠️ Reset thiết bị</button>
+            </div>
+        </div>
+        {% empty %}
+        <div class="empty-state">
+            Bạn chưa có thiết bị nào.<br>
+            <button class="claim-btn">Kết nối thiết bị mới</button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<style>
+/* === DEVICES PAGE CSS === */
+.devices-page { max-width: 920px; margin: 0 auto; }
+
+.devices-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 32px;
+}
+
+.claim-btn {
+    background: #38bdf8;
+    color: #0f172a;
+    padding: 12px 28px;
+    border: none;
+    border-radius: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.devices-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 24px;
+}
+
+.device-card {
+    background: #1e293b;
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+}
+
+.device-icon { font-size: 48px; flex-shrink: 0; }
+
+.device-info h3 { margin: 0 0 6px; font-size: 20px; }
+
+.device-code { color: #94a3b8; font-size: 14px; }
+
+.status {
+    padding: 4px 14px;
+    border-radius: 9999px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.status.online { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
+.status.offline { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+.status.provisioning { background: rgba(234, 179, 8, 0.15); color: #fbbf24; }
+
+.device-actions button {
+    margin-top: 16px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.btn-primary { background: #38bdf8; color: #0f172a; }
+
+.btn-danger { background: #f87171; color: white; }
+
+.empty-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 60px 20px;
+    color: #64748b;
+    font-size: 17px;
+}
+</style>
+{% endblock %}
