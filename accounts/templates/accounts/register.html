@@ -4,29 +4,18 @@
 {% block subtitle %}Đăng ký để quản lý khoá cửa thông minh{% endblock %}
 
 {% block content %}
-<form method="post" novalidate>
-  {% csrf_token %}
-
-  <label for="{{ form.full_name.id_for_label }}">Họ và tên</label>
-  {{ form.full_name }}
-  {{ form.full_name.errors }}
-
-  <label for="{{ form.email.id_for_label }}">Email</label>
-  {{ form.email }}
-  {{ form.email.errors }}
-
-  <label for="{{ form.phone.id_for_label }}">Số điện thoại (không bắt buộc)</label>
-  {{ form.phone }}
-  {{ form.phone.errors }}
-
-  <label for="{{ form.password.id_for_label }}">Mật khẩu</label>
-  {{ form.password }}
-  {{ form.password.errors }}
-
-  {{ form.non_field_errors }}
-
-  <button type="submit">Tạo tài khoản</button>
-</form>
-
-<p class="footer-link">Đã có tài khoản? <a href="{% url 'accounts:login' %}">Đăng nhập</a></p>
+<div class="d-flex align-items-center justify-content-center h-100" style="background: linear-gradient(135deg, #f8fafc, #e0f2fe);">
+  <div class="card" style="width: 420px; padding: 40px;">
+    <h1 class="text-center mb-4">🔐 Smart Lock IoT</h1>
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="mb-3"><label class="form-label">Họ và tên</label>{{ form.full_name }}{{ form.full_name.errors }}</div>
+      <div class="mb-3"><label class="form-label">Email</label>{{ form.email }}{{ form.email.errors }}</div>
+      <div class="mb-3"><label class="form-label">Số điện thoại</label>{{ form.phone }}{{ form.phone.errors }}</div>
+      <div class="mb-3"><label class="form-label">Mật khẩu</label>{{ form.password }}{{ form.password.errors }}</div>
+      <button type="submit" class="btn btn-primary w-100 py-3">Tạo tài khoản</button>
+    </form>
+    <p class="text-center mt-4">Đã có tài khoản? <a href="{% url 'accounts:login' %}" class="text-primary">Đăng nhập</a></p>
+  </div>
+</div>
 {% endblock %}

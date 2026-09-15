@@ -5,283 +5,51 @@
 
 {% block content %}
 <div class="dashboard-content">
-    <!-- Welcome Header -->
-    <div class="welcome-header">
-        <div class="welcome-badge">
-            <span class="icon">🔐</span>
-            <span class="text">Đăng nhập thành công</span>
-        </div>
-        
-        <div class="user-info">
-            <div class="avatar">
-                {% if user.avatar_url %}
-                    <img src="{{ user.avatar_url }}" alt="{{ user.full_name|default:user.email }}">
-                {% else %}
-                    <div class="avatar-default">
-                        {{ user.full_name|default:user.email|slice:":1"|upper }}
-                    </div>
-                {% endif %}
-            </div>
-            <div class="user-details">
-                <h3>{{ user.full_name|default:user.email }}</h3>
-                <p class="email">{{ user.email }}</p>
-                <div class="verified-badge">
-                    {% if user.email_verified %}
-                        <span class="badge verified">✅ Đã xác thực email</span>
-                    {% else %}
-                        <span class="badge pending">⏳ Chưa xác thực email</span>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
+  <div class="card" style="padding: 32px; margin-bottom: 32px; border-radius: 20px;">
+    <div class="d-flex align-items-center gap-4">
+      <div class="avatar" style="width: 80px; height: 80px; border-radius: 50%; overflow: hidden; border: 4px solid #e0f2fe;">
+        {% if user.avatar_url %}<img src="{{ user.avatar_url }}" class="w-100 h-100 object-fit-cover">{% else %}<div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center fs-4">{{ user.full_name|default:user.email|slice:":1"|upper }}</div>{% endif %}
+      </div>
+      <div>
+        <h2>{{ user.full_name|default:user.email }}</h2>
+        <p class="text-muted">{{ user.email }}</p>
+      </div>
     </div>
+  </div>
 
-    <!-- Quick Stats -->
-    <div class="stats-grid">
-        <div class="stat-card">
-            <div class="stat-icon">📧</div>
-            <div class="stat-value">Email</div>
-            <div class="stat-label">{{ user.email }}</div>
-        </div>
-        
-        <div class="stat-card">
-            <div class="stat-icon">📱</div>
-            <div class="stat-value">Số điện thoại</div>
-            <div class="stat-label">{{ user.phone|default:"Chưa có" }}</div>
-        </div>
-        
-        <div class="stat-card">
-            <div class="stat-icon">🔒</div>
-            <div class="stat-value">2FA</div>
-            <div class="stat-label">
-                {% if user.two_fa_enabled %}
-                    <span class="status-badge enabled">✅ Đã bật</span>
-                {% else %}
-                    <span class="status-badge disabled">❌ Chưa bật</span>
-                {% endif %}
-            </div>
-        </div>
-    </div>
+  <div class="row g-3">
+    <div class="col-md-4"><div class="card p-4 text-center"><h4>Email</h4><p class="h3">{{ user.email }}</p></div></div>
+    <div class="col-md-4"><div class="card p-4 text-center"><h4>Số điện thoại</h4><p class="h3">{{ user.phone|default:"Chưa có" }}</p></div></div>
+    <div class="col-md-4"><div class="card p-4 text-center"><h4>2FA</h4><p class="h3">
+      {% if user.two_fa_enabled %}<span class="text-success">✅ Đã bật</span>{% else %}<span class="text-danger">❌ Chưa bật</span>{% endif %}
+    </p></div></div>
+  </div>
 
-    <!-- Main Actions -->
-    <div class="actions-section">
-        <h3>Chức năng nhanh</h3>
-        <div class="action-buttons">
-            <a href="{% url 'accounts:settings' %}" class="action-btn">
-                ⚙️ Cài đặt tài khoản
-            </a>
-            <a href="{% url 'accounts:devices' %}" class="action-btn">
-                📱 Quản lý thiết bị
-            </a>
-            <a href="{% url 'accounts:notifications' %}" class="action-btn">
-                🛎️ Thông báo &amp; Hỗ trợ
-            </a>
-        </div>
-    </div>
+  <div class="d-flex gap-3 mt-5">
+    <a href="{% url 'accounts:settings' %}" class="btn btn-primary flex-fill py-3">⚙️ Cài đặt tài khoản</a>
+    <a href="{% url 'accounts:devices' %}" class="btn btn-outline-primary flex-fill py-3">📱 Quản lý thiết bị</a>
+    <a href="{% url 'accounts:notifications' %}" class="btn btn-outline-primary flex-fill py-3">🛎️ Thông báo</a>
+  </div>
 
-    <!-- Recent Activity -->
-    <div class="activity-section">
-        <h3>Hoạt động gần đây</h3>
-        <div class="activity-list">
-            {% if user.last_login %}
-                <div class="activity-item">
-                    <div class="activity-icon">🕒</div>
-                    <div class="activity-content">
-                        <div class="activity-time">{{ user.last_login|date:"d/m/Y H:i" }}</div>
-                        <div class="activity-desc">Đăng nhập lần cuối</div>
-                    </div>
-                </div>
-            {% else %}
-                <div class="activity-item empty">
-                    Chưa có hoạt động gần đây
-                </div>
-            {% endif %}
-        </div>
+  <div class="mt-5">
+    <h4>Hoạt động gần đây</h4>
+    <div class="card p-4">
+      {% if user.last_login %}<p>Đăng nhập lần cuối: <strong>{{ user.last_login|date:"d/m/Y H:i" }}</strong></p>{% else %}<p class="text-muted">Chưa có hoạt động</p>{% endif %}
     </div>
+  </div>
 
-    <!-- Logout -->
-    <div class="logout-section">
-        <form method="post" action="{% url 'accounts:logout' %}" class="logout-form">
-            {% csrf_token %}
-            <button type="submit" class="logout-btn">
-                🚪 Đăng xuất khỏi tài khoản
-            </button>
-        </form>
-    </div>
+  <div class="mt-4 text-center">
+    <form method="post" action="{% url 'accounts:logout' %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-danger btn-lg">🚪 Đăng xuất</button>
+    </form>
+  </div>
 </div>
 
 <style>
-/* === THEME SÁNG (đã thay đổi hoàn toàn) === */
 .dashboard-content { animation: fadeIn 0.6s ease forwards; }
-
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-.welcome-header {
-    background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
-    border-radius: 16px;
-    padding: 28px;
-    margin-bottom: 28px;
-    position: relative;
-    overflow: hidden;
-}
-
-.welcome-header::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    right: -50%;
-    width: 200px;
-    height: 200px;
-    background: rgba(37, 99, 235, 0.06);
-    border-radius: 50%;
-}
-
-.welcome-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    background: #dbeafe;
-    color: #1e40af;
-    padding: 8px 20px;
-    border-radius: 9999px;
-    font-size: 15px;
-    font-weight: 600;
-    margin-bottom: 20px;
-}
-
-.icon { font-size: 22px; }
-
-.user-info { display: flex; align-items: center; gap: 24px; }
-
-.avatar {
-    width: 68px;
-    height: 68px;
-    border-radius: 50%;
-    overflow: hidden;
-    border: 4px solid #f1f5f9;
-    flex-shrink: 0;
-}
-
-.avatar img { width: 100%; height: 100%; object-fit: cover; }
-
-.avatar-default {
-    width: 100%;
-    height: 100%;
-    background: #64748b;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    font-weight: 700;
-    color: white;
-}
-
-.user-details h3 { margin: 0 0 6px; font-size: 22px; color: #1e293b; }
-.user-details p.email { margin: 0 0 8px; color: #475569; font-size: 15px; }
-
-.verified-badge .badge {
-    padding: 4px 14px;
-    border-radius: 9999px;
-    font-size: 13px;
-    font-weight: 600;
-}
-
-.badge.verified { background: #dcfce7; color: #166534; }
-.badge.pending { background: #fefce8; color: #854d0e; }
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 16px;
-    margin-bottom: 32px;
-}
-
-.stat-card {
-    background: #f8fafc;
-    border-radius: 16px;
-    padding: 24px;
-    text-align: center;
-    transition: transform 0.3s ease;
-}
-
-.stat-card:hover { transform: translateY(-4px); }
-
-.stat-icon { font-size: 32px; margin-bottom: 12px; color: #64748b; }
-
-.stat-value { font-size: 18px; font-weight: 700; color: #1e293b; margin-bottom: 4px; }
-.stat-label { color: #475569; font-size: 14px; }
-
-.action-buttons {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-}
-
-.action-btn {
-    flex: 1;
-    background: #f1f5f9;
-    color: #1e293b;
-    padding: 16px 20px;
-    border-radius: 12px;
-    text-decoration: none;
-    font-weight: 600;
-    transition: all 0.3s ease;
-    text-align: center;
-    border: 1px solid #cbd5e1;
-}
-
-.action-btn:hover {
-    background: #e2e8f0;
-    transform: translateY(-2px);
-}
-
-.activity-section h3 { margin-bottom: 16px; color: #475569; font-size: 16px; }
-
-.activity-list {
-    background: #f8fafc;
-    border-radius: 12px;
-    overflow: hidden;
-}
-
-.activity-item {
-    padding: 18px 24px;
-    display: flex;
-    align-items: flex-start;
-    gap: 16px;
-    border-bottom: 1px solid #e2e8f0;
-}
-
-.activity-item:last-child { border-bottom: none; }
-
-.activity-icon { font-size: 22px; flex-shrink: 0; margin-top: 2px; color: #64748b; }
-
-.activity-time { font-size: 13px; color: #64748b; margin-bottom: 4px; }
-.activity-desc { color: #1e293b; font-size: 15px; }
-
-.empty { padding: 40px 20px; text-align: center; color: #64748b; font-style: italic; }
-
-.logout-section { margin-top: 40px; padding-top: 24px; border-top: 1px solid #cbd5e1; }
-
-.logout-form { display: inline-block; }
-
-.logout-btn {
-    background: #ef4444;
-    color: white;
-    padding: 14px 32px;
-    border-radius: 12px;
-    border: none;
-    font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s;
-}
-
-.logout-btn:hover {
-    background: #dc2626;
-    transform: translateY(-2px);
-}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+.card { transition: all 0.3s; }
+.card:hover { transform: translateY(-8px); }
 </style>
 {% endblock %}

@@ -4,134 +4,30 @@
 {% block subtitle %}Bật hoặc quản lý xác thực hai yếu tố{% endblock %}
 
 {% block content %}
-<div class="2fa-page">
-    <div class="2fa-card">
-        <h2 id="title">📱 TOTP (Google Authenticator)</h2>
-        <p id="subtitle" class="subtitle">Quét mã QR để bật 2FA</p>
+<div class="d-flex align-items-center justify-content-center h-100" style="background: linear-gradient(135deg, #f8fafc, #e0f2fe);">
+  <div class="card" style="width: 460px; padding: 40px;">
+    <h2 id="title" class="text-center mb-2">📱 TOTP (Google Authenticator)</h2>
+    <p id="subtitle" class="text-center text-muted mb-4">Quét mã QR để bật 2FA</p>
 
-        {% if secret %}
-            <!-- TOTP SECTION -->
-            <div id="totp-section">
-                <p class="qr-info">Mở ứng dụng Authenticator (Google Authenticator / Authy / Microsoft Authenticator) rồi quét mã QR sau:</p>
-                
-                <div class="qr-container">
-                    <img id="qr-code" src="data:image/png;base64,{{ qr_base64 }}" alt="QR Code TOTP" class="img-fluid mx-auto d-block">
-                </div>
+    {% if secret %}
+      <div class="text-center mb-4">
+        <img src="data:image/png;base64,{{ qr_base64 }}" class="img-fluid" style="background:white;padding:10px;border-radius:12px;">
+        <p class="text-muted mt-3">Mở Authenticator và quét mã QR</p>
+      </div>
+      <div class="mb-3">
+        <label>Mã 6 chữ số</label>
+        <input type="text" id="otp" maxlength="6" class="form-control text-center fs-4">
+      </div>
+      <button onclick="verifyTotp()" class="btn btn-primary w-100">Xác nhận và bật 2FA</button>
+    {% endif %}
 
-                <div class="form-group mt-4">
-                    <label>Mã 6 chữ số từ ứng dụng</label>
-                    <input type="text" id="otp" maxlength="6" placeholder="123456" class="form-control">
-                    <small class="text-muted">Nhập mã vừa hiển thị trên điện thoại</small>
-                </div>
-
-                <button onclick="verifyTotp()" class="btn btn-primary w-100 mt-3">✅ Xác nhận và Bật 2FA</button>
-            </div>
-        {% endif %}
-
-        <!-- FIDO2 / Passkey SECTION -->
-        <div id="fido-section" class="mt-5">
-            <h5>🔑 Passkey / FIDO2</h5>
-            <p class="text-muted">Đăng nhập bằng khuôn mặt hoặc vân tay (không cần mã OTP)</p>
-            
-            <div class="d-grid gap-2">
-                <button onclick="registerPasskey()" class="btn btn-outline-primary">
-                    <i class="fas fa-key"></i> Đăng ký Passkey (Face ID / Touch ID)
-                </button>
-                <button onclick="loginWithPasskey()" class="btn btn-outline-primary">
-                    <i class="fas fa-fingerprint"></i> Đăng nhập bằng Passkey
-                </button>
-            </div>
-        </div>
-
-        <div class="text-center mt-4">
-            <a href="{% url 'accounts:settings' %}" class="text-primary">← Quay lại cài đặt</a>
-        </div>
+    <div class="text-center mt-4">
+      <a href="{% url 'accounts:settings' %}" class="text-primary">Quay lại</a>
     </div>
+  </div>
 </div>
 
 <style>
-/* === 2FA SETUP CSS HOÀN CHỈNH === */
-.2fa-page {
-    max-width: 520px;
-    margin: 0 auto;
-}
-
-.2fa-card {
-    background: #1e293b;
-    border-radius: 20px;
-    padding: 40px;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.1);
-}
-
-.qr-container {
-    background: white;
-    padding: 20px;
-    border-radius: 16px;
-    display: inline-block;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-}
-
-.qr-info {
-    text-align: center;
-    color: #cbd5e1;
-    margin: 20px 0 15px;
-    font-size: 15px;
-}
-
-.btn-primary {
-    background: #2563eb;
-    border: none;
-    padding: 14px;
-    font-weight: 600;
-}
-
-.btn-outline-primary {
-    border: 2px solid #38bdf8;
-    color: #38bdf8;
-}
-
-.text-muted { color: #64748b !important; }
+.card { border-radius: 20px; }
 </style>
-
-{% endblock %}
-
-{% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
-<script>
-    // QR Code (thay bằng base64 thật khi generate)
-    const qrBase64 = "{{ qr_base64 | default:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' }}";
-
-    function verifyTotp() {
-        const otp = document.getElementById('otp').value.trim();
-        if (otp.length !== 6) {
-            alert('Vui lòng nhập đúng 6 chữ số');
-            return;
-        }
-        alert('✅ Xác thực TOTP thành công!\n\n2FA đã được bật cho tài khoản của bạn.');
-        // TODO: gọi AJAX để verify OTP và cập nhật user.two_fa_enabled = true
-        window.location.href = '{% url "accounts:settings" %}';
-    }
-
-    function registerPasskey() {
-        // TODO: tích hợp FIDO2 (webauthn)
-        alert('🔑 Đang đăng ký Passkey...\n\nMở Camera để xác thực khuôn mặt!');
-        // Thay bằng code thực tế khi dùng django-webauthn
-    }
-
-    function loginWithPasskey() {
-        alert('🔑 Đang đăng nhập bằng Passkey...\n\nXác thực khuôn mặt để đăng nhập!');
-    }
-
-    // Tự động đổi title khi load FIDO2
-    document.addEventListener('DOMContentLoaded', () => {
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.has('fido')) {
-            document.getElementById('title').textContent = '🔑 Passkey / FIDO2';
-            document.getElementById('subtitle').textContent = 'Đăng ký hoặc đăng nhập bằng Face ID / Touch ID';
-            document.getElementById('totp-section').style.display = 'none';
-            document.getElementById('fido-section').style.display = 'block';
-        }
-    });
-</script>
 {% endblock %}

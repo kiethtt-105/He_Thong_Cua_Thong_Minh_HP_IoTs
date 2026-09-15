@@ -4,20 +4,134 @@
 {% block subtitle %}Quản lý khoá cửa thông minh của bạn{% endblock %}
 
 {% block content %}
-<form method="post" novalidate>
-  {% csrf_token %}
+<div class="login-page">
+  <div class="login-card">
+    <div class="logo">
+      <i class="fas fa-lock"></i>
+      <h1>Smart Lock IoT</h1>
+    </div>
 
-  <label for="{{ form.email.id_for_label }}">Email</label>
-  {{ form.email }}
-  {{ form.email.errors }}
+    <form method="post" novalidate>
+      {% csrf_token %}
 
-  <label for="{{ form.password.id_for_label }}">Mật khẩu</label>
-  {{ form.password }}
-  {{ form.password.errors }}
-  {{ form.non_field_errors }}
+      <div class="form-group">
+        <label>Email</label>
+        {{ form.email }}
+        {{ form.email.errors }}
+      </div>
 
-  <button type="submit">Đăng nhập</button>
-</form>
+      <div class="form-group">
+        <label>Mật khẩu</label>
+        {{ form.password }}
+        {{ form.password.errors }}
+        {{ form.non_field_errors }}
+      </div>
 
-<p class="footer-link">Chưa có tài khoản? <a href="{% url 'accounts:register' %}">Đăng ký</a></p>
+      <button type="submit" class="login-btn">Đăng nhập</button>
+    </form>
+
+    <p class="register-link">
+      Chưa có tài khoản? 
+      <a href="{% url 'accounts:register' %}">Đăng ký</a>
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block styles %}
+<style>
+.login-page {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f0f4ff, #e0f2fe);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.login-card {
+  background: white;
+  border-radius: 24px;
+  padding: 48px 40px;
+  width: 420px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+  text-align: center;
+  transition: transform 0.3s ease;
+}
+
+.login-card:hover {
+  transform: translateY(-8px);
+}
+
+.logo {
+  margin-bottom: 32px;
+}
+
+.logo i {
+  font-size: 52px;
+  color: #2563eb;
+  margin-bottom: 12px;
+}
+
+.logo h1 {
+  font-size: 26px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.form-group {
+  text-align: left;
+  margin-bottom: 24px;
+}
+
+.form-group label {
+  display: block;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 8px;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  font-size: 15px;
+}
+
+.login-btn {
+  width: 100%;
+  padding: 16px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.login-btn:hover {
+  background: #1d4ed8;
+  transform: translateY(-2px);
+}
+
+.register-link {
+  margin-top: 24px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.register-link a {
+  color: #2563eb;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.register-link a:hover {
+  text-decoration: underline;
+}
+</style>
 {% endblock %}
