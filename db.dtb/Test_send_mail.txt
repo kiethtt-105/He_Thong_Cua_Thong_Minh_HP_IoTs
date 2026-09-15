@@ -1,0 +1,2 @@
+== SEND MAIL
+python manage.py sendtestemail kiethtt.105@gmail.com

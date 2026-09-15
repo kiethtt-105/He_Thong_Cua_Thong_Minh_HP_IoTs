@@ -1,0 +1,19 @@
+{% extends 'accounts/base.html' %}
+{% block title %}Xác thực OTP{% endblock %}
+{% block heading %}Xác thực email{% endblock %}
+{% block subtitle %}Nhập mã 6 số vừa gửi tới {{ email }}{% endblock %}
+
+{% block content %}
+<form method="post" novalidate>
+  {% csrf_token %}
+
+  <label for="{{ form.otp.id_for_label }}">Mã OTP</label>
+  {{ form.otp }}
+  {{ form.otp.errors }}
+  {{ form.non_field_errors }}
+
+  <button type="submit">Xác thực</button>
+</form>
+
+<p class="footer-link">Không nhận được mã? <a href="{% url 'accounts:register' %}">Đăng ký lại</a></p>
+{% endblock %}

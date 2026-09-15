@@ -1,0 +1,16 @@
+{% extends 'accounts/base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block heading %}Xin chào, {{ user.full_name|default:user.email }} 👋{% endblock %}
+{% block subtitle %}Đăng nhập thành công{% endblock %}
+
+{% block content %}
+<p style="font-size:14px; color:#cbd5e1;">
+  Email: {{ user.email }}<br>
+  Đã xác thực email: {{ user.email_verified|yesno:"Có,Chưa" }}
+</p>
+
+<form method="post" action="{% url 'accounts:logout' %}">
+  {% csrf_token %}
+  <button type="submit">Đăng xuất</button>
+</form>
+{% endblock %}

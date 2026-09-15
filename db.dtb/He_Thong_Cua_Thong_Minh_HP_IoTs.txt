@@ -1,0 +1,287 @@
+=============================================================================
+ DIỄN GIẢI DATABASE — HỆ THỐNG KHOÁ CỬA THÔNG MINH (SMART LOCK IoT) 
+=============================================================================
+
+MỤC LỤC
+  0. Tổng quan & nguyên tắc thiết kế
+  A. Nhóm Người dùng & Xác thực (2FA) 
+  B. Nhóm Thiết bị (khoá cửa IoT)
+  C. Nhóm Quyền & Chia sẻ khoá
+  D. Nhóm Thẻ NFC & Đầu đọc
+  E. Nhóm Hỗ trợ, Thông báo, Nhật ký an ninh
+  F. Trigger / Function nghiệp vụ trong DB
+  G. Row Level Security (RLS)
+  H. Ánh xạ model Django -> bảng Postgres (bảng đối chiếu)
+  I. Lưu ý bảo mật khi triển khai
+
+-----------------------------------------------------------------------------
+0. TỔNG QUAN & NGUYÊN TẮC THIẾT KẾ
+-----------------------------------------------------------------------------
+- Toàn bộ ID dùng UUID (gen_random_uuid(), extension pgcrypto), tránh lộ số
+  thứ tự bản ghi và dễ merge dữ liệu giữa các môi trường.
+- Mọi thời điểm dùng timestamptz (có timezone).
+- Bí mật (mật khẩu, refresh token, OTP, mã chia sẻ, mã dự phòng...) CHỈ lưu
+  HASH (SHA-256/Argon2id) — trừ 2 ngoại lệ bắt buộc round-trip: TOTP secret
+  và HOTP secret, được MÃ HOÁ (không hash) bằng khoá KMS/ENV ở backend.
+- RLS (Row Level Security) được bật cho TẤT CẢ bảng, không cấp policy nào
+  cho anon/authenticated — toàn bộ logic phân quyền/kiểm tra thực hiện ở
+  BACKEND bằng service_role key (tự bypass RLS trên Supabase). Client
+  KHÔNG BAO GIỜ query thẳng vào Postgres.
+- "public"."devices" (khoá cửa vật lý/giả lập) và "public"."trusted_login_
+  devices" (thiết bị đăng nhập/điện thoại của user) là HAI khái niệm khác
+  nhau hoàn toàn — cố tình đặt tên khác biệt để tránh nhầm lẫn khi đọc code.
+- Các nghiệp vụ quan trọng (is_owner, append-only audit, ràng buộc trạng
+  thái...) được ép buộc bằng CHECK constraint / trigger ngay trong DB, thay
+  vì chỉ tin tưởng tầng ứng dụng — giảm rủi ro khi có nhiều service cùng
+  ghi vào DB (backend, cron job, edge function...).
+
+-----------------------------------------------------------------------------
+A. NHÓM NGƯỜI DÙNG & XÁC THỰC (2FA)
+-----------------------------------------------------------------------------
+
+A1. users
+  Tài khoản duy nhất của hệ thống.
+  - is_admin / is_owner: 2 cờ ĐỘC LẬP, không loại trừ nhau. is_owner KHÔNG
+    được set trực tiếp — trigger fn_maintain_is_owner() tự đồng bộ theo
+    devices.owner_id mỗi khi có device được claim/reset/đổi chủ.
+  - two_fa_enabled / totp_enabled / hotp_enabled / fido2_enabled: 4 cờ
+    ĐỘC LẬP tương ứng 4 phương thức 2FA (Email OTP, App TOTP, HOTP, Passkey
+    FIDO2) — user có thể bật đồng thời nhiều phương thức cùng lúc, giống
+    hệt thiết kế UserProfile.has_email_otp / has_app_otp / has_hotp bên
+    Django (has_fido2 suy ra từ việc tồn tại bản ghi trong
+    webauthn_credentials, không cần cờ riêng).
+  - force_disable_2fa: Admin cưỡng chế tắt toàn bộ 2FA (dùng khi user mất
+    thiết bị/khoá tài khoản khẩn cấp). Khi true, backend LUÔN coi như user
+    này chưa bật 2FA nào, bất kể các cờ *_enabled khác đang là gì.
+  - is_2fa_required: chính sách bắt buộc bật 2FA cho riêng user này (khác
+    với system_settings.require_2fa_all áp dụng toàn hệ thống).
+  - force_logout: cờ để backend nhận biết cần huỷ toàn bộ sessions của
+    user ở lần request tiếp theo (thường do Admin bấm "đăng xuất mọi nơi").
+  - allow_push_auth: cho phép nhận yêu cầu xác nhận đăng nhập (push) từ
+    thiết bị khác — chỉ có ý nghĩa khi user có ít nhất 1 phương thức 2FA.
+
+A2. sessions
+  Phiên đăng nhập / refresh token. Chỉ lưu hash của refresh token.
+
+A3. webauthn_credentials
+  Passkey/FIDO2 — tương ứng UserPasskey bên Django. Chỉ lưu public key;
+  private key luôn nằm ở Secure Enclave/TPM phía client. sign_count dùng
+  để phát hiện tấn công nhân bản khoá bảo mật (replay).
+
+A4. pending_registrations   [MỚI — từ PendingRegistration]
+  Lưu thông tin đăng ký TẠM trước khi email được xác thực OTP — CHƯA có
+  bản ghi trong "users". temp_data (jsonb) chứa các trường sẽ dùng để tạo
+  user thật (họ tên, password_hash đã hash sẵn...), KHÔNG BAO GIỜ chứa
+  password plaintext. otp_code_hash là SHA-256 hex 64 ký tự. expires_at
+  mặc định = created_at + 10 phút (khác bản Django tính bằng timedelta ở
+  runtime — ở đây chuẩn hoá thành cột tường minh cho đồng nhất với các
+  bảng OTP khác trong hệ thống).
+
+A5. email_otp_challenges
+  OTP gửi qua email cho nhiều mục đích (purpose): EMAIL_VERIFY, LOGIN_2FA,
+  SUPPORT_AUTH, PASSWORD_RESET, RECOVERY_CONFIRM, UPDATE_INFO, DISABLE_2FA
+  — 2 purpose cuối bổ sung để bao phủ đủ ACTION_CHOICES của EmailOTP bên
+  Django. attempts/max_attempts giới hạn số lần thử sai trên một mã cụ thể
+  (khác với login_otp_attempts là rate-limit theo user/IP theo cửa sổ
+  thời gian).
+
+A6. totp_credentials
+  Secret TOTP (Google Authenticator/Authy) — tương ứng
+  UserProfile.otp_secret. secret_encrypted được MÃ HOÁ (Fernet/AES-256-GCM)
+  chứ không hash, vì backend cần giải mã để tự tính lại mã OTP so khớp.
+  is_active = false ngay sau khi tạo, chỉ chuyển true sau khi user quét QR
+  và nhập đúng 1 mã xác nhận sở hữu thiết bị.
+
+A7. hotp_credentials   [MỚI — từ hotp_secret/hotp_counter]
+  Secret HOTP tách RIÊNG khỏi TOTP (đúng nguyên tắc bên Django: "Tách riêng
+  để user bật cả TOTP lẫn HOTP không bị xung đột"). counter là bộ đếm phía
+  SERVER, phải tăng +1 sau mỗi lần verify thành công; lệch counter với
+  token cứng được xử lý bằng cửa sổ look-ahead ở tầng backend, không xử lý
+  trong DB.
+
+A8. account_backup_codes   [MỚI — từ BackupCode]
+  Mã dự phòng dùng 1 lần cho TOÀN TÀI KHOẢN (không ràng buộc riêng vào
+  TOTP) — dùng được khi mất App OTP/HOTP/Passkey. Mỗi lần (tái) tạo: xoá
+  hết mã cũ của user, sinh 8 mã mới dạng "xxxx-xxxx", chỉ hiển thị
+  plaintext đúng 1 LẦN DUY NHẤT cho user ngay lúc tạo, DB chỉ lưu SHA-256
+  hash. (Bảng totp_backup_codes trong bản nháp trước gộp lại thành bảng
+  tổng quát này để đúng ngữ nghĩa BackupCode gốc bên Django.)
+
+A9. trusted_login_devices   [MỚI — từ TrustedDevice]
+  Thiết bị (điện thoại/app/trình duyệt) mà user đã đăng nhập và được lưu
+  lại để nhận & xử lý yêu cầu xác nhận đăng nhập (push-auth) từ thiết bị
+  khác. is_trusted = true là điều kiện BẮT BUỘC để thiết bị này được chọn
+  làm nơi nhận push (ép buộc bằng trigger, xem mục F.7). LƯU Ý: bảng này
+  KHÔNG liên quan gì tới bảng "devices" (khoá cửa vật lý) — cố ý đặt tên
+  khác để không nhầm lẫn hai khái niệm "device" trong cùng hệ thống.
+
+A10. remote_auth_requests   [MỚI — từ RemoteAuthRequest]
+  Yêu cầu push-auth: một thiết bị mới (chưa đăng nhập xong, nhận diện qua
+  session_key) xin xác nhận từ một trusted_login_devices đang online của
+  cùng user (target_device_id). expires_at tự động = created_at + 120
+  giây nếu không truyền sẵn (trigger fn_set_remote_auth_expiry) — đủ thời
+  gian để user mở app và bấm xác nhận/từ chối. status: pending -> approved
+  / denied. Chỉ gửi đúng 1 thiết bị, KHÔNG broadcast toàn bộ thiết bị.
+
+A11. login_otp_attempts   [MỚI — từ OTPAttempt / HOTPAttempt]
+  Nhật ký MỖI LẦN NHẬP SAI OTP/mật khẩu 2FA, theo user và/hoặc theo IP.
+  action phân biệt luồng: LOGIN_2FA / EMAIL_OTP / TOTP / HOTP /
+  BACKUP_CODE. Backend đếm số bản ghi trong 1 cửa sổ thời gian để khoá
+  tạm — mặc định tương ứng Django: 5 lần sai / 10 phút cho OTP thường,
+  5 lần sai / 30 phút riêng cho HOTP (HOTPAttempt bên Django là proxy
+  model dùng lại đúng bảng OTPAttempt với cửa sổ thời gian khác — ở đây
+  mô phỏng bằng cách lọc action='HOTP' với window riêng ở tầng backend,
+  không cần tạo bảng thứ hai). Dọn bản ghi cũ nên chạy bằng cron/Edge
+  Function định kỳ, KHÔNG dọn ngay trong request của user.
+
+A12. system_settings   [MỚI — từ SystemSettings]
+  Bảng CẤU HÌNH SINGLETON — luôn chỉ có đúng 1 dòng (id=1), ép buộc cứng
+  bằng CHECK (id = 1) thay cho get_or_create() ở tầng Django ORM. Chứa:
+  bật/tắt đăng ký mới, bắt buộc 2FA toàn hệ thống, thời hạn OTP, số lần
+  retry tối đa, timeout phiên, IP whitelist/blacklist, ai vừa cập nhật.
+
+A13. announcements   [MỚI — từ Announcement]
+  Thông báo/banner hệ thống do Admin tạo, gửi tới toàn bộ user, có mức độ
+  info/warning/danger và có thể tắt hiển thị (is_active).
+
+-----------------------------------------------------------------------------
+B. NHÓM THIẾT BỊ (DEVICES) — KHOÁ CỬA IoT  [giữ nguyên từ schema gốc]
+-----------------------------------------------------------------------------
+B1. devices — khoá cửa vật lý (Druino BLK Plus) hoặc giả lập phần mềm.
+    Một device chỉ có đúng 1 owner tại một thời điểm; đổi chủ bắt buộc qua
+    quy trình RESET (owner_id -> NULL, status -> provisioning) rồi mới cho
+    claim mới. provisioning_secret_hash là "root of trust" cao nhất của
+    thiết bị — ngay cả Admin cũng phải xuất trình đúng secret này để can
+    thiệp (claim/reset/recovery/transfer owner).
+B2. device_status_logs — telemetry định kỳ (pin, tín hiệu, trạng thái
+    khoá, nhiệt độ, cảnh báo tamper).
+B3. device_commands — hàng chờ lệnh Backend → Device (UNLOCK/LOCK/
+    ADD_CARD/REMOVE_CARD/RESET/OTA_UPDATE/REBOOT), có command_token_hash
+    chống replay.
+
+-----------------------------------------------------------------------------
+C. NHÓM QUYỀN & CHIA SẺ KHOÁ  [giữ nguyên từ schema gốc]
+-----------------------------------------------------------------------------
+C1. permissions — danh mục quyền chi tiết (device.view, device.unlock,
+    device.manage_cards, device.reset, device.transfer_owner...), có cờ
+    is_sensitive đánh dấu quyền nhạy cảm.
+C2. device_access — user nào có quyền gì (mảng permissions[]) trên device
+    nào, có thời hạn (valid_from/expires_at), cơ chế mời qua share_code
+    (6 chữ số, chỉ lưu hash) + accepted.
+
+-----------------------------------------------------------------------------
+D. NHÓM THẺ NFC & ĐẦU ĐỌC  [giữ nguyên từ schema gốc]
+-----------------------------------------------------------------------------
+D1. access_cards — danh mục thẻ NFC toàn hệ thống, đăng ký qua Master
+    Reader trước khi cấp cho bất kỳ device nào. card_uid_hash là hash của
+    UID thẻ.
+D2. card_device_access — thẻ nào mở được khoá nào, có thời hạn.
+D3. nfc_readers — phần cứng đầu đọc: MASTER (máy tổng, device_id NULL)
+    hoặc HEAD (gắn liền 1 khoá cụ thể, device_id bắt buộc).
+D4. nfc_reader_configs — cấu hình auto_register, CHỈ hợp lệ với reader
+    type=master (ép buộc bằng trigger).
+D5. nfc_sessions — phiên giao tiếp giữa reader và thẻ/thiết bị.
+D6. nfc_logs — nhật ký tap/kết nối reader, dùng ON DELETE SET NULL (không
+    CASCADE) để giữ lịch sử kể cả khi reader/card/device bị xoá.
+
+-----------------------------------------------------------------------------
+E. NHÓM HỖ TRỢ, THÔNG BÁO, NHẬT KÝ AN NINH
+-----------------------------------------------------------------------------
+E1. support_requests — Owner nhờ Admin xử lý thao tác nhạy cảm, scoped
+    đúng 1 quyền cụ thể, cần authorization_code (6 ký tự, TTL ngắn) và
+    bắt buộc thêm recovery_code (10 ký tự, quyền cao hơn) với các action
+    RESET_REMOTE/RECOVERY/TRANSFER_OWNER (ép buộc bằng CHECK constraint).
+E2. notifications — thông báo cá nhân cho từng user (unlock thành công/
+    thất bại, cảnh báo tamper, pin yếu, thiết bị offline, yêu cầu chia
+    sẻ, yêu cầu push-auth, thông báo hệ thống...).
+E3. audit_logs — NHẬT KÝ AN NINH DUY NHẤT của toàn hệ thống, APPEND-ONLY
+    (chặn cứng UPDATE/DELETE bằng trigger). Đây là bảng GỘP thay thế cho
+    2 bảng tách rời bên Django (ActivityLog dành cho hoạt động user +
+    AdminAuditLog dành cho hành động quản trị) — phân biệt bằng
+    actor_user_id (người thực hiện) / target_user_id (người bị tác động,
+    dùng khi Admin thao tác lên tài khoản khác) và quy ước tên action.
+    Cột username_attempt lưu tên đăng nhập được thử khi chưa xác định
+    được user thật (tương ứng ActivityLog.username_attempt).
+    Quy ước action gợi ý xem trực tiếp trong COMMENT ON TABLE audit_logs
+    ở file SQL (đã liệt kê đủ 3 nhóm: khoá cửa, 2FA/tài khoản, quản trị).
+
+-----------------------------------------------------------------------------
+F. TRIGGER / FUNCTION NGHIỆP VỤ TRONG DB
+-----------------------------------------------------------------------------
+F1. fn_set_updated_at() — tự cập nhật cột updated_at khi UPDATE. Áp dụng
+    cho: users, devices, nfc_readers, system_settings.
+F2. fn_maintain_is_owner() — tự đồng bộ users.is_owner theo devices.
+    owner_id mỗi khi INSERT/UPDATE(owner_id)/DELETE trên devices.
+F3. fn_block_audit_mutation() — chặn cứng mọi UPDATE/DELETE trên
+    audit_logs (RAISE EXCEPTION), đảm bảo tính append-only.
+F4. fn_check_card_active() — access_card phải đang ở status='active' mới
+    được gán is_active=true trong card_device_access.
+F5. fn_check_reader_config_master() — auto_register=true trong
+    nfc_reader_configs chỉ hợp lệ khi reader tương ứng có type='master'.
+F6. fn_set_remote_auth_expiry() — [MỚI] tự set remote_auth_requests.
+    expires_at = now() + 120 giây nếu không truyền sẵn khi INSERT.
+F7. fn_check_target_device_trusted() — [MỚI] chặn INSERT/UPDATE
+    remote_auth_requests.target_device_id nếu thiết bị đó không tồn tại,
+    không thuộc đúng user_id của request, hoặc chưa is_trusted=true.
+
+-----------------------------------------------------------------------------
+G. ROW LEVEL SECURITY (RLS)
+-----------------------------------------------------------------------------
+Tất cả bảng (kể cả các bảng 2FA mới) đều ENABLE ROW LEVEL SECURITY nhưng
+KHÔNG cấp bất kỳ policy nào cho role anon/authenticated. Điều này có nghĩa:
+  - Client (web/app) không bao giờ được cấp API key có quyền đọc/ghi trực
+    tiếp các bảng này qua PostgREST của Supabase.
+  - Toàn bộ đọc/ghi phải đi qua BACKEND, dùng service_role key (mặc định
+    bypass RLS trên Supabase).
+  - Đây là lựa chọn thiết kế "row-level authorization ở tầng backend" —
+    phù hợp vì nghiệp vụ (kiểm tra permissions[], scope support_requests,
+    is_trusted của trusted_login_devices...) phức tạp hơn mức RLS policy
+    đơn giản có thể biểu diễn gọn gàng.
+
+-----------------------------------------------------------------------------
+H. ÁNH XẠ MODEL DJANGO -> BẢNG POSTGRES
+-----------------------------------------------------------------------------
+  UserProfile            -> users (gộp các cờ 2FA trực tiếp vào users)
+                            + totp_credentials + hotp_credentials
+  PendingRegistration    -> pending_registrations
+  EmailOTP               -> email_otp_challenges
+  ActivityLog            -> audit_logs (actor_user_id, action, username_attempt)
+  OTPAttempt             -> login_otp_attempts
+  HOTPAttempt (proxy)    -> login_otp_attempts (action='HOTP', window riêng)
+  TrustedDevice          -> trusted_login_devices
+  RemoteAuthRequest      -> remote_auth_requests
+  UserPasskey            -> webauthn_credentials
+  BackupCode             -> account_backup_codes
+  SystemSettings         -> system_settings
+  Announcement           -> announcements
+  AdminAuditLog          -> audit_logs (actor_user_id=admin, target_user_id=user bị tác động)
+
+-----------------------------------------------------------------------------
+I. LƯU Ý BẢO MẬT KHI TRIỂN KHAI
+-----------------------------------------------------------------------------
+1. Admin đầu tiên: insert vào users với is_admin=true, password_hash là
+   Argon2id hash tạo sẵn ở backend — KHÔNG bao giờ insert password
+   plaintext qua SQL Editor của Supabase.
+2. Claim device mới: backend phải (a) verify device_code tồn tại + status
+   = 'provisioning', (b) verify đúng provisioning_secret_hash, (c) trong
+   1 transaction set owner_id + status phù hợp — trigger tự cập nhật
+   is_owner.
+3. Mọi mã ngẫu nhiên (share_code, authorization_code, recovery_code,
+   otp_code, provisioning_secret, backup_code) sinh bằng CSPRNG ở backend,
+   hash bằng Argon2id/SHA-256 trước khi lưu — DB không bao giờ thấy
+   plaintext (trừ đúng lúc trả về cho user 1 lần).
+4. secret_encrypted của totp_credentials/hotp_credentials là NGOẠI LỆ DUY
+   NHẤT được mã hoá (không hash) vì cần giải mã lại để tính OTP so khớp —
+   khoá mã hoá (Fernet key / AES key) lưu ở ENV/KMS, KHÔNG BAO GIỜ lưu
+   trong DB.
+5. push-auth (remote_auth_requests) chỉ gửi đúng 1 target_device_id đã
+   is_trusted=true — không broadcast; ép buộc cứng bằng trigger tầng DB
+   để tránh sai sót ở tầng ứng dụng.
+6. Các bảng có "hạn dùng" (pending_registrations, email_otp_challenges,
+   remote_auth_requests, login_otp_attempts) nên có job dọn định kỳ
+   (Supabase Scheduled Function / pg_cron), không dọn trong luồng request
+   để tránh tăng độ trễ trải nghiệm người dùng.
+7. audit_logs là nhật ký an ninh append-only DUY NHẤT — mọi service chỉ
+   được INSERT, không service nào (kể cả Admin) được UPDATE/DELETE, được
+   ép buộc cứng bằng trigger ở tầng DB chứ không chỉ dựa vào quy ước code.
+=============================================================================
