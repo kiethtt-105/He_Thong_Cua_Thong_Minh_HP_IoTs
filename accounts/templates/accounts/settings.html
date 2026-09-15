@@ -32,19 +32,28 @@
     </div>
 
     <div class="settings-card security-card">
-        <h2>Bảo mật & 2FA</h2>
+        <h2>⚙️ Xác thực hai yếu tố (2FA)</h2>
         <p class="security-status">
             {% if user.two_fa_enabled %}
-                <span class="status-badge enabled">✅ 2FA đã bật</span>
+                <span class="status-badge enabled">✅ Đã bật</span>
             {% else %}
-                <span class="status-badge disabled">❌ 2FA chưa bật</span>
+                <span class="status-badge disabled">❌ Chưa bật</span>
             {% endif %}
         </p>
         
         <div class="action-group">
-            <a href="#" class="action-btn">🔑 Bật 2FA (TOTP / Authenticator)</a>
-            <a href="#" class="action-btn">🔑 Bật 2FA (HOTP)</a>
-            <a href="#" class="action-btn">🔑 Quản lý thiết bị tin cậy</a>
+            {% if not user.two_fa_enabled %}
+                <a href="{% url 'accounts:setup_totp' %}" class="action-btn">
+                    📱 TOTP (Google Authenticator / Authy)
+                </a>
+                <button onclick="registerPasskey()" class="action-btn">
+                    🔑 Passkey / FIDO2 (Face ID / Touch ID)
+                </button>
+            {% else %}
+                <button onclick="disable2FA()" class="danger-btn w-100">
+                    🔒 Tắt 2FA hoàn toàn
+                </button>
+            {% endif %}
         </div>
     </div>
 
@@ -56,7 +65,7 @@
 </div>
 
 <style>
-/* === SETTINGS PAGE CSS === */
+/* === SETTINGS PAGE CSS HOÀN CHỈNH === */
 .settings-page {
     max-width: 620px;
     margin: 0 auto;
@@ -145,12 +154,11 @@
 }
 
 .action-btn {
-    display: block;
-    padding: 16px 20px;
     background: #334155;
     color: #e2e8f0;
-    text-decoration: none;
+    padding: 16px 20px;
     border-radius: 12px;
+    text-decoration: none;
     font-weight: 600;
     transition: all 0.3s;
 }
@@ -184,4 +192,20 @@
     background: #ef4444;
 }
 </style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function registerPasskey() {
+        // TODO: tích hợp FIDO2 (webauthn)
+        alert('Đang đăng ký Passkey... (sẽ mở popup xác thực khuôn mặt)');
+        // Thay thế bằng code thật khi dùng django-webauthn
+    }
+
+    function disable2FA() {
+        if (confirm('Bạn có chắc chắn muốn tắt 2FA toàn bộ?')) {
+            window.location.href = '{% url "accounts:disable_2fa" %}';
+        }
+    }
+</script>
 {% endblock %}

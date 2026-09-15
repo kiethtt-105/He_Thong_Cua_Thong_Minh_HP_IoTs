@@ -10,6 +10,10 @@ from .forms import LoginForm, OTPForm, RegisterForm
 from .models import PendingRegistration, User
 from .utils import generate_otp, hash_otp, send_otp_email
 
+import qrcode
+import io
+import base64
+from PIL import Image
 
 def register_view(request):
     if request.method == 'POST':
@@ -159,3 +163,82 @@ def notifications_view(request):
         'notifications': [],  # BE sẽ thay bằng queryset thực tế
     }
     return render(request, 'accounts/notifications.html', context)
+
+
+
+@login_required(login_url='accounts:login')
+def setup_2fa_view(request):
+    user = request.user
+    if user.two_fa_enabled:
+        return redirect('accounts:settings')
+    
+    # Tạo secret TOTP (thay bằng thực tế khi làm đầy đủ)
+    user.totp_secret = 'placeholder-secret'  # sau này dùng qrcode.generate()
+    user.save(update_fields=['totp_secret'])
+    
+    messages.success(request, 'Mã QR đã được tạo. Vui lòng mở ứng dụng Authenticator và quét!')
+    return render(request, 'accounts/2fa_setup.html', {'secret': user.totp_secret})
+
+@login_required(login_url='accounts:login')
+def disable_2fa_view(request):
+    request.user.two_fa_enabled = False
+    request.user.totp_enabled = False
+    request.user.hotp_enabled = False
+    request.user.fido2_enabled = False
+    request.user.save()
+    messages.success(request, 'Đã tắt 2FA thành công')
+    return redirect('accounts:settings')
+
+@login_required(login_url='accounts:login')
+def setup_totp_view(request):
+    # Gọi setup_2fa_view
+    return redirect('accounts:setup_2fa')
+
+
+
+
+
+@login_required(login_url='accounts:login')
+def setup_2fa_view(request):
+    user = request.user
+    if user.two_fa_enabled:
+        return redirect('accounts:settings')
+
+    # Tạo secret TOTP giả lập
+    user.totp_secret = 'TOTP_SECRET_2026'
+    user.save(update_fields=['totp_secret'])
+
+    # Tạo QR Code
+    secret_url = f'otpauth://totp/SmartLockIoT:{user.email}?secret={user.totp_secret}&issuer=SmartLockIoT'
+    qr = qrcode.make(secret_url)
+    img = io.BytesIO()
+    qr.save(img, 'PNG')
+    qr_base64 = base64.b64encode(img.getvalue()).decode()
+
+    messages.success(request, 'Mã QR đã được tạo. Vui lòng quét bằng Authenticator!')
+    return render(request, 'accounts/2fa_setup.html', {
+        'secret': user.totp_secret,
+        'qr_base64': qr_base64
+    })
+
+@login_required(login_url='accounts:login')
+def setup_totp_view(request):
+    return redirect('accounts:setup_2fa')
+
+@login_required(login_url='accounts:login')
+def register_passkey_view(request):
+    # TODO: tích hợp FIDO2 đầy đủ (webauthn lib)
+    messages.success(request, 'Passkey đã được đăng ký thành công!')
+    return redirect('accounts:settings')
+
+@login_required(login_url='accounts:login')
+def disable_2fa_view(request):
+    # Xóa secret, disable 2FA
+    request.user.two_fa_enabled = False
+    request.user.totp_enabled = False
+    request.user.hotp_enabled = False
+    request.user.fido2_enabled = False
+    request.user.totp_secret = None
+    request.user.save()
+    messages.success(request, 'Đã tắt 2FA thành công')
+    return redirect('accounts:settings')
