@@ -5,14 +5,26 @@
 
 {% block content %}
 <div class="dashboard-content">
-  <div class="card p-5" style="border-radius: 24px; max-width: 600px; margin: 0 auto;">
-    <div class="d-flex align-items-center gap-4">
-      <div class="avatar" style="width: 90px; height: 90px; border-radius: 50%; overflow: hidden; border: 5px solid #e0f2fe;">
-        {% if user.avatar_url %}<img src="{{ user.avatar_url }}" class="w-100 h-100 object-fit-cover">{% else %}<div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center fs-3 fw-bold">{{ user.full_name|default:user.email|slice:":1"|upper }}</div>{% endif %}
+  <div class="card p-5" style="border-radius: 24px; max-width: 620px; margin: 0 auto;">
+    <div class="d-flex align-items-center justify-content-between mb-4">
+      <div class="d-flex align-items-center gap-4">
+        <div class="avatar" style="width: 90px; height: 90px; border-radius: 50%; overflow: hidden; border: 5px solid #e0f2fe;">
+          {% if user.avatar_url %}<img src="{{ user.avatar_url }}" class="w-100 h-100 object-fit-cover">{% else %}<div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center fs-3 fw-bold">{{ user.full_name|default:user.email|slice:":1"|upper }}</div>{% endif %}
+        </div>
+        <div>
+          <h1 class="fw-bold fs-3 mb-1">{{ user.full_name|default:user.email }}</h1>
+          <p class="text-muted">{{ user.email }}</p>
+          <p class="text-muted">{{ user.phone|default:"Chưa có" }}</p>
+        </div>
       </div>
-      <div>
-        <h1 class="fw-bold fs-3 mb-1">{{ user.full_name|default:user.email }}</h1>
-        <p class="text-muted fs-5">{{ user.email }}</p>
+
+      <div class="d-flex gap-3">
+        <a href="{% url 'accounts:settings' %}" class="btn btn-outline-primary px-3">
+          ⚙️ Cài đặt
+        </a>
+        <a href="{% url 'accounts:notifications' %}" class="btn btn-outline-primary px-3">
+          🛎️ Thông báo
+        </a>
       </div>
     </div>
 
@@ -31,24 +43,16 @@
       </div>
       <div class="col-md-4">
         <div class="card p-4 text-center">
-          <h5 class="text-muted">2FA</h5>
-          <p class="h4 fw-bold {% if user.two_fa_enabled %}text-success{% else %}text-danger{% endif %}">
-            {% if user.two_fa_enabled %}✅ Đã bật{% else %}❌ Chưa bật{% endif %}
-          </p>
+          <h5 class="text-muted">Thiết bị</h5>
+          <p class="h4 fw-bold text-info">0 thiết bị</p>
         </div>
       </div>
     </div>
 
-    <div class="d-flex gap-3 mt-5">
-      <a href="{% url 'accounts:settings' %}" class="btn btn-primary btn-lg flex-fill py-3">⚙️ Cài đặt tài khoản</a>
-      <a href="{% url 'accounts:devices' %}" class="btn btn-outline-primary btn-lg flex-fill py-3">📱 Quản lý thiết bị</a>
-      <a href="{% url 'accounts:notifications' %}" class="btn btn-outline-primary btn-lg flex-fill py-3">🛎️ Thông báo</a>
-    </div>
-
     <div class="mt-5">
-      <h4 class="fw-bold mb-3">Hoạt động gần đây</h4>
+      <h4 class="fw-bold mb-3">📋 Lịch sử thao tác gần đây</h4>
       <div class="card p-4">
-        {% if user.last_login %}<p class="mb-0">Đăng nhập lần cuối: <strong>{{ user.last_login|date:"d/m/Y H:i" }}</strong></p>{% else %}<p class="text-muted">Chưa có hoạt động</p>{% endif %}
+        <p class="text-muted">Chưa có hoạt động</p>
       </div>
     </div>
 
