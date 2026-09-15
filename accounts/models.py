@@ -1,4 +1,4 @@
-import uuid  # ← ADD DÒNG NÀY VÀO ĐẦU FILE
+import uuid
 
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
@@ -89,7 +89,7 @@ class PendingRegistration(models.Model):
         return self.email
 
 
-# ==================== THIẾT BỊ (FIX CHO THIẾT BỊ) ====================
+# ==================== THIẾT BỊ & THÔNG BÁO ====================
 class Device(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     device_code = models.CharField(max_length=50, unique=True)

@@ -6,7 +6,7 @@
 {% block content %}
 <div class="d-flex align-items-center justify-content-center h-100" style="background: linear-gradient(135deg, #f8fafc, #e0f2fe);">
   <div class="card" style="width: 420px; padding: 40px;">
-    <h1 class="text-center mb-4">🔐 Smart Lock IoT</h1>
+    <h1 class="text-center mb-4 fw-bold">🔐 Smart Lock IoT</h1>
     <form method="post" novalidate>
       {% csrf_token %}
       <div class="mb-3"><label class="form-label">Họ và tên</label>{{ form.full_name }}{{ form.full_name.errors }}</div>

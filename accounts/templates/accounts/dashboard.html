@@ -5,44 +5,59 @@
 
 {% block content %}
 <div class="dashboard-content">
-  <div class="card" style="padding: 32px; margin-bottom: 32px; border-radius: 20px;">
+  <div class="card p-5" style="border-radius: 24px; max-width: 600px; margin: 0 auto;">
     <div class="d-flex align-items-center gap-4">
-      <div class="avatar" style="width: 80px; height: 80px; border-radius: 50%; overflow: hidden; border: 4px solid #e0f2fe;">
-        {% if user.avatar_url %}<img src="{{ user.avatar_url }}" class="w-100 h-100 object-fit-cover">{% else %}<div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center fs-4">{{ user.full_name|default:user.email|slice:":1"|upper }}</div>{% endif %}
+      <div class="avatar" style="width: 90px; height: 90px; border-radius: 50%; overflow: hidden; border: 5px solid #e0f2fe;">
+        {% if user.avatar_url %}<img src="{{ user.avatar_url }}" class="w-100 h-100 object-fit-cover">{% else %}<div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center fs-3 fw-bold">{{ user.full_name|default:user.email|slice:":1"|upper }}</div>{% endif %}
       </div>
       <div>
-        <h2>{{ user.full_name|default:user.email }}</h2>
-        <p class="text-muted">{{ user.email }}</p>
+        <h1 class="fw-bold fs-3 mb-1">{{ user.full_name|default:user.email }}</h1>
+        <p class="text-muted fs-5">{{ user.email }}</p>
       </div>
     </div>
-  </div>
 
-  <div class="row g-3">
-    <div class="col-md-4"><div class="card p-4 text-center"><h4>Email</h4><p class="h3">{{ user.email }}</p></div></div>
-    <div class="col-md-4"><div class="card p-4 text-center"><h4>Số điện thoại</h4><p class="h3">{{ user.phone|default:"Chưa có" }}</p></div></div>
-    <div class="col-md-4"><div class="card p-4 text-center"><h4>2FA</h4><p class="h3">
-      {% if user.two_fa_enabled %}<span class="text-success">✅ Đã bật</span>{% else %}<span class="text-danger">❌ Chưa bật</span>{% endif %}
-    </p></div></div>
-  </div>
-
-  <div class="d-flex gap-3 mt-5">
-    <a href="{% url 'accounts:settings' %}" class="btn btn-primary flex-fill py-3">⚙️ Cài đặt tài khoản</a>
-    <a href="{% url 'accounts:devices' %}" class="btn btn-outline-primary flex-fill py-3">📱 Quản lý thiết bị</a>
-    <a href="{% url 'accounts:notifications' %}" class="btn btn-outline-primary flex-fill py-3">🛎️ Thông báo</a>
-  </div>
-
-  <div class="mt-5">
-    <h4>Hoạt động gần đây</h4>
-    <div class="card p-4">
-      {% if user.last_login %}<p>Đăng nhập lần cuối: <strong>{{ user.last_login|date:"d/m/Y H:i" }}</strong></p>{% else %}<p class="text-muted">Chưa có hoạt động</p>{% endif %}
+    <div class="row g-4 mt-5">
+      <div class="col-md-4">
+        <div class="card p-4 text-center">
+          <h5 class="text-muted">Email</h5>
+          <p class="h4 fw-bold">{{ user.email }}</p>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-4 text-center">
+          <h5 class="text-muted">Số điện thoại</h5>
+          <p class="h4 fw-bold">{{ user.phone|default:"Chưa có" }}</p>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card p-4 text-center">
+          <h5 class="text-muted">2FA</h5>
+          <p class="h4 fw-bold {% if user.two_fa_enabled %}text-success{% else %}text-danger{% endif %}">
+            {% if user.two_fa_enabled %}✅ Đã bật{% else %}❌ Chưa bật{% endif %}
+          </p>
+        </div>
+      </div>
     </div>
-  </div>
 
-  <div class="mt-4 text-center">
-    <form method="post" action="{% url 'accounts:logout' %}">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-danger btn-lg">🚪 Đăng xuất</button>
-    </form>
+    <div class="d-flex gap-3 mt-5">
+      <a href="{% url 'accounts:settings' %}" class="btn btn-primary btn-lg flex-fill py-3">⚙️ Cài đặt tài khoản</a>
+      <a href="{% url 'accounts:devices' %}" class="btn btn-outline-primary btn-lg flex-fill py-3">📱 Quản lý thiết bị</a>
+      <a href="{% url 'accounts:notifications' %}" class="btn btn-outline-primary btn-lg flex-fill py-3">🛎️ Thông báo</a>
+    </div>
+
+    <div class="mt-5">
+      <h4 class="fw-bold mb-3">Hoạt động gần đây</h4>
+      <div class="card p-4">
+        {% if user.last_login %}<p class="mb-0">Đăng nhập lần cuối: <strong>{{ user.last_login|date:"d/m/Y H:i" }}</strong></p>{% else %}<p class="text-muted">Chưa có hoạt động</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="mt-4 text-center">
+      <form method="post" action="{% url 'accounts:logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger btn-lg">🚪 Đăng xuất</button>
+      </form>
+    </div>
   </div>
 </div>
 

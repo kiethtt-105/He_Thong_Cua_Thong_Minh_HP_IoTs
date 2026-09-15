@@ -1,13 +1,13 @@
 {% extends 'accounts/base.html' %}
 {% block title %}Quản lý thiết bị{% endblock %}
-{% block heading %}Quản lý thiết bị{% endblock %}
-{% block subtitle %}Thiết bị của bạn{% endblock %}
+{% block heading %}Thiết bị của bạn{% endblock %}
+{% block subtitle %}Quản lý toàn bộ khóa cửa thông minh{% endblock %}
 
 {% block content %}
 <div class="devices-page">
   <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2>Thiết bị của tôi</h2>
-    <button onclick="connectNewDevice()" class="btn btn-primary">📡 Kết nối thiết bị mới</button>
+    <h1 class="fw-bold fs-3">📍 Thiết bị của tôi</h1>
+    <button onclick="connectNewDevice()" class="btn btn-primary btn-lg px-4">📡 Kết nối thiết bị mới</button>
   </div>
 
   <div class="row g-4" id="devices-container">
@@ -21,7 +21,6 @@
 .card:hover { transform: translateY(-6px); }
 .avatar { width: 70px; height: 70px; border-radius: 12px; overflow: hidden; }
 </style>
-{% endblock %}
 
 {% block scripts %}
 <script>
@@ -34,32 +33,28 @@ async function loadDevices() {
 
   if (devices.length === 0) {
     container.innerHTML = `
-      <div class="col-md-6">
-        <div class="card text-center p-5">
-          <h5>Chưa có thiết bị nào</h5>
-          <button onclick="connectNewDevice()" class="btn btn-primary mt-3">📡 Kết nối thiết bị mới</button>
-        </div>
+      <div class="col-12 text-center py-5">
+        <h4 class="text-muted">Chưa có thiết bị nào</h4>
+        <button onclick="connectNewDevice()" class="btn btn-primary mt-3">Kết nối thiết bị mới</button>
       </div>`;
     return;
   }
 
   devices.forEach(d => {
     const isOnline = d.status === 'online';
-    const onlineHTML = isOnline ? 
-      `<span class="badge bg-success">Online</span>` : 
-      `<span class="badge bg-secondary">Offline</span>`;
-
     container.innerHTML += `
       <div class="col-md-6">
-        <div class="card">
-          <div class="p-4 d-flex gap-4">
-            <div class="avatar">
-              <img src="https://picsum.photos/id/${1015 + (d.id || 0) % 20}/100/100" class="w-100 h-100">
-            </div>
-            <div class="flex-1">
-              <h5>${d.name}</h5>
-              <p class="text-muted small">MAC: ${d.mac_address || '00:00:00:00:00:00'}</p>
-              ${onlineHTML}
+        <div class="card h-100">
+          <div class="card-body p-4">
+            <div class="d-flex gap-4">
+              <div class="avatar">
+                <img src="https://picsum.photos/id/${1015 + (d.id || 0) % 20}/100/100" class="w-100 h-100">
+              </div>
+              <div class="flex-1">
+                <h4 class="mb-1">${d.name}</h4>
+                <p class="text-muted small">MAC: ${d.mac_address || 'N/A'}</p>
+                <span class="badge ${isOnline ? 'bg-success' : 'bg-secondary'}">${d.status}</span>
+              </div>
             </div>
           </div>
           <div class="p-4 d-flex gap-2">
@@ -72,7 +67,7 @@ async function loadDevices() {
 }
 
 async function unlockDevice(id) {
-  if (!confirm('Mở khóa thiết bị?')) return;
+  if (!confirm('Mở khóa thiết bị này?')) return;
   await fetch(`/api/devices/${id}/unlock/`, { method: 'POST' });
   alert('✅ Đã mở khóa!');
   loadDevices();
@@ -87,7 +82,6 @@ async function resetDevice(id) {
 
 function connectNewDevice() {
   alert('📡 Đang hướng dẫn pairing (full implementation sau)');
-  // TODO: pairing flow
 }
 
 loadDevices();

@@ -13,20 +13,17 @@
 
     <form method="post" novalidate>
       {% csrf_token %}
-
       <div class="form-group">
         <label>Email</label>
         {{ form.email }}
         {{ form.email.errors }}
       </div>
-
       <div class="form-group">
         <label>Mật khẩu</label>
         {{ form.password }}
         {{ form.password.errors }}
         {{ form.non_field_errors }}
       </div>
-
       <button type="submit" class="login-btn">Đăng nhập</button>
     </form>
 
@@ -36,9 +33,7 @@
     </p>
   </div>
 </div>
-{% endblock %}
 
-{% block styles %}
 <style>
 .login-page {
   height: 100vh;
@@ -59,9 +54,7 @@
   transition: transform 0.3s ease;
 }
 
-.login-card:hover {
-  transform: translateY(-8px);
-}
+.login-card:hover { transform: translateY(-8px); }
 
 .logo {
   margin-bottom: 32px;
@@ -130,8 +123,6 @@
   text-decoration: none;
 }
 
-.register-link a:hover {
-  text-decoration: underline;
-}
+.register-link a:hover { text-decoration: underline; }
 </style>
 {% endblock %}

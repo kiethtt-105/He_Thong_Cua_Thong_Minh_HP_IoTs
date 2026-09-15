@@ -4,16 +4,20 @@
 {% block subtitle %}Nhập mã 6 số vừa gửi tới {{ email }}{% endblock %}
 
 {% block content %}
-<form method="post" novalidate>
-  {% csrf_token %}
-
-  <label for="{{ form.otp.id_for_label }}">Mã OTP</label>
-  {{ form.otp }}
-  {{ form.otp.errors }}
-  {{ form.non_field_errors }}
-
-  <button type="submit">Xác thực</button>
-</form>
-
-<p class="footer-link">Không nhận được mã? <a href="{% url 'accounts:register' %}">Đăng ký lại</a></p>
+<div class="d-flex align-items-center justify-content-center h-100" style="background: linear-gradient(135deg, #f8fafc, #e0f2fe);">
+  <div class="card" style="width: 420px; padding: 40px;">
+    <h2 class="text-center mb-4">🔐 Smart Lock IoT</h2>
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="mb-3">
+        <label class="form-label">Mã OTP</label>
+        {{ form.otp }}
+        {{ form.otp.errors }}
+        {{ form.non_field_errors }}
+      </div>
+      <button type="submit" class="btn btn-primary w-100 py-3">Xác thực</button>
+    </form>
+    <p class="text-center mt-4">Không nhận được mã? <a href="{% url 'accounts:register' %}" class="text-primary">Đăng ký lại</a></p>
+  </div>
+</div>
 {% endblock %}
