@@ -1,0 +1,24 @@
+DJANGO_SECRET_KEY=django-insecure-j_kbq!6(%c2u3hya*whhxe(d-qlc(f+e7zh%r&x7t$%upbk1x$
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1,he-thong-cua-thong-minh-hp-iots.vercel.app
+
+
+ENGINE=django.db.backends.postgresql
+DB_NAME=postgres
+DB_USER=postgres.bnfhftcunwfnlluotwsi
+DB_PASSWORD=ZIyfATIqn05asspq
+DB_HOST=aws-0-ap-southeast-2.pooler.supabase.com
+DB_PORT=5432
+
+
+CSRF_TRUSTED_ORIGINS=http://127.0.0.1,http://localhost,https://he-thong-cua-thong-minh-hp-iots.vercel.app
+
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=465
+EMAIL_USE_TLS=False
+EMAIL_USE_SSL=True
+EMAIL_HOST_USER=kiethtt@drive015.com
+EMAIL_HOST_PASSWORD=ulux fqrc jgov gmkt
+DEFAULT_FROM_EMAIL=kiethtt@drive015.com
+

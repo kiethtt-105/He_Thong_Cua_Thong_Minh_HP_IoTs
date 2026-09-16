@@ -1,0 +1,40 @@
+PHÂN LUẬN NGHIỆP VỤ – SMARTLOCK IoT
+================================================================================
+
+1. User đăng ký
+   - Nhập email -> gửi OTP -> verify -> tạo tài khoản
+
+2. User đăng nhập
+   - Email + Password / 2FA (TOTP/HOTP/Backup/FIDO2)
+
+3. Admin bootstrap
+   - Tạo user is_admin=True + is_owner=True (hệ thống)
+
+4. Claim thiết bị mới
+   - Scan device_code + nhập provisioning secret
+   - Tạo Device + DeviceAccess (full quyền)
+
+5. Chia sẻ thiết bị
+   - Owner tạo DeviceAccess cho user khác
+   - User accept qua share_code
+
+6. Thêm/xóa thẻ NFC
+   - Quản trị viên (master reader) đăng ký thẻ
+   - Gán CardDeviceAccess cho device
+
+7. Mở khóa / Khóa từ app
+   - Gọi DeviceCommand (UNLOCK/LOCK) qua NFC/BLE/Cloud
+
+8. Hỗ trợ khẩn cấp
+   - Owner tạo SupportRequest (RESET/RECOVERY)
+   - Admin phê duyệt -> execute -> reset owner
+
+9. Xử lý sự cố
+   - Thấy low battery -> Notification
+   - Tamper detected -> AuditLog + Notification
+
+10. Quản trị hệ thống
+    - Cập nhật SystemSettings
+    - Tạo Announcement
+    - Force logout user
+================================================================================

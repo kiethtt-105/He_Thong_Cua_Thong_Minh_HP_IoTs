@@ -1,0 +1,51 @@
+
+NHÓM A: NGƯỜI DÙNG & XÁC THỰC (Auth + 2FA)
+- User: Email + Password (pbkdf2_sha256$)
+- Session: Refresh token (hash), revoke, device_info
+- WebauthnCredential: FIDO2/Passkey
+- PendingRegistration: Đăng ký tạm (OTP + temp_data)
+- EmailOtpChallenge: 7 purpose (verify, login_2fa, password_reset…)
+- TotpCredential & HotpCredential: Secret đã mã hóa Fernet (32-byte key)
+- AccountBackupCode: Mã dự phòng (hash)
+- TrustedLoginDevice: Thiết bị login tin cậy (push-auth)
+- RemoteAuthRequest: Push-auth request
+- LoginOtpAttempt: Rate-limit brute-force
+- SystemSettings: Singleton (registration, 2FA required…)
+- Announcement: Thông báo hệ thống
+
+NHÓM B: THIẾT BỊ (Device)
+- Device: device_code, provisioning_secret_hash, owner, status (provisioning/online…)
+- DeviceStatusLog: Telemetry (battery, signal, temperature…)
+- DeviceCommand: Lệnh chờ (UNLOCK, LOCK, ADD_CARD, RESET…)
+
+NHÓM C: QUYỀN & CHIA SẺ
+- Permission: Danh mục quyền (device.view, device.manage_cards…)
+- DeviceAccess: Chia sẻ khóa (permissions JSON, share_code_hash, valid_from/expiry)
+- AccessCard: Thẻ NFC toàn hệ thống
+- CardDeviceAccess: Liên kết thẻ + device
+
+NHÓM D: NFC READER
+- NfcReader: Master/Head reader
+- NfcReaderConfig: Auto-register cho master
+- NfcSession & NfcLog: Log tap thẻ
+
+NHÓM E: HỖ TRỢ & NHẬT KÝ
+- SupportRequest: Owner yêu cầu Admin (RESET, TRANSFER, RECOVERY…)
+- Notification
+- AuditLog: Append-only
+
+TRIGGER & INDEXES (tự động qua signal + Meta)
+- Updated_at tự động
+- is_owner tự động từ owner_id
+- Audit log: block UPDATE/DELETE
+
+CẢI TIẾN ĐỀ XUẤT (đã thêm vào mô hình mới):
+1. Thêm trường: last_login (User)
+2. Thêm trường: is_staff, is_superuser (User) – giống Supabase
+3. Thêm model: UserDeviceLink (liên kết user với device để quản lý multiple owners)
+4. Thêm model: ApiKey (cho admin/service)
+5. Thêm model: RecoveryCode (dành riêng cho support_requests)
+6. Thêm ForeignKey: trong DeviceAccess thêm created_by_type (str) để theo dõi nguồn tạo
+7. Thêm signal: post_save để đồng bộ is_owner chính xác hơn
+8. Thêm constraint: unique trên (device, permissions) trong DeviceAccess
+================================================================================

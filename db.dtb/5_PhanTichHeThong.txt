@@ -1,0 +1,29 @@
+PHÂN TÍCH HỆ THỐNG SMART LOCK IoT
+================================================================================
+Mục tiêu: Quản lý khóa cửa thông minh (Druino BLK Plus) – đa thiết bị, đa user, đa quyền
+
+Yêu cầu chính:
+- Hỗ trợ 1-100+ thiết bị
+- Hỗ trợ 2FA đa phương thức (Email, TOTP, HOTP, FIDO2)
+- Chia sẻ quyền chi tiết (granular permissions)
+- Hỗ trợ NFC Master/Head reader
+- Hỗ trợ remote push-auth
+- Hỗ trợ recovery/transfer owner an toàn
+
+Cấu trúc hệ thống:
+- Frontend: iOS App (SwiftUI + CoreNFC + Bluetooth)
+- Backend: Django + Supabase (models + RLS + Triggers)
+- Hardware: Druino BLK Plus (NFC + BLE + Wi-Fi)
+
+Thách thức đã giải quyết:
+- Secret provisioning_secret_hash (không lưu plaintext)
+- Secret TOTP/HOTP (mã hóa Fernet)
+- Audit log append-only
+- Rate-limit login
+
+Cải tiến đã đề xuất:
+- Thêm UserDeviceLink để quản lý multiple owners
+- Thêm ApiKey cho service-to-service
+- Thêm recovery_code riêng cho support
+- Thêm constraint unique (device, permissions) trong DeviceAccess
+================================================================================
