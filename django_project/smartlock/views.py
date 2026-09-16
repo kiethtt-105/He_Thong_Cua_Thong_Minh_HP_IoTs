@@ -238,3 +238,7 @@ def logout_view(request):
 @login_required(login_url='smartlock:login')
 def dashboard_view(request):
     return render(request, 'smartlock/dashboard.html', {'user': request.user})
+
+
+def home_view(request):
+    return render(request, 'smartlock/home.html')

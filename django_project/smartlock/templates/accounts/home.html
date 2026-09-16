@@ -1,0 +1,19 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Smart Lock IoT</title>
+    <link rel="stylesheet" href="{% static 'css/home.css' %}">
+</head>
+<body>
+    <div class="home-container">
+        <h1>🔒 Smart Lock IoT</h1>
+        <p>Hệ thống khóa cửa thông minh — quản lý thiết bị, chia sẻ quyền truy cập và giám sát an toàn từ xa.</p>
+        <div class="home-actions">
+            <a href="{% url 'smartlock:login' %}" class="btn-primary">Đăng nhập</a>
+            <a href="{% url 'smartlock:register' %}" class="btn-secondary">Đăng ký</a>
+        </div>
+    </div>
+</body>
+</html>
