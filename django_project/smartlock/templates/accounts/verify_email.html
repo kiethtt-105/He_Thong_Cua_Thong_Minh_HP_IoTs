@@ -1,0 +1,46 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Xác thực email - Smart Lock</title>
+    <link rel="stylesheet" href="{% static 'css/verify_email.css' %}">
+</head>
+<body>
+    <div class="auth-container">
+        <h1>Xác thực email</h1>
+        <p>Mã OTP 6 số đã được gửi đến <strong>{{ email }}</strong>. Mã có hiệu lực trong 10 phút.</p>
+
+        {% if messages %}
+            <ul class="messages">
+                {% for message in messages %}
+                    <li class="message {{ message.tags }}">{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        <form method="post" novalidate>
+            {% csrf_token %}
+
+            {% if form.non_field_errors %}
+                <div class="form-errors">{{ form.non_field_errors }}</div>
+            {% endif %}
+
+            <div class="form-group">
+                <label for="{{ form.otp_code.id_for_label }}">{{ form.otp_code.label }}</label>
+                {{ form.otp_code }}
+                {% if form.otp_code.errors %}<div class="field-error">{{ form.otp_code.errors|striptags }}</div>{% endif %}
+            </div>
+
+            <button type="submit" class="btn-submit">Xác thực</button>
+        </form>
+
+        <form method="post" action="{% url 'smartlock:resend_otp' %}" class="resend-form">
+            {% csrf_token %}
+            <button type="submit" class="btn-link">Gửi lại mã OTP</button>
+        </form>
+
+        <p class="auth-switch"><a href="{% url 'smartlock:register' %}">Đăng ký lại với email khác</a></p>
+    </div>
+</body>
+</html>

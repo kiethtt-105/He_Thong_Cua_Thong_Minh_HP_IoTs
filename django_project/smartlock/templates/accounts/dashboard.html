@@ -1,0 +1,19 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard - Smart Lock</title>
+    <link rel="stylesheet" href="{% static 'css/smartlock.css' %}">
+</head>
+<body>
+    <div class="dashboard-container">
+        <h1>Xin chào, {{ user.full_name|default:user.email }}</h1>
+        <p>Email: {{ user.email }} {% if user.email_verified %}(đã xác thực){% endif %}</p>
+        <form method="post" action="{% url 'smartlock:logout' %}">
+            {% csrf_token %}
+            <button type="submit" class="btn-submit">Đăng xuất</button>
+        </form>
+    </div>
+</body>
+</html>

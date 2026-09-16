@@ -1,0 +1,131 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+    background: linear-gradient(135deg, #1e3c72, #2a5298);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.auth-container {
+    background: #fff;
+    width: 100%;
+    max-width: 400px;
+    padding: 40px 32px;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.auth-container h1 {
+    font-size: 24px;
+    color: #1e3c72;
+    margin-bottom: 24px;
+    text-align: center;
+}
+
+.form-group {
+    margin-bottom: 18px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 6px;
+}
+
+.form-group input,
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="password"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #d0d5dd;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+    border-color: #2a5298;
+    box-shadow: 0 0 0 3px rgba(42, 82, 152, 0.15);
+}
+
+.field-error,
+.form-errors {
+    color: #d92d20;
+    font-size: 13px;
+    margin-top: 4px;
+}
+
+.btn-submit {
+    width: 100%;
+    padding: 12px;
+    background: #2a5298;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.2s;
+}
+
+.btn-submit:hover {
+    background: #1e3c72;
+}
+
+.form-links {
+    text-align: right;
+    margin-bottom: 12px;
+}
+
+.form-links a {
+    font-size: 13px;
+    color: #2a5298;
+    text-decoration: none;
+}
+
+.form-links a:hover {
+    text-decoration: underline;
+}
+
+.auth-switch {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 14px;
+    color: #555;
+}
+
+.auth-switch a {
+    color: #2a5298;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.auth-switch a:hover {
+    text-decoration: underline;
+}
+
+.messages {
+    list-style: none;
+    margin-bottom: 16px;
+}
+
+.message {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 8px;
+}
+
+.message.success { background: #ecfdf3; color: #027a48; border: 1px solid #abefc6; }
+.message.error   { background: #fef3f2; color: #b42318; border: 1px solid #fecdca; }
+.message.warning { background: #fffaeb; color: #b54708; border: 1px solid #fedf89; }
+.message.info    { background: #eff8ff; color: #175cd3; border: 1px solid #b2ddff; }
