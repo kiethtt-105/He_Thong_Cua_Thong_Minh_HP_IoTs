@@ -120,7 +120,7 @@ class EmailOtpChallenge(models.Model):
 
 class TotpCredential(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField(User, on_delete=models.CASCADE, unique=True, related_name='totp_credential')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, unique=True, related_name='totp_credential')
     secret_encrypted = models.TextField()  # Đã mã hóa Fernet
     algorithm = models.CharField(max_length=10, default='SHA1', choices=[('SHA1', 'SHA1'), ('SHA256', 'SHA256'), ('SHA512', 'SHA512')])
     digits = models.IntegerField(default=6, choices=[(6, 6), (8, 8)])
@@ -133,7 +133,7 @@ class TotpCredential(models.Model):
 
 class HotpCredential(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField(User, on_delete=models.CASCADE, unique=True, related_name='hotp_credential')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, unique=True, related_name='hotp_credential')
     secret_encrypted = models.TextField()
     counter = models.BigIntegerField(default=0)
     digits = models.IntegerField(default=6, choices=[(6, 6), (8, 8)])
@@ -341,7 +341,7 @@ class NfcReader(models.Model):
 
 class NfcReaderConfig(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    reader = models.OneToOneField(NfcReader, on_delete=models.CASCADE, unique=True, related_name='config')
+    reader = models.ForeignKey(NfcReader, on_delete=models.CASCADE, unique=True, related_name='config')
     auto_register = models.BooleanField(default=False)
     grant_permission = models.JSONField(default=list)
     valid_from = models.DateTimeField(default=timezone.now)
