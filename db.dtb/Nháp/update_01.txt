@@ -1,0 +1,972 @@
+PHAN TICH VA DANH SACH CAC HANG MUC CAN SUA / NANG CAP
+SMART LOCK IoT - smartlock/models.py
+
+NGUON PHAN TICH:
+- File models.py nguoi dung da cung cap.
+- Khong tu dong sua code.
+- Danh sach nay chi de nguoi dung tu sua.
+- Cac muc duoi day tap trung vao cac diem can sua, nang cap va cac model nen bo sung.
+
+
+============================================================
+I. TOM TAT KIEN TRUC HIEN TAI
+============================================================
+
+File hien co cac nhom chinh:
+
+NHOM A - NGUOI DUNG & XAC THUC
+- User
+- Session
+- WebauthnCredential
+- PendingRegistration
+- EmailOtpChallenge
+- TotpCredential
+- HotpCredential
+- AccountBackupCode
+- TrustedLoginDevice
+- RemoteAuthRequest
+- LoginOtpAttempt
+- SystemSettings
+- Announcement
+
+NHOM B - THIET BI
+- Device
+- DeviceStatusLog
+- DeviceCommand
+
+NHOM C - QUYEN & CHIA SE
+- Permission
+- DeviceAccess
+- AccessCard
+- CardDeviceAccess
+
+NHOM D - NFC READER
+- NfcReader
+- NfcReaderConfig
+- NfcSession
+- NfcLog
+
+NHOM E - HO TRO & NHAT KY
+- SupportRequest
+- Notification
+- AuditLog
+
+
+============================================================
+II. CAC HANG MUC CAN SUA NGAY
+============================================================
+
+1. FERNET KEY DANG HARD-CODE
+------------------------------------------------------------
+
+HIEN TAI:
+- File dang co FERNET_KEY gan truc tiep trong models.py.
+- Ben duoi lai co logic doc FERNET_KEY tu environment.
+
+CAN SUA:
+- Xoa key hard-code khoi source code.
+- Chi doc key tu bien moi truong / .env.
+- Chi khoi tao Fernet tu environment variable.
+- Neu key da tung duoc commit/public tren Git thi nen tao key moi.
+
+MUC DO:
+RED - BAO MAT
+
+
+2. USER NEN DUNG DJANGO AUTH
+------------------------------------------------------------
+
+HIEN TAI:
+- User dang ke thua models.Model.
+- Tu luu password_hash.
+- Tu quan ly is_staff, is_superuser, is_active.
+- Co ham set_password/check_password rieng.
+
+CAN SUA:
+- Can nhac chuyen User sang AbstractBaseUser + PermissionsMixin.
+- Su dung co che authentication chuan cua Django.
+- Giu lai cac field rieng cua Smart Lock:
+  email
+  full_name
+  phone
+  avatar_url
+  email_verified
+  cac cau hinh 2FA
+- Tranh tu xay lai authentication core cua Django.
+
+MUC DO:
+RED - CAU TRUC
+
+
+3. IS_OWNER + SIGNAL MAINTAIN_IS_OWNER
+------------------------------------------------------------
+
+HIEN TAI:
+- User co is_owner.
+- Device co owner.
+- Cuoi file co signal maintain_is_owner().
+- Logic hien tai co nguy co khong reset owner cu khi owner thay doi.
+- Truong hop owner bi xoa/null cung can xu ly ro rang.
+
+CAN SUA:
+- Uu tien bo User.is_owner neu no chi dung de bieu dien owner cua Device.
+- Xac dinh owner bang Device.owner_id.
+- Neu van giu is_owner thi phai thiet ke lai co che dong bo owner cu / owner moi.
+
+MUC DO:
+RED - TINH NHAT QUAN DU LIEU
+
+
+4. PERMISSIONS DANG BI TRUNG GIUA JSONFIELD VA MODEL PERMISSION
+------------------------------------------------------------
+
+HIEN TAI:
+- Permission la model rieng.
+- DeviceAccess lai luu permissions bang JSONField.
+
+CAN SUA:
+- Can nhac thay DeviceAccess.permissions = JSONField bang ManyToManyField(Permission).
+- Permission model tro thanh nguon du lieu quyen duy nhat.
+- De query, cap/quyen, revoke va quan ly permission de dang hon.
+
+MUC DO:
+RED - THIET KE CSDL
+
+
+5. VALIDATOR BATTERY_LEVEL
+------------------------------------------------------------
+
+HIEN TAI:
+- Device va DeviceStatusLog dung validator lambda de gioi han 0-100.
+
+CAN SUA:
+- Dung MinValueValidator(0).
+- Dung MaxValueValidator(100).
+- Tranh lambda trong model field cho schema lau dai.
+
+MUC DO:
+ORANGE - KY THUAT
+
+
+============================================================
+III. CAC CONSTRAINT / DATA INTEGRITY CAN BO SUNG
+============================================================
+
+6. CARDDEVICEACCESS CAN UNIQUE
+------------------------------------------------------------
+
+Hien tai:
+- CardDeviceAccess co access_card va device.
+- Chua thay UniqueConstraint cho cap card + device.
+
+CAN SUA:
+Them UniqueConstraint cho:
+- access_card
+- device
+
+Muc dich:
+- Khong tao trung nhieu ban ghi cho cung mot card tren cung mot device.
+
+
+7. KIEM TRA CAC FK CO CAN INDEX KHONG
+------------------------------------------------------------
+
+Django thuong tu tao index cho ForeignKey, nhung can kiem tra lai cac truy van thuc te.
+
+Uu tien index cho:
+- DeviceStatusLog(device, recorded_at)
+- DeviceCommand(device, created_at)
+- AuditLog(device, created_at)
+- AuditLog(actor_user, created_at)
+- NfcLog(device, created_at)
+- NfcLog(user, created_at)
+- Notification(user, created_at)
+
+
+8. DEVICE ACCESS CAN KIEM TRA UNIQUE / TRANG THAI
+------------------------------------------------------------
+
+Can xem xet:
+- Mot user co the co bao nhieu DeviceAccess tren cung device?
+- Co cho phep trung record dang active hay khong?
+- Revoked access co duoc tao lai hay update record cu?
+
+Neu nghiep vu yeu cau, them constraint/index phu hop.
+
+
+============================================================
+IV. DEVICE - CAN NANG CAP CHO MO HINH IOT
+============================================================
+
+9. THEM DEVICE CREDENTIAL
+------------------------------------------------------------
+
+HIEN TAI:
+Device dang co:
+- device_code
+- provisioning_secret_hash
+
+DE XUAT THEM MODEL:
+
+DeviceCredential
+- id
+- device
+- credential_type
+- secret_hash / credential reference
+- is_active
+- created_at
+- expires_at
+- revoked_at
+- last_used_at
+
+Muc dich:
+- Tach thong tin xac thuc cua device khoi Device.
+- Co the mo rong MQTT credential, API credential, certificate, device token.
+
+
+10. DEVICE EVENT
+------------------------------------------------------------
+
+HIEN TAI:
+- Co DeviceStatusLog.
+- Co DeviceCommand.
+- Co AuditLog.
+- Chua co event stream tong quat cho device.
+
+DE XUAT THEM:
+
+DeviceEvent
+- id
+- device
+- event_type
+- source
+- user (neu co)
+- command (neu co)
+- payload
+- created_at
+
+Event co the gom:
+- UNLOCKED
+- LOCKED
+- CARD_ADDED
+- CARD_REMOVED
+- TAMPER_DETECTED
+- LOW_BATTERY
+- ONLINE
+- OFFLINE
+- FIRMWARE_UPDATED
+- CONFIG_CHANGED
+
+Muc dich:
+- Dashboard.
+- Monitoring.
+- Security monitoring.
+- Trace su kien cua device.
+
+
+11. DEVICE COMMAND CAN BO SUNG LIFECYCLE
+------------------------------------------------------------
+
+HIEN TAI da co:
+- pending
+- sent
+- acknowledged
+- failed
+- expired
+- command_token_hash
+- expires_at
+- acknowledged_at
+
+CAN BO SUNG / XEM XET:
+- sent_at
+- failed_at
+- failure_reason
+- response_payload
+- retry_count
+- last_retry_at
+- request_id / correlation_id
+
+Muc dich:
+Theo doi luong:
+User -> API -> Command -> MQTT -> Device -> ACK
+
+
+12. DEVICE STATUS LOG
+------------------------------------------------------------
+
+HIEN TAI co:
+- battery_level
+- signal_strength
+- lock_state
+- tamper_detected
+- temperature
+- raw_payload
+- recorded_at
+
+CAN NANG CAP:
+- Them index theo device + recorded_at.
+- Xem xet retention policy neu log rat lon.
+- Xem xet archive / partition / time-series database neu he thong phat trien lon.
+- Khong nen de raw_payload tang khong kiem soat neu payload co the rat lon.
+
+
+============================================================
+V. ACCESS CARD / NFC
+============================================================
+
+13. ACCESS CARD CAN BO SUNG LIFECYCLE
+------------------------------------------------------------
+
+HIEN TAI:
+- card_uid_hash
+- user
+- name
+- is_active
+- created_at
+- updated_at
+
+DE XUAT THEM:
+- issued_at
+- expires_at
+- revoked_at
+- revoked_reason
+- last_used_at
+- last_used_device
+
+revoked_reason co the gom:
+- LOST
+- STOLEN
+- EXPIRED
+- ADMIN_REVOKED
+- USER_REMOVED
+
+Muc dich:
+- Quan ly vong doi the.
+- Theo doi the bi mat / thu hoi.
+- Audit ro rang hon.
+
+
+14. CARD DEVICE ACCESS
+------------------------------------------------------------
+
+Can dam bao:
+- Khong duplicate card + device.
+- Co lich su active/inactive.
+- Neu can, them revoked_at / revoked_reason.
+- Xac dinh ro card duoc phep mo device nao.
+
+
+15. NFC SESSION
+------------------------------------------------------------
+
+HIEN TAI co:
+- reader
+- nfc_tag
+- device
+- user
+- session_token
+- started_at
+- ended_at
+- success
+- payload
+
+CAN XEM XET:
+- expires_at cho session.
+- failure_reason.
+- authentication_method.
+- request_id / correlation_id.
+- ip/user-agent neu session co phan web/API.
+- Khong luu raw sensitive payload neu khong can.
+
+
+============================================================
+VI. 2FA / AUTHENTICATION
+============================================================
+
+16. AUTHENTICATION MODEL DANG PHAN TAN
+------------------------------------------------------------
+
+HIEN TAI:
+User co:
+- two_fa_enabled
+- totp_enabled
+- hotp_enabled
+- fido2_enabled
+- force_disable_2fa
+- is_2fa_required
+- allow_push_auth
+
+Va co cac model:
+- TotpCredential
+- HotpCredential
+- WebauthnCredential
+- AccountBackupCode
+
+CAN NANG CAP:
+Can nhac gom theo huong:
+
+User
+ |
+ +-- AuthenticationMethod
+       +-- TOTP
+       +-- HOTP
+       +-- WebAuthn / Passkey
+       +-- Backup Code
+       +-- Push
+
+Muc dich:
+- Giam so field 2FA nam truc tiep trong User.
+- De them phuong thuc xac thuc moi sau nay.
+
+
+17. TOTP / HOTP SECRET
+------------------------------------------------------------
+
+HIEN TAI:
+- Secret duoc luu dang encrypted field.
+- Dung Fernet.
+
+CAN KIEM TRA:
+- Key chi nam trong environment.
+- Co co che rotate key hay khong.
+- Co audit viec them/xoa/activate 2FA hay khong.
+- Khong ghi secret vao log.
+- Khong tra secret ra API sau khi setup neu khong can.
+
+
+18. OTP CHALLENGE / LOGIN OTP
+------------------------------------------------------------
+
+HIEN TAI da co:
+- otp_code_hash
+- attempts
+- max_attempts
+- is_used
+- used_at
+- expires_at
+
+CAN NANG CAP:
+- last_attempt_at
+- locked_until
+- resend_count
+- request_ip
+- request_user_agent
+- rate limiting
+
+Muc dich:
+- Chong OTP brute-force.
+- Chong spam resend.
+- Gioi han tan cong theo IP/user/device.
+
+
+19. BACKUP CODE
+------------------------------------------------------------
+
+HIEN TAI:
+- code_hash
+- is_used
+- used_at
+
+CAN XEM XET THEM:
+- expires_at neu nghiep vu yeu cau.
+- generation_batch_id.
+- revoked_at.
+- last_used metadata neu can audit.
+
+Khong luu backup code plaintext sau khi phat hanh.
+
+
+============================================================
+VII. AUDIT / SECURITY LOG
+============================================================
+
+20. AUDITLOG CAN NANG CAP
+------------------------------------------------------------
+
+HIEN TAI:
+- actor_user
+- target_user
+- device
+- action
+- username_attempt
+- severity
+- success
+- ip_address
+- user_agent
+- metadata
+- created_at
+
+DE XUAT THEM:
+- request_id
+- session_id
+- device_command
+- event_category
+- failure_reason
+- before_state
+- after_state
+
+Muc dich:
+Trace mot hanh dong tu dau den cuoi:
+User
+ -> API request
+ -> authorization
+ -> command
+ -> device
+ -> result
+ -> audit
+
+
+21. NEN THEM SECURITY EVENT
+------------------------------------------------------------
+
+De xuat model rieng:
+
+SecurityEvent
+- id
+- user
+- device
+- event_type
+- severity
+- source
+- ip_address
+- user_agent
+- metadata
+- created_at
+
+Vi du:
+- LOGIN_FAILED
+- LOGIN_SUCCESS
+- OTP_FAILED
+- OTP_LOCKED
+- TOTP_FAILED
+- BACKUP_CODE_USED
+- NEW_DEVICE_LOGIN
+- SUSPICIOUS_ACTIVITY
+- PERMISSION_CHANGED
+- DEVICE_TAMPER
+- OWNER_TRANSFER
+
+Muc dich:
+- Tach security monitoring khoi audit nghiep vu.
+- De lam SOC / dashboard / alert sau nay.
+
+
+============================================================
+VIII. OWNER / DEVICE SHARING
+============================================================
+
+22. OWNER TRANSFER NEN CO LICH SU RIENG
+------------------------------------------------------------
+
+HIEN TAI:
+SupportRequest co action TRANSFER_OWNER.
+
+DE XUAT THEM:
+
+OwnershipTransfer
+- id
+- device
+- from_user
+- to_user
+- requested_by
+- approved_by
+- status
+- reason
+- expires_at
+- created_at
+- completed_at
+
+Muc dich:
+Luu lich su:
+Owner A -> Owner B -> Owner C
+
+Khong lam mat lich su khi Device.owner bi update.
+
+
+23. DEVICE ACCESS NEN CO ROLE RO RANG
+------------------------------------------------------------
+
+Co the phan biet:
+
+System Role:
+- ADMIN
+- SUPPORT
+- USER
+
+Device Role:
+- OWNER
+- MANAGER
+- MEMBER
+- GUEST
+
+Permission:
+- UNLOCK
+- LOCK
+- ADD_CARD
+- REMOVE_CARD
+- OTA
+- RESET
+- REBOOT
+
+Khong nen tron system role va device role vao cung mot field.
+
+
+============================================================
+IX. NOTIFICATION / OPERATIONS
+============================================================
+
+24. NOTIFICATION CAN CO DELIVERY STATUS
+------------------------------------------------------------
+
+HIEN TAI:
+- user
+- device
+- type
+- title
+- message
+- severity
+- is_read
+- created_at
+- read_at
+
+NEU CO EMAIL/PUSH:
+Them:
+- channel
+- delivery_status
+- sent_at
+- delivered_at
+- failed_at
+- failure_reason
+
+Vi du channel:
+- WEB
+- EMAIL
+- PUSH
+
+
+25. SYSTEM SETTINGS
+------------------------------------------------------------
+
+HIEN TAI:
+- registration_enabled
+- require_2fa_all
+- otp_expiry_minutes
+- otp_max_retry
+- session_timeout_hours
+- ip_whitelist
+- ip_blacklist
+- updated_by
+
+CAN XEM XET:
+- Khong nen luu IP whitelist/blacklist bang TextField neu can query phuc tap.
+- Co the tach thanh:
+  IPAllowlist
+  IPBlocklist
+
+Can co audit moi lan thay doi setting nhay cam.
+
+
+============================================================
+X. SESSION / DEVICE LOGIN
+============================================================
+
+26. SESSION
+------------------------------------------------------------
+
+HIEN TAI:
+- refresh_token_hash
+- device_info
+- ip_address
+- is_revoked
+- expires_at
+- last_active_at
+
+CAN XEM XET THEM:
+- revoked_at
+- revoke_reason
+- user_agent
+- device_id / trusted_device_id
+- last_refresh_at
+- created_ip
+
+Muc dich:
+- Quan ly session dang nhap.
+- Logout tung thiet bi.
+- Phat hien session bat thuong.
+
+
+27. TRUSTED LOGIN DEVICE
+------------------------------------------------------------
+
+HIEN TAI co:
+- device_uid
+- session_key
+- name
+- user_agent
+- ip_address
+- is_active
+- is_trusted
+- last_seen_at
+
+CAN XEM XET:
+- expires_at cho trust.
+- revoked_at.
+- revoke_reason.
+- last_authenticated_at.
+- authentication_method.
+
+
+============================================================
+XI. FIRMWARE / OTA
+============================================================
+
+28. NEN CO DEVICE FIRMWARE
+------------------------------------------------------------
+
+DeviceCommand da co OTA_UPDATE.
+
+Nen tach firmware thanh model rieng:
+
+DeviceFirmware
+- id
+- version
+- device_model
+- file/reference
+- checksum
+- signature
+- release_notes
+- is_active
+- created_at
+
+DeviceFirmwareAssignment / DeviceOTAJob co the quan ly:
+- device
+- firmware
+- status
+- started_at
+- completed_at
+- failed_at
+- failure_reason
+
+Muc dich:
+- Quan ly version.
+- Rollout firmware.
+- Theo doi OTA.
+- Verify checksum/signature.
+
+
+============================================================
+XII. DE XUAT CAU TRUC CUOI CUNG
+============================================================
+
+AUTHENTICATION
+- User
+- Session
+- AuthenticationMethod
+- WebauthnCredential
+- TotpCredential
+- HotpCredential
+- AccountBackupCode
+- EmailOtpChallenge
+- PendingRegistration
+- TrustedLoginDevice
+- RemoteAuthRequest
+- LoginOtpAttempt
+
+DEVICE
+- Device
+- DeviceCredential
+- DeviceStatusLog
+- DeviceEvent
+- DeviceCommand
+- DeviceFirmware
+- DeviceOTAJob
+
+ACCESS CONTROL
+- Permission
+- DeviceAccess
+- AccessCard
+- CardDeviceAccess
+- OwnershipTransfer
+
+NFC
+- NfcReader
+- NfcReaderConfig
+- NfcSession
+- NfcLog
+
+OPERATIONS
+- SupportRequest
+- Notification
+- Announcement
+- SystemSettings
+
+SECURITY / AUDIT
+- AuditLog
+- SecurityEvent
+
+
+============================================================
+XIII. THU TU TU SUA KHUYEN NGHI
+============================================================
+
+PHASE 1 - BAT BUOC
+[ ] Xoa FERNET_KEY hard-code
+[ ] Chi dung FERNET_KEY tu environment
+[ ] Kiem tra/rotate key neu key da lo
+[ ] Sua User theo Django authentication
+[ ] Xu ly lai is_owner + maintain_is_owner
+[ ] Sua Permission JSONField -> quan he Permission
+[ ] Sua lambda validator -> MinValueValidator/MaxValueValidator
+[ ] Them UniqueConstraint cho CardDeviceAccess
+
+PHASE 2 - DATA INTEGRITY
+[ ] Ra soat UniqueConstraint
+[ ] Ra soat CheckConstraint
+[ ] Ra soat FK on_delete
+[ ] Them index theo cac truy van thuc te
+[ ] Them index DeviceStatusLog(device, recorded_at)
+
+PHASE 3 - IOT
+[ ] Them DeviceCredential
+[ ] Them DeviceEvent
+[ ] Nang cap DeviceCommand lifecycle
+[ ] Nang cap DeviceStatusLog
+[ ] Them DeviceFirmware
+[ ] Them DeviceOTAJob
+
+PHASE 4 - ACCESS CONTROL
+[ ] Nang cap AccessCard lifecycle
+[ ] Hoan thien CardDeviceAccess
+[ ] Phan tach System Role / Device Role / Permission
+[ ] Them OwnershipTransfer
+
+PHASE 5 - SECURITY
+[ ] Nang cap OTP anti-abuse
+[ ] Ra soat TOTP/HOTP secret encryption
+[ ] Nang cap Session
+[ ] Nang cap TrustedLoginDevice
+[ ] Them SecurityEvent
+[ ] Nang cap AuditLog
+
+PHASE 6 - OPERATIONS
+[ ] Nang cap Notification delivery
+[ ] Ra soat SystemSettings
+[ ] Hoan thien Announcement
+[ ] Ra soat SupportRequest
+
+
+============================================================
+XIV. CAC DIEM CAN Dac BIET KIEM TRA TRUOC KHI MIGRATE
+============================================================
+
+1. Khong sua models roi migrate ngay tren database production.
+2. Backup database truoc khi migration.
+3. Kiem tra du lieu cu truoc khi doi ForeignKey/ManyToMany.
+4. Neu doi User sang AbstractBaseUser, phai lap ke hoach migration rieng.
+5. Neu bo is_owner, kiem tra tat ca code dang tham chieu field nay.
+6. Neu doi permissions tu JSON sang ManyToMany, phai migrate du lieu cu.
+7. Neu rotate FERNET_KEY, phai co ke hoach decrypt/re-encrypt cac secret cu.
+8. Kiem tra cac API/serializer/admin/view dang dung cac field cu.
+9. Kiem tra signal sau khi sua model.
+10. Chay test truoc va sau migration.
+
+
+============================================================
+XV. CAC MODEL KHONG NHAT THIET PHAI THEM NGAY
+============================================================
+
+Khong nen them tat ca model de xuat cung luc neu he thong hien tai chua can.
+
+Uu tien:
+1. Bao mat key
+2. Authentication
+3. Permission
+4. Data integrity
+5. Device credential
+6. Device event
+7. Audit/Security event
+8. Firmware/OTA
+9. Ownership transfer
+10. Notification delivery
+
+Cac model nhu DeviceFirmware, DeviceOTAJob, SecurityEvent, OwnershipTransfer co the them sau khi core system on dinh.
+
+
+============================================================
+XVI. MUC TIEU KIEN TRUC SAU KHI NANG CAP
+============================================================
+
+User
+ |
+ +--> Authentication
+ |
+ +--> DeviceAccess
+ |       |
+ |       +--> Permission
+ |
+ +--> AccessCard
+ |
+ +--> Session / Trusted Device
+ |
+ +--> AuditLog / SecurityEvent
+ |
+ +--> Notification
+
+Device
+ |
+ +--> DeviceCredential
+ |
+ +--> DeviceStatusLog
+ |
+ +--> DeviceEvent
+ |
+ +--> DeviceCommand
+ |
+ +--> DeviceFirmware / OTA
+ |
+ +--> NfcReader
+ |
+ +--> AccessCard mapping
+
+Muc tieu:
+- Bao mat tot hon
+- Du lieu nhat quan
+- De query
+- De audit
+- De mo rong IoT
+- De phat trien OTA
+- De phat trien SOC / monitoring
+- Giam logic trung lap
+- Giam nguy co sai lech trang thai
+
+
+============================================================
+KET LUAN
+============================================================
+
+models.py hien tai da co nen tang kha day du cho Smart Lock IoT:
+- Authentication
+- 2FA
+- WebAuthn
+- Session
+- Device
+- Permission
+- NFC
+- Command
+- Support
+- Notification
+- Audit
+
+Phan can tap trung sua truoc khong phai la them that nhieu model, ma la:
+1. Bao mat secret/key.
+2. Chuan hoa User authentication.
+3. Loai bo du lieu trung lap is_owner.
+4. Chuan hoa Permission.
+5. Tang data integrity bang constraint/index.
+6. Tach Device Credential.
+7. Them Device Event.
+8. Nang cap Audit/Security logging.
+9. Hoan thien OTA/Firmware.
+10. Hoan thien ownership/access lifecycle.
+
+Day la danh sach de nguoi dung tu sua trong models.py, khong phai file code da duoc tu dong sua.

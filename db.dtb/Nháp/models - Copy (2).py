@@ -2,59 +2,40 @@
 
 from django.db import models
 from django.utils import timezone
-from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.contrib.auth.hashers import make_password, check_password
 import uuid
 import os
 from cryptography.fernet import Fernet
+from datetime import timedelta
 
-from django.db.models.signals import pre_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 
-# ==================== CẤU HÌNH BÍ MẬT (FERNET) ====================
-# NANG CAP #1: chỉ đọc key từ environment, không hard-code, không đọc 2 lần.
+# ==================== CẤU HÌNH BIẬT MẬT (FERNET) ====================
+# Lấy khóa từ biến môi trường
+
 FERNET_KEY = os.environ.get("FERNET_KEY")
 if not FERNET_KEY:
     raise RuntimeError(
-        "Vui lòng khai báo biến FERNET_KEY trong .env!\n"
-        "Tạo key bằng lệnh: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key())\"\n"
-        "Nếu key cũ từng bị commit lên Git thì phải tạo key mới và re-encrypt dữ liệu cũ."
+        "CHƯA CẤP FERNET_KEY!"
     )
 
-fernet = Fernet(FERNET_KEY.encode())
+
+fernet = Fernet(FERNET_KEY.encode())  
 
 
 # ==================== NHÓM A: NGƯỜI DÙNG & XÁC THỰC ====================
-
-# NANG CAP #2: User chuyển sang AbstractBaseUser + PermissionsMixin
-class UserManager(BaseUserManager):
-    def create_user(self, email, password=None, **extra_fields):
-        if not email:
-            raise ValueError("User phải có email")
-        email = self.normalize_email(email)
-        user = self.model(email=email, **extra_fields)
-        user.set_password(password)
-        user.save(using=self._db)
-        return user
-
-    def create_superuser(self, email, password=None, **extra_fields):
-        extra_fields.setdefault('is_staff', True)
-        extra_fields.setdefault('is_superuser', True)
-        extra_fields.setdefault('is_active', True)
-        extra_fields.setdefault('email_verified', True)
-        return self.create_user(email, password, **extra_fields)
-
-
-class User(AbstractBaseUser, PermissionsMixin):
+class User(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
+    password_hash = models.CharField(max_length=255)
     full_name = models.CharField(max_length=100, blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     avatar_url = models.URLField(max_length=512, blank=True, null=True)
     is_admin = models.BooleanField(default=False)
-    # NANG CAP #3: bỏ is_owner (dữ liệu trùng lặp) — quyền sở hữu xác định
-    # trực tiếp qua Device.owner_id, không đồng bộ ngược lên User nữa.
+    is_owner = models.BooleanField(default=False)
     is_active = models.BooleanField(default=False)
     email_verified = models.BooleanField(default=False)
     two_fa_enabled = models.BooleanField(default=False)
@@ -67,26 +48,21 @@ class User(AbstractBaseUser, PermissionsMixin):
     allow_push_auth = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    # last_login đã có sẵn từ AbstractBaseUser, không khai báo lại.
+    last_login = models.DateTimeField(null=True, blank=True)
     is_staff = models.BooleanField(default=False)
-    # is_superuser đã có sẵn từ PermissionsMixin, không khai báo lại.
+    is_superuser = models.BooleanField(default=False)
 
-    objects = UserManager()
+    def set_password(self, raw_password: str):
+        self.password_hash = make_password(raw_password)
 
-    USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = []
+    def check_password(self, raw_password: str) -> bool:
+        return check_password(raw_password, self.password_hash)
 
-    # SUA LOI: tránh đụng reverse accessor với auth.User (khi AUTH_USER_MODEL
-    # chưa/không được set đúng, cả 2 model đều kế thừa PermissionsMixin).
-    groups = models.ManyToManyField(
-        'auth.Group', related_name='smartlock_user_set', blank=True
-    )
-    user_permissions = models.ManyToManyField(
-        'auth.Permission', related_name='smartlock_user_set', blank=True
-    )
-
-    def __str__(self):
-        return self.email
+    def save(self, *args, **kwargs):
+        if self.password_hash and not self.password_hash.startswith('pbkdf2_sha256$'):
+            # Nếu chưa có hash Django chuẩn
+            self.password_hash = make_password(self.password_hash)
+        super().save(*args, **kwargs)
 
 
 class Session(models.Model):
@@ -149,7 +125,7 @@ class EmailOtpChallenge(models.Model):
 
 class TotpCredential(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='totp_credential')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, unique=True, related_name='totp_credential')
     secret_encrypted = models.TextField()  # Đã mã hóa Fernet
     algorithm = models.CharField(max_length=10, default='SHA1', choices=[('SHA1', 'SHA1'), ('SHA256', 'SHA256'), ('SHA512', 'SHA512')])
     digits = models.IntegerField(default=6, choices=[(6, 6), (8, 8)])
@@ -162,7 +138,7 @@ class TotpCredential(models.Model):
 
 class HotpCredential(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='hotp_credential')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, unique=True, related_name='hotp_credential')
     secret_encrypted = models.TextField()
     counter = models.BigIntegerField(default=0)
     digits = models.IntegerField(default=6, choices=[(6, 6), (8, 8)])
@@ -251,8 +227,7 @@ class Device(models.Model):
     mac_address = models.CharField(max_length=17, blank=True, null=True)
     firmware_version = models.CharField(max_length=30, blank=True, null=True)
     status = models.CharField(max_length=20, default='provisioning', choices=[('online', 'Online'), ('offline', 'Offline'), ('maintenance', 'Maintenance'), ('provisioning', 'Provisioning')])
-    # NANG CAP #5: bỏ lambda validator, dùng MinValueValidator/MaxValueValidator chuẩn.
-    battery_level = models.IntegerField(default=100, validators=[MinValueValidator(0), MaxValueValidator(100)])
+    battery_level = models.IntegerField(default=100, validators=[lambda x: 0 <= x <= 100])
     location = models.CharField(max_length=255, blank=True, null=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     bluetooth_enabled = models.BooleanField(default=True)
@@ -263,11 +238,10 @@ class Device(models.Model):
 
     class Meta:
         constraints = [
-            # SUA LOI: status__ne không phải lookup hợp lệ của Django -> dùng ~Q(...)
             models.CheckConstraint(
-                check=(
+                check=models.Q(
                     models.Q(status='provisioning', owner__isnull=True) |
-                    (~models.Q(status='provisioning') & models.Q(owner__isnull=False))
+                    models.Q(status__ne='provisioning', owner__isnull=False)
                 ),
                 name='chk_devices_owner_vs_status'
             )
@@ -277,19 +251,13 @@ class Device(models.Model):
 class DeviceStatusLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
-    battery_level = models.IntegerField(validators=[MinValueValidator(0), MaxValueValidator(100)])
+    battery_level = models.IntegerField(validators=[lambda x: 0 <= x <= 100])
     signal_strength = models.IntegerField(null=True, blank=True)
     lock_state = models.CharField(max_length=20, choices=[('locked', 'Locked'), ('unlocked', 'Unlocked'), ('jammed', 'Jammed'), ('unknown', 'Unknown')])
     tamper_detected = models.BooleanField(default=False)
     temperature = models.DecimalField(max_digits=4, decimal_places=1, null=True, blank=True)
     raw_payload = models.JSONField(null=True, blank=True)
     recorded_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        # NANG CAP #7: index theo device + recorded_at cho truy vấn log theo thời gian
-        indexes = [
-            models.Index(fields=['device', 'recorded_at'], name='idx_devstatuslog_dev_time'),
-        ]
 
 
 class DeviceCommand(models.Model):
@@ -310,11 +278,6 @@ class DeviceCommand(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     acknowledged_at = models.DateTimeField(null=True, blank=True)
 
-    class Meta:
-        indexes = [
-            models.Index(fields=['device', 'created_at'], name='idx_devcommand_dev_time'),
-        ]
-
 
 # ==================== NHÓM C: QUYỀN & CHIA SẺ ====================
 class Permission(models.Model):
@@ -331,15 +294,14 @@ class Permission(models.Model):
 class DeviceAccess(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_deviceaccesses')
-    # NANG CAP #4: thay JSONField bằng quan hệ M2M tới Permission — nguồn quyền duy nhất.
-    permissions = models.ManyToManyField(Permission, blank=True, related_name='device_accesses')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_deviceaccesses')   # <--- SỬA
+    permissions = models.JSONField()
     share_code_hash = models.CharField(max_length=255, blank=True, null=True)
     valid_from = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     accepted = models.BooleanField(default=False)
-    created_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='created_deviceaccesses')
+    created_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='created_deviceaccesses')   # <--- SỬA
     created_at = models.DateTimeField(auto_now_add=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
 
@@ -350,6 +312,7 @@ class DeviceAccess(models.Model):
                 name='chk_device_access_expiry'
             )
         ]
+
 
 
 class AccessCard(models.Model):
@@ -369,12 +332,6 @@ class CardDeviceAccess(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
 
-    class Meta:
-        # NANG CAP #6: chặn trùng cặp (card, device)
-        constraints = [
-            models.UniqueConstraint(fields=['access_card', 'device'], name='uniq_card_device')
-        ]
-
 
 # ==================== NHÓM D: NFC READER ====================
 class NfcReader(models.Model):
@@ -389,7 +346,7 @@ class NfcReader(models.Model):
 
 class NfcReaderConfig(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    reader = models.OneToOneField(NfcReader, on_delete=models.CASCADE, related_name='config')
+    reader = models.ForeignKey(NfcReader, on_delete=models.CASCADE, unique=True, related_name='config')
     auto_register = models.BooleanField(default=False)
     grant_permission = models.JSONField(default=list)
     valid_from = models.DateTimeField(default=timezone.now)
@@ -431,18 +388,12 @@ class NfcLog(models.Model):
     metadata = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        indexes = [
-            models.Index(fields=['device', 'created_at'], name='idx_nfclog_dev_time'),
-            models.Index(fields=['user', 'created_at'], name='idx_nfclog_user_time'),
-        ]
-
 
 # ==================== NHÓM E: HỖ TRỢ & NHẬT KÝ ====================
 class SupportRequest(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
-    requested_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='requested_supportrequests')
+    requested_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='requested_supportrequests')   # <--- SỬA
     action = models.CharField(
         max_length=50,
         choices=[('ADD_CARD', 'Add Card'), ('REMOVE_CARD', 'Remove Card'), ('CHANGE_PERMISSION', 'Change Permission'), ('RESET_REMOTE', 'Reset Remote'), ('RECOVERY', 'Recovery'), ('TRANSFER_OWNER', 'Transfer Owner'), ('OTA_SENSITIVE', 'OTA Sensitive'), ('OTHER', 'Other')]
@@ -452,23 +403,23 @@ class SupportRequest(models.Model):
     recovery_code_hash = models.CharField(max_length=255, blank=True, null=True)
     status = models.CharField(max_length=20, default='pending', choices=[('pending', 'Pending'), ('approved', 'Approved'), ('executed', 'Executed'), ('expired', 'Expired'), ('rejected', 'Rejected'), ('cancelled', 'Cancelled')])
     expires_at = models.DateTimeField()
-    processed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='processed_supportrequests')
+    processed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='processed_supportrequests')   # <--- SỬA
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
-            # SUA LOI: action__notin không phải lookup hợp lệ -> dùng ~Q(action__in=[...])
             models.CheckConstraint(
-                check=(
+                check=models.Q(
                     models.Q(action__in=['RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER'], recovery_code_hash__isnull=False) |
-                    (~models.Q(action__in=['RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER']) & models.Q(recovery_code_hash__isnull=True))
+                    models.Q(action__notin=['RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER'], recovery_code_hash__isnull=True)
                 ),
                 name='chk_support_requires_recovery'
             )
         ]
 
 
+        
 class Notification(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -480,11 +431,6 @@ class Notification(models.Model):
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     read_at = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['user', 'created_at'], name='idx_notification_user_time'),
-        ]
 
 
 class AuditLog(models.Model):
@@ -501,37 +447,46 @@ class AuditLog(models.Model):
     metadata = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        indexes = [
-            models.Index(fields=['device', 'created_at'], name='idx_auditlog_dev_time'),
-            models.Index(fields=['actor_user', 'created_at'], name='idx_auditlog_actor_time'),
-        ]
-
 
 # ==================== INDEXES (tương tự SQL) ====================
-# (Django tự động tạo index cho FK/unique khi migrate; các index tổ hợp khai báo trong Meta ở trên)
+# (Django tự động tạo index khi migrate)
 
-# ==================== SIGNALS (tương tự TRIGGER SQL) ====================
+# ==================== TRIGGERS (tương tự SQL) ====================
+# Django không có trigger DB-level, nhưng chúng ta dùng Signals + @receiver để làm giống hệt
+# ==================== CẤU HÌNH BIẬT MẬT (FERNET) ====================
+# Lấy khóa từ biến môi trường (rất quan trọng)
+if "FERNET_KEY" not in os.environ:
+    raise RuntimeError(
+        "Vui lòng tạo biến FERNET_KEY trong file .env!\n"
+        "Key nên dài 32 bytes (bạn có thể tạo bằng lệnh: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key())\" )\n"
+        "Sau đó copy key vừa ra và dán vào .env"
+    )
+
+fernet = Fernet(os.environ.get("FERNET_KEY").encode())
+
+# ==================== TRIGGERS (tương tự SQL) ====================
+
+
 
 @receiver(pre_save, sender=User)
 def set_updated_at_user(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
 
-
 @receiver(pre_save, sender=Device)
 def set_updated_at_device(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
-
 
 @receiver(pre_save, sender=NfcReader)
 def set_updated_at_nfc_reader(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
 
-
 @receiver(pre_save, sender=SystemSettings)
 def set_updated_at_system_settings(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
 
-# NANG CAP #3: đã bỏ signal maintain_is_owner (post_save trên Device đồng bộ
-# User.is_owner). Chủ sở hữu nay xác định trực tiếp qua Device.owner_id,
-# không còn field trùng lặp trên User để đồng bộ.
+@receiver(post_save, sender=Device)
+def maintain_is_owner(sender, instance, created, **kwargs):
+    if instance.owner_id:
+        User.objects.filter(id=instance.owner_id).update(is_owner=True)
+    elif not created:
+        User.objects.filter(id=instance.owner_id).update(is_owner=False)
