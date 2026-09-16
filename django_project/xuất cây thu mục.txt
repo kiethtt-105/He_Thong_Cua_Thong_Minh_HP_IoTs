@@ -1,0 +1,1 @@
+python -c "import os; [print(os.path.relpath(os.path.join(r, f), '.')) for r, d, files in os.walk('.') if 'venv' not in r for f in files]"
