@@ -1,0 +1,7 @@
+from django.apps import AppConfig
+
+
+class SmartlockConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'smartlock'
+    verbose_name = 'SmartLock'

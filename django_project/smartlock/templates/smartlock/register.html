@@ -1,0 +1,21 @@
+{% extends "smartlock/base.html" %}
+{% block title %}Đăng ký{% endblock %}
+{% block content %}
+<h5 class="mb-4">Tạo tài khoản mới</h5>
+<form method="post" novalidate>
+    {% csrf_token %}
+    {% for field in form %}
+        <div class="mb-3">
+            <label class="form-label">{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}
+                <div class="text-danger small mt-1">{{ field.errors|striptags }}</div>
+            {% endif %}
+        </div>
+    {% endfor %}
+    <button type="submit" class="btn btn-primary w-100">Đăng ký</button>
+</form>
+<p class="text-center mt-3 mb-0">
+    Đã có tài khoản? <a href="{% url 'smartlock:login' %}">Đăng nhập</a>
+</p>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "smartlock/base.html" %}
+{% block title %}Xác thực Email{% endblock %}
+{% block content %}
+<h5 class="mb-3">Xác thực email</h5>
+<p class="text-muted">
+    Mã OTP gồm 6 chữ số đã được gửi tới <strong>{{ email }}</strong>.
+    Vui lòng kiểm tra hộp thư đến (và cả thư mục Spam), mã có hiệu lực trong ít phút.
+</p>
+
+<form method="post" novalidate class="mb-2">
+    {% csrf_token %}
+    <div class="mb-3">
+        {{ form.otp.label_tag }}
+        {{ form.otp }}
+        {% if form.otp.errors %}
+            <div class="text-danger small mt-1">{{ form.otp.errors|striptags }}</div>
+        {% endif %}
+        {% if form.non_field_errors %}
+            <div class="text-danger small mt-1">{{ form.non_field_errors|striptags }}</div>
+        {% endif %}
+    </div>
+    <button type="submit" class="btn btn-primary w-100">Xác nhận</button>
+</form>
+
+<form method="post">
+    {% csrf_token %}
+    <button type="submit" name="resend" value="1" class="btn btn-outline-secondary w-100">
+        Gửi lại mã OTP
+    </button>
+</form>
+{% endblock %}
