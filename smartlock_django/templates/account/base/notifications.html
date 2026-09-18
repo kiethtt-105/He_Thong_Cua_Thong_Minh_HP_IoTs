@@ -21,15 +21,15 @@
                             <p class="mb-0">{{ n.message }}</p>
                             <small class="text-muted">{{ n.created_at|date:"d/m/Y H:i" }}</small>
                         </div>
-                        {% if not n.is_read %}<span class="badge bg-primary">Chưa đọc</span>{% } endif %}
+                        {% if not n.is_read %}<span class="badge bg-primary">Chưa đọc</span>{% endif %}
                     </div>
                 {% empty %}
                     <p class="text-muted">Chưa có thông báo nào.</p>
-                {% } endfor %}
+                {% endfor %}
             </div>
-        {% } else %}
+        {% else %}
             <p class="text-muted">Chưa có thông báo nào.</p>
-        {% } endif %}
+        {% endif %}
     </div>
 </body>
 </html>
