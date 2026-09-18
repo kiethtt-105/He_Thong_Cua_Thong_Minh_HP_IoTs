@@ -4,41 +4,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Danh sách thiết bị</title>
+    <title>{{ device.name }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <style>.card { border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }</style>
 </head>
 <body class="bg-light">
-    <div class="container">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h4 class="mb-0">Danh sách thiết bị</h4>
-            <a href="{% url 'smartlock:device-detail' %}" class="btn btn-primary"><i class="fa-solid fa-plus me-2"></i> Thêm thiết bị mới</a>
+    <div class="container py-4">
+        <div class="card shadow">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">{{ device.name }}</h5>
+                <span class="badge bg-success fs-6">{{ device.status }}</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-4">
+                    <div class="col-md-6">
+                        <table class="table table-borderless">
+                            <tr><th>Tên thiết bị</th><td>{{ device.name }}</td></tr>
+                            <tr><th>Mã thiết bị</th><td><code>{{ device.device_code }}</code></td></tr>
+                            <tr><th>Mã MAC</th><td>{{ device.mac_address|default:"Chưa có" }}</td></tr>
+                            <tr><th>Pin</th><td>{{ device.battery_level }}%</td></tr>
+                        </table>
+                    </div>
+                    <div class="col-md-6">
+                        <table class="table table-borderless">
+                            <tr><th>Vị trí</th><td>{{ device.location|default:"Chưa cập nhật" }}</td></tr>
+                            <tr><th>Trạng thái</th><td><span class="badge bg-{{ 'success' if device.status == 'online' else 'danger' }}">{{ device.status }}</span></td></tr>
+                            <tr><th>Bluetooth</th><td>{{ device.bluetooth_enabled|yesno:"Có,Không" }}</td></tr>
+                            <tr><th>Wifi</th><td>{{ device.wifi_enabled|yesno:"Có,Không" }}</td></tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
         </div>
-        <table class="table table-hover table-striped">
-            <thead class="table-light">
-                <tr>
-                    <th>Tên</th>
-                    <th>Mã thiết bị</th>
-                    <th>Trạng thái</th>
-                    <th>Hành động</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for d in device_list %}
-                <tr>
-                    <td>{{ d.name }}</td>
-                    <td><code>{{ d.device_code }}</code></td>
-                    <td>
-                        <span class="badge bg-{{ 'success' if d.status == 'online' else 'danger' }}">{{ d.status }}</span>
-                    </td>
-                    <td>
-                        <a href="{% url 'smartlock:device-detail' d.id %}" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-eye"></i> Xem</a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
     </div>
 </body>
 </html>
