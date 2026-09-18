@@ -1,5 +1,5 @@
-{% extends 'account/base/dashboard.html' %}
 {% load static %}
+{% extends 'account/base/dashboard.html' %}
 {% block content %}
 <div class="container">
     <div class="card shadow">
@@ -10,7 +10,7 @@
         <div class="card-body">
             <p><strong>Mã thiết bị:</strong> {{ device.device_code }}</p>
             <p><strong>Pin:</strong> {{ device.battery_level }}%</p>
-            <p><strong>Vị trí:</strong> {{ device.location|default:"Chưa cập nhật" }}</p>
+            <p><strong>Vị trí:</strong> {{ device.location or "Chưa cập nhật" }}</p>
         </div>
     </div>
 </div>

@@ -1,21 +1,45 @@
 # smartlock/email_templates.py
+import logging
+
+from django.template import TemplateDoesNotExist
 from django.template.loader import render_to_string
-from django.utils.html import strip_tags
-import os
+from django.utils.html import linebreaks, strip_tags, urlize
 
-def render_email(template_name: str, context: dict) -> tuple[str, str]:
-    """Trả về (subject, html_content, plain_text)"""
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    template_path = os.path.join(base_dir, "templates", "emails", template_name)
 
+logger = logging.getLogger('smartlock.email')
+
+
+class _SafeDict(dict):
+    def __missing__(self, key):
+        return ''
+
+
+def render_email(template_name: str, context: dict) -> tuple[str, str, str]:
+    """Trả về (subject, html_content, plain_text).
+
+    Ưu tiên file templates/emails/<template_name>; nếu chưa có thì dùng body
+    trong EMAIL_TEMPLATES bên dưới.
+    """
+    conf = EMAIL_TEMPLATES.get(template_name, {})
+    subject = conf.get('subject') or template_name.replace('.html', '').replace('_', ' ').title()
+
+    logger.info("render_email: template=%s context_keys=%s", template_name, sorted(context.keys()))
     try:
-        html_content = render_to_string(template_path, context)
+        html_content = render_to_string(f'emails/{template_name}', context)
         plain_text = strip_tags(html_content)
+        logger.info("render_email: dùng file templates/emails/%s", template_name)
+    except TemplateDoesNotExist as e:
+        logger.warning("render_email: không thấy file emails/%s (%s) -> dùng EMAIL_TEMPLATES", template_name, e)
+        plain_text = conf.get('body', '').format_map(_SafeDict(context))
+        html_content = linebreaks(urlize(plain_text, autoescape=True))
     except Exception:
-        html_content = "<h1>Email không tồn tại</h1>"
-        plain_text = "Email không tồn tại"
+        logger.exception("render_email: lỗi khi render emails/%s -> dùng EMAIL_TEMPLATES", template_name)
+        plain_text = conf.get('body', '').format_map(_SafeDict(context))
+        html_content = linebreaks(urlize(plain_text, autoescape=True))
 
-    subject = template_name.replace(".html", "").replace("_", " ").title()
+    if not plain_text.strip():
+        logger.error("render_email: nội dung rỗng cho %s (template không có trong EMAIL_TEMPLATES?)", template_name)
+
     return subject, html_content, plain_text
 
 
