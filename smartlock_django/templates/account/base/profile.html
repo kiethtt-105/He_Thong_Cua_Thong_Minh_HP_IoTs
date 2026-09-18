@@ -2,11 +2,11 @@
 {% extends 'account/base/dashboard.html' %}
 {% block content %}
 <div class="container">
-    <div class="row">
-        <div class="col-md-8 mx-auto">
-            <div class="card shadow">
+    <h4 class="mb-4">Thông tin cá nhân</h4>
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card shadow border-0">
                 <div class="card-body">
-                    <h4>Thông tin cá nhân</h4>
                     <table class="table table-borderless">
                         <tr><td><strong>Email</strong></td><td>{{ user.email }}</td></tr>
                         <tr><td><strong>Tên đăng nhập</strong></td><td>{{ user.username }}</td></tr>
