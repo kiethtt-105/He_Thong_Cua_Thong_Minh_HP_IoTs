@@ -12,18 +12,14 @@ def render_email(template_name: str, context: dict) -> tuple[str, str]:
         html_content = render_to_string(template_path, context)
         plain_text = strip_tags(html_content)
     except Exception:
-        # Fallback nếu template không tồn tại
         html_content = "<h1>Email không tồn tại</h1>"
         plain_text = "Email không tồn tại"
 
-    # Tự động lấy subject từ filename (chuyển .html -> Subject)
     subject = template_name.replace(".html", "").replace("_", " ").title()
-
     return subject, html_content, plain_text
 
 
 # ==================== CÁC TEMPLATE EMAIL ====================
-
 EMAIL_TEMPLATES = {
     "user_verification.html": {
         "purpose": "EMAIL_VERIFY",

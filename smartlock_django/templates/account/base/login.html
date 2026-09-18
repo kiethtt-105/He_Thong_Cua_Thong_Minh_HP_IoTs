@@ -9,36 +9,14 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <style>
         body { background: linear-gradient(135deg, #0d6efd, #6610f2); }
-        .card {
-            border: none;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
-            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-        }
-        .card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 25px 50px rgba(0,0,0,0.25);
-        }
-        .input-group {
-            transition: all 0.3s ease;
-        }
-        .input-group:focus-within {
-            transform: scale(1.02);
-            box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.2);
-        }
-        .btn-primary {
-            transition: all 0.3s ease;
-        }
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(13, 110, 253, 0.3);
-        }
-        .icon-lock {
-            animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
+        .card { border: none; box-shadow: 0 20px 40px rgba(0,0,0,0.15); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .card:hover { transform: translateY(-8px); box-shadow: 0 25px 50px rgba(0,0,0,0.25); }
+        .input-group { transition: all 0.3s ease; }
+        .input-group:focus-within { transform: scale(1.02); box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.2); }
+        .btn-primary { transition: all 0.3s ease; }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(13, 110, 253, 0.3); }
+        .icon-lock { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
     </style>
 </head>
 <body>
@@ -50,13 +28,9 @@
                         <i class="fa-solid fa-lock fa-5x text-primary mb-4 icon-lock"></i>
                         <h2 class="fw-bold mb-2">Smart Lock</h2>
                         <p class="text-muted">Đăng nhập để tiếp tục</p>
-
                         {% if messages %}
-                            {% for message in messages %}
-                                <div class="alert alert-{{ message.tags }}">{{ message }}</div>
-                            {% endfor %}
+                            {% for message in messages %}<div class="alert alert-{{ message.tags }}">{{ message }}</div>{% endfor %}
                         {% endif %}
-
                         <form method="post">
                             {% csrf_token %}
                             <div class="input-group mb-3">
@@ -69,7 +43,6 @@
                             </div>
                             <button type="submit" class="btn btn-primary w-100 py-3">Đăng nhập</button>
                         </form>
-
                         <div class="mt-4">
                             <a href="{% url 'smartlock:register' %}" class="text-decoration-none">Chưa có tài khoản? Đăng ký ngay</a><br>
                             <a href="{% url 'smartlock:password_reset' %}" class="text-decoration-none">Quên mật khẩu?</a>
