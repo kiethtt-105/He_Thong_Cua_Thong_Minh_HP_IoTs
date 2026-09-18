@@ -46,27 +46,32 @@ def _hash_token(token) -> str:
 
 
 # ====================== AUTH ======================
+
 def login_view(request):
     if request.method == 'POST':
-        email = (request.POST.get('email') or '').strip()
+        login_type = request.POST.get('login_type')  # email hoặc username
+        identifier = (request.POST.get('identifier') or '').strip()
         password = request.POST.get('password')
-        user = authenticate(request, username=email, password=password)
+
+        if not identifier or not password:
+            messages.error(request, 'Vui lòng điền đầy đủ thông tin.')
+            return render(request, 'account/base/login.html')
+
+        user = None
+
+        if login_type == 'username':
+            user = authenticate(request, username=identifier, password=password)
+        else:  # email
+            user = authenticate(request, username=identifier, password=password)
+
         if user:
             login(request, user)
             messages.success(request, 'Đăng nhập thành công!')
             return redirect('smartlock:dashboard')
 
-        # authenticate() trả None cho cả user chưa active -> báo rõ hơn
-        try:
-            u = User.objects.get(email__iexact=email)
-            if not u.is_active and u.check_password(password):
-                messages.error(request, 'Tài khoản chưa xác thực email.')
-                return render(request, 'account/base/login.html')
-        except User.DoesNotExist:
-            pass
-        messages.error(request, 'Email hoặc mật khẩu không đúng.')
+        # Nếu không thành công
+        messages.error(request, 'Email hoặc Username hoặc mật khẩu không đúng.')
     return render(request, 'account/base/login.html')
-
 
 def logout_view(request):
     logout(request)

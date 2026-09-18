@@ -24,11 +24,16 @@
                         {% if messages %}
                             {% for message in messages %}<div class="alert alert-{{ message.tags }}">{{ message }}</div>{% endfor %}
                         {% endif %}
+
                         <form method="post">
                             {% csrf_token %}
                             <div class="input-group mb-3">
                                 <span class="input-group-text"><i class="fa-solid fa-envelope"></i></span>
-                                <input type="email" name="email" class="form-control" placeholder="Email" required>
+                                <select name="login_type" class="form-select" required>
+                                    <option value="email">Email</option>
+                                    <option value="username">Username</option>
+                                </select>
+                                <input type="text" name="identifier" class="form-control" placeholder="Email hoặc Username" required>
                             </div>
                             <div class="input-group mb-4">
                                 <span class="input-group-text"><i class="fa-solid fa-lock"></i></span>
@@ -36,6 +41,7 @@
                             </div>
                             <button type="submit" class="btn btn-primary w-100 py-3">Đăng nhập</button>
                         </form>
+
                         <div class="mt-4">
                             <a href="{% url 'smartlock:register' %}" class="text-decoration-none">Chưa có tài khoản? Đăng ký ngay</a><br>
                             <a href="{% url 'smartlock:password_reset' %}" class="text-decoration-none">Quên mật khẩu?</a>
