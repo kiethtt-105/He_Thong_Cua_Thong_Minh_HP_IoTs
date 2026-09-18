@@ -9,16 +9,17 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <style>
         :root { --primary: #0d6efd; }
-        .sidebar { min-height: 100vh; background: #f8f9fa; position: fixed; width: 260px; transition: all 0.3s; }
+        .sidebar { min-height: 100vh; background: #f8f9fa; position: fixed; width: 260px; }
         .main-content { margin-left: 260px; }
-        .card { transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }
-        .card:hover { transform: translateY(-10px); box-shadow: 0 20px 40px rgba(13, 110, 253, 0.25); }
+        .card { border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }
+        .card:hover { transform: translateY(-8px); box-shadow: 0 20px 40px rgba(13, 110, 253, 0.25); }
         .nav-link { transition: all 0.3s ease; }
         .nav-link:hover { background: #e9ecef; transform: translateX(8px); }
     </style>
 </head>
 <body class="bg-light">
     <div class="d-flex">
+        <!-- sidebar giữ nguyên -->
         <div class="sidebar p-3">
             <div class="d-flex align-items-center mb-5">
                 <i class="fa-solid fa-lock fs-2 text-primary"></i>
@@ -40,6 +41,7 @@
                 <a href="{% url 'smartlock:logout' %}" class="btn btn-outline-danger w-100"><i class="fa-solid fa-right-from-bracket me-2"></i> Đăng xuất</a>
             </div>
         </div>
+
         <div class="main-content flex-grow-1 p-4">
             {% if messages %}
                 {% for m in messages %}<div class="alert alert-{{ m.tags }}">{{ m }}</div>{% endfor %}

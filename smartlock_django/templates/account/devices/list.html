@@ -2,20 +2,35 @@
 {% load static %}
 {% block content %}
 <div class="container">
-    <div class="d-flex justify-content-between mb-4">
-        <h4>Danh sách thiết bị</h4>
-        <a href="{% url 'smartlock:device-detail' %}" class="btn btn-primary">Thêm thiết bị mới</a>
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h4 class="mb-0">Danh sách thiết bị</h4>
+        <a href="{% url 'smartlock:device-detail' %}" class="btn btn-primary">
+            <i class="fa-solid fa-plus me-2"></i> Thêm thiết bị mới
+        </a>
     </div>
-    <table class="table table-hover">
-        <thead><tr><th>Tên</th><th>Mã thiết bị</th><th>Trạng thái</th><th>Hành động</th></tr></thead>
+    <table class="table table-hover table-striped">
+        <thead class="table-light">
+            <tr>
+                <th>Tên</th>
+                <th>Mã thiết bị</th>
+                <th>Trạng thái</th>
+                <th>Hành động</th>
+            </tr>
+        </thead>
         <tbody>
             {% for d in device_list %}
             <tr>
                 <td>{{ d.name }}</td>
                 <td><code>{{ d.device_code }}</code></td>
-                <td><span class="badge bg-{{ 'success' if d.status == 'online' else 'danger' }}">{{ d.status }}</span></td>
                 <td>
-                    <a href="{% url 'smartlock:device-detail' d.id %}" class="btn btn-sm btn-outline-primary">Xem</a>
+                    <span class="badge bg-{{ 'success' if d.status == 'online' else 'danger' }}">
+                        {{ d.status }}
+                    </span>
+                </td>
+                <td>
+                    <a href="{% url 'smartlock:device-detail' d.id %}" class="btn btn-sm btn-outline-primary">
+                        <i class="fa-solid fa-eye"></i> Xem
+                    </a>
                 </td>
             </tr>
             {% endfor %}

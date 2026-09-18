@@ -1,16 +1,31 @@
 {% extends 'account/base/dashboard.html' %}
 {% load static %}
 {% block content %}
-<div class="container">
+<div class="container py-4">
     <div class="card shadow">
-        <div class="card-header d-flex justify-content-between">
-            <h5>{{ device.name }}</h5>
-            <span class="badge bg-success">{{ device.status }}</span>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">{{ device.name }}</h5>
+            <span class="badge bg-success fs-6">{{ device.status }}</span>
         </div>
         <div class="card-body">
-            <p><strong>Mã thiết bị:</strong> {{ device.device_code }}</p>
-            <p><strong>Pin:</strong> {{ device.battery_level }}%</p>
-            <p><strong>Vị trí:</strong> {{ device.location|default:"Chưa cập nhật" }}</p>
+            <div class="row g-4">
+                <div class="col-md-6">
+                    <table class="table table-borderless">
+                        <tr><th>Tên thiết bị</th><td>{{ device.name }}</td></tr>
+                        <tr><th>Mã thiết bị</th><td><code>{{ device.device_code }}</code></td></tr>
+                        <tr><th>Mã MAC</th><td>{{ device.mac_address|default:"Chưa có" }}</td></tr>
+                        <tr><th>Pin</th><td>{{ device.battery_level }}%</td></tr>
+                    </table>
+                </div>
+                <div class="col-md-6">
+                    <table class="table table-borderless">
+                        <tr><th>Vị trí</th><td>{{ device.location|default:"Chưa cập nhật" }}</td></tr>
+                        <tr><th>Trạng thái</th><td><span class="badge bg-{{ 'success' if device.status == 'online' else 'danger' }}">{{ device.status }}</span></td></tr>
+                        <tr><th>Bluetooth</th><td>{{ device.bluetooth_enabled|yesno:"Có,Không" }}</td></tr>
+                        <tr><th>Wifi</th><td>{{ device.wifi_enabled|yesno:"Có,Không" }}</td></tr>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 </div>

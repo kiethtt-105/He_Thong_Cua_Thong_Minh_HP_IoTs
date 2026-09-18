@@ -2,15 +2,27 @@
 {% load static %}
 {% block content %}
 <div class="container">
-    <h4>Thẻ NFC của tôi</h4>
-    <table class="table">
-        <thead><tr><th>Tên thẻ</th><th>UID</th><th>Trạng thái</th></tr></thead>
+    <h4 class="mb-4">Thẻ NFC của tôi</h4>
+    <table class="table table-hover table-striped">
+        <thead class="table-light">
+            <tr>
+                <th>Tên thẻ</th>
+                <th>UID</th>
+                <th>Trạng thái</th>
+            </tr>
+        </thead>
         <tbody>
             {% for card in access_cards %}
             <tr>
-                <td>{{ card.name }}</td>
+                <td>{{ card.name|default:"Chưa đặt tên" }}</td>
                 <td><code>{{ card.card_uid_hash|slice:":8" }}...</code></td>
-                <td>{% if card.is_active %}Đang hoạt động{% else %}Vô hiệu hóa{% endif %}</td>
+                <td>
+                    {% if card.is_active %}
+                        <span class="badge bg-success">Đang hoạt động</span>
+                    {% else %}
+                        <span class="badge bg-secondary">Vô hiệu hóa</span>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>

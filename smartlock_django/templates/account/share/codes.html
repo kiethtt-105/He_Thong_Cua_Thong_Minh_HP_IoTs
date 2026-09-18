@@ -2,8 +2,12 @@
 {% load static %}
 {% block content %}
 <div class="container">
-    <h4>Mã chia sẻ khóa</h4>
-    <button class="btn btn-success">Tạo mã mới</button>
-    <p class="text-muted">Bảng mã chia sẻ sẽ được thêm sau.</p>
+    <h4 class="mb-4">Mã chia sẻ khóa</h4>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <button class="btn btn-success">
+            <i class="fa-solid fa-plus me-2"></i> Tạo mã mới
+        </button>
+        <p class="text-muted mb-0">Bảng mã chia sẻ sẽ được thêm sau.</p>
+    </div>
 </div>
 {% endblock %}
