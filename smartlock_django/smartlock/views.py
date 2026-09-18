@@ -95,15 +95,16 @@ def register(request):
         user.full_name = full_name
         user.save()
 
+        # Tạo token hết hạn 30 phút
         token = uuid.uuid4()
         EmailVerificationToken.objects.create(
             user=user,
             purpose='EMAIL_VERIFY',
             token_hash=_hash_token(token),
-            expires_at=timezone.now() + timedelta(minutes=VERIFY_EXPIRY_MINUTES),
+            expires_at=timezone.now() + timedelta(minutes=30),
         )
 
-        logger.info("register: tạo user %s, token hết hạn sau %s phút", email, VERIFY_EXPIRY_MINUTES)
+        logger.info("register: tạo user %s, token hết hạn sau %s phút", email, 30)
         verification_link = request.build_absolute_uri(
             reverse('smartlock:verify_email', args=[token])
         )
@@ -111,13 +112,14 @@ def register(request):
             'full_name': full_name or username,
             'username': username,
             'verification_link': verification_link,
-            'expiry_minutes': VERIFY_EXPIRY_MINUTES,
+            'expiry_minutes': 30,
         }
         subject, html, plain = render_email('user_verification.html', context)
         _send_mail(subject, plain, html, email)
 
         return render(request, 'account/base/verify_email.html', {'email': email})
     return render(request, 'account/base/register.html')
+
 
 
 def verify_email(request, token):
@@ -143,24 +145,38 @@ def verify_email(request, token):
     return redirect('smartlock:login')
 
 
+
 def password_reset_request(request):
     if request.method == 'POST':
         email = (request.POST.get('email') or '').strip()
         user = User.objects.filter(email__iexact=email, is_active=True).first()
+        
         if user:
-            uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
-            token = default_token_generator.make_token(user)
-            reset_link = request.build_absolute_uri(
-                reverse('smartlock:reset_password_confirm', args=[uid, token])
+            # Tạo token hết hạn 30 phút
+            token = uuid.uuid4()
+            EmailVerificationToken.objects.create(
+                user=user,
+                purpose='PASSWORD_RESET',
+                token_hash=_hash_token(token),
+                expires_at=timezone.now() + timedelta(minutes=30),
             )
+            
+            reset_link = request.build_absolute_uri(
+                reverse('smartlock:reset_password_confirm', args=[
+                    force_str(urlsafe_base64_encode(force_bytes(str(user.pk)))),
+                    default_token_generator.make_token(user)
+                ])
+            )
+            
             context = {
                 'full_name': user.full_name or user.username,
-                'password_reset_link': reset_link,
+                'reset_link': reset_link,
                 'expiry_minutes': 30,
             }
             subject, html, plain = render_email('password_reset.html', context)
             _send_mail(subject, plain, html, user.email)
-        # Luôn báo giống nhau để không lộ email nào tồn tại
+        
+        # Luôn thông báo giống nhau (không lộ email nào tồn tại)
         messages.success(request, 'Nếu email tồn tại, link đặt lại mật khẩu đã được gửi.')
     return render(request, 'account/base/reset_password.html')
 
@@ -168,24 +184,27 @@ def password_reset_request(request):
 def reset_password(request, uidb64, token):
     try:
         user = User.objects.get(pk=force_str(urlsafe_base64_decode(uidb64)))
-    except (User.DoesNotExist, ValueError, TypeError, OverflowError, ValidationError):
+    except Exception:
         user = None
 
     if user is None or not default_token_generator.check_token(user, token):
         messages.error(request, 'Link đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.')
-        return redirect('smartlock:password_reset')
+        return render(request, 'account/base/reset_password.html', {'validlink': False})
 
     if request.method == 'POST':
         p1 = request.POST.get('new_password1')
         p2 = request.POST.get('new_password2')
-        if not p1 or p1 != p2:
-            messages.error(request, 'Mật khẩu không khớp.')
-            return render(request, 'account/base/reset_password.html', {'validlink': True})
-        user.set_password(p1)
-        user.save()
-        messages.success(request, 'Mật khẩu đã được thay đổi thành công!')
-        return redirect('smartlock:login')
+        if p1 and p1 == p2:
+            user.set_password(p1)
+            user.save()
+            messages.success(request, 'Mật khẩu đã được thay đổi thành công!')
+            return redirect('smartlock:login')
+        messages.error(request, 'Mật khẩu không khớp.')
+        return render(request, 'account/base/reset_password.html', {'validlink': True})
+    
     return render(request, 'account/base/reset_password.html', {'validlink': True})
+
+
 
 
 # ====================== DASHBOARD ======================
