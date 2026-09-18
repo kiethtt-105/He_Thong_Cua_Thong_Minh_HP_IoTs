@@ -1,0 +1,22 @@
+{% load static %}
+{% extends 'account/base/dashboard.html' %}
+{% block content %}
+<div class="container">
+    <div class="row">
+        <div class="col-md-8 mx-auto">
+            <div class="card shadow">
+                <div class="card-body">
+                    <h4>Thông tin cá nhân</h4>
+                    <table class="table table-borderless">
+                        <tr><td><strong>Email</strong></td><td>{{ user.email }}</td></tr>
+                        <tr><td><strong>Tên đăng nhập</strong></td><td>{{ user.username }}</td></tr>
+                        <tr><td><strong>Họ tên</strong></td><td>{{ user.full_name or "Chưa cập nhật" }}</td></tr>
+                        <tr><td><strong>Số điện thoại</strong></td><td>{{ user.phone or "Chưa có" }}</td></tr>
+                    </table>
+                    <a href="{% url 'smartlock:password_reset' %}" class="btn btn-outline-primary">Đổi mật khẩu</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

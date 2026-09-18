@@ -1,0 +1,25 @@
+{% load static %}
+{% extends 'account/base/dashboard.html' %}
+{% block content %}
+<div class="container">
+    <h4>Thông báo của bạn</h4>
+    {% if notifications %}
+        <div class="list-group">
+            {% for n in notifications %}
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>{{ n.title }}</strong>
+                        <p class="mb-0">{{ n.message }}</p>
+                        <small class="text-muted">{{ n.created_at|date:"d/m/Y H:i" }}</small>
+                    </div>
+                    {% if not n.is_read %}
+                        <span class="badge bg-primary">Chưa đọc</span>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="text-muted">Chưa có thông báo nào.</p>
+    {% endif %}
+</div>
+{% endblock %}

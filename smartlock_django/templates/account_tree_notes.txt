@@ -1,0 +1,56 @@
+================================================================================
+                    CÂY THƯ MỤC TEMPLATES ACCOUNT 
+================================================================================
+
+.. \Khoa_Cua_Thong_Minh\backend\templates\account\
+
+├───base\
+│   ├───dashboard.html          ← Dashboard tổng quan, thống kê thiết bị của user
+│   ├───login.html              ← Trang đăng nhập người dùng
+│   ├───register.html           ← Trang đăng ký tài khoản user
+│   ├───verify_email.html       ← Xác thực email sau khi đăng ký
+│   ├───reset_password.html     ← Trang đặt lại mật khẩu
+│   ├───profile.html            ← Xem & chỉnh thông tin cá nhân (tên, avatar, phone)
+│   └───notifications.html      ← Xem tất cả thông báo của user
+├───devices\
+│   ├───list.html               ← Xem danh sách tất cả thiết bị của user
+│   └───detail.html             ← Chi tiết 1 thiết bị + trạng thái + lịch sử
+├───nfc\
+│   ├───tags.html               ← Quản lý thẻ NFC của user (danh sách thẻ)
+│   └───reader.html             ← Xem & quản lý NFC Reader
+├───permissions\
+│   └───manage.html             ← Quản lý quyền truy cập thiết bị
+├───share\
+│   ├───codes.html              ← Xem danh sách mã chia sẻ 6 số
+│   └───request.html            ← Tạo yêu cầu chia sẻ thiết bị
+├───support\
+│   ├───requests.html           ← Xem tất cả yêu cầu hỗ trợ của user
+│   └───request_detail.html     ← Chi tiết 1 yêu cầu hỗ trợ
+├───audit\
+│   └───logs.html               ← Xem nhật ký hành động của user
+└───settings\
+    └───system.html             ← Xem & chỉnh SystemSettings (các setting hệ thống)
+
+================================================================================
+                    TỔNG HỢP NGHIỆP VỤ USER
+================================================================================
+
+1. base\dashboard.html         - Dashboard tổng quan + thống kê
+2. base\login.html             - Đăng nhập
+3. base\register.html          - Đăng ký
+4. base\verify_email.html      - Xác thực email
+5. base\reset_password.html    - Đặt lại mật khẩu
+6. base\profile.html           - Thông tin cá nhân
+7. base\notifications.html     - Thông báo
+8. devices\list.html           - Danh sách thiết bị
+9. devices\detail.html         - Chi tiết thiết bị
+10. nfc\tags.html              - Quản lý thẻ NFC
+11. nfc\reader.html            - Quản lý NFC Reader
+12. permissions\manage.html    - Quản lý quyền
+13. share\codes.html           - Mã chia sẻ
+14. share\request.html         - Tạo yêu cầu chia sẻ
+15. support\requests.html      - Yêu cầu hỗ trợ
+16. support\request_detail.html - Chi tiết yêu cầu hỗ trợ
+17. audit\logs.html            - Nhật ký hành động
+18. settings\system.html       - Cài đặt hệ thống
+

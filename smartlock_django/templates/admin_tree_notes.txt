@@ -1,0 +1,38 @@
+================================================================================
+                    CÂY THƯ MỤC TEMPLATES ADMIN
+================================================================================
+
+.. \Khoa_Cua_Thong_Minh\backend\templates\admin\
+
+├───base\
+│   ├───dashboard.html          ← Dashboard admin tổng quan (thống kê user, device, support)
+│   ├───users.html              ← Quản lý danh sách user (tìm kiếm, lọc, xóa)
+│   ├───devices.html            ← Quản lý tất cả thiết bị (danh sách, trạng thái, OTA)
+│   ├───support.html            ← Quản lý SupportRequest (xem, phê duyệt, từ chối)
+│   └───login.html              ← Trang đăng nhập admin
+├───users\
+│   └───list.html               ← Danh sách tất cả user + chức năng quản lý
+├───devices\
+│   └───list.html               ← Danh sách tất cả device + chức năng admin
+├───support\
+│   └───requests.html           ← Danh sách SupportRequest của admin
+├───audit\
+│   └───logs.html               ← Xem AuditLog của toàn hệ thống
+└───settings\
+    └───system.html             ← Xem & chỉnh SystemSettings
+
+================================================================================
+                    TỔNG HỢP NGHIỆP VỤ ADMIN
+================================================================================
+
+1. base\dashboard.html      - Dashboard admin tổng quan
+2. base\users.html          - Quản lý user
+3. base\devices.html        - Quản lý device
+4. base\support.html        - Quản lý support request
+5. base\login.html          - Đăng nhập admin
+6. users\list.html          - Danh sách user
+7. devices\list.html        - Danh sách device
+8. support\requests.html    - Danh sách support request
+9. audit\logs.html          - Audit log
+10. settings\system.html    - Cài đặt hệ thống
+

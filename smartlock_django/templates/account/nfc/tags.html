@@ -1,0 +1,19 @@
+{% load static %}
+{% extends 'account/base/dashboard.html' %}
+{% block content %}
+<div class="container">
+    <h4>Thẻ NFC của tôi</h4>
+    <table class="table">
+        <thead><tr><th>Tên thẻ</th><th>UID</th><th>Trạng thái</th></tr></thead>
+        <tbody>
+            {% for card in access_cards %}
+            <tr>
+                <td>{{ card.name }}</td>
+                <td><code>{{ card.card_uid_hash|slice:":8" }}...</code></td>
+                <td>{% if card.is_active %}Đang hoạt động{% else %}Vô hiệu hóa{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
