@@ -32,6 +32,8 @@ ALLOWED_HOSTS = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost,1
 if DEBUG and not ALLOWED_HOSTS:
     ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]
 
+if not DEBUG:
+    ALLOWED_HOSTS = ["*.vercel.app", "127.0.0.1", "localhost"]
 
 #==================== APPLICATION CONFIGURATION ====================
 INSTALLED_APPS = [
@@ -41,6 +43,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django_otp',
+    'django_otp.plugins.otp_totp',   
+    'django_otp.plugins.otp_static',  
     'smartlock',
     'rest_framework',
     'allauth',
@@ -58,8 +63,8 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
+    'django_otp.middleware.OTPMiddleware',           
 ]
-
 
 #==================== URL CONFIGURATION ====================
 ROOT_URLCONF = 'smartlock_django.urls'

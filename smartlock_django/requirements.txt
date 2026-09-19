@@ -21,6 +21,7 @@ django-environ==0.14.0
 django-supabase-auth==0.0.1.1
 djangorestframework==3.18.1
 djangorestframework_simplejwt==5.5.1
+django-otp==1.7.3
 fastapi==0.141.1
 gunicorn==26.2.0
 h11==0.16.0
