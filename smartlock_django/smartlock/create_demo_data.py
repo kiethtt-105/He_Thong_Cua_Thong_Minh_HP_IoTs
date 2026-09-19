@@ -4,13 +4,14 @@ from django.db import transaction
 from django.utils import timezone
 import uuid
 import secrets
+from datetime import timedelta
 from cryptography.fernet import Fernet
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'smartlock.settings')
-from smartlock.s
-from django import setup
-setup()
-
+# ====================== KHỞI TẠO DJANGO ĐÚNG CÁCH ======================
+# Chỉ cần chạy từ thư mục smartlock/ thì dùng đường dẫn này
+django_dir = os.path.dirname(os.path.abspath(__file__))
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "smartlock.settings")
+django.setup()
 
 from smartlock.models import (
     User, Device, AccessCard, CardDeviceAccess, NfcReader, NfcReaderConfig,
@@ -19,7 +20,7 @@ from smartlock.models import (
 )
 from smartlock.views import _hash_token
 
-# ====================== CONFIG ======================
+# ====================== KEY FERNET ======================
 FERNET_KEY = os.environ.get("FERNET_KEY")
 if not FERNET_KEY:
     raise RuntimeError("FERNET_KEY không tồn tại trong .env")
@@ -29,7 +30,7 @@ fernet = Fernet(FERNET_KEY.encode())
 def create_demo_data():
     print("🚀 Đang tạo data mẫu demo...")
 
-    # 1. System Settings (không ai can thiệp được)
+    # 1. System Settings
     SystemSettings.objects.update_or_create(pk=1, defaults={
         'registration_enabled': True,
         'verification_token_expiry_minutes': 30,
@@ -41,7 +42,7 @@ def create_demo_data():
     })
     print("✅ SystemSettings")
 
-    # 2. Tạo Permissions (rất quan trọng - hệ thống dùng)
+    # 2. Tạo Permissions
     default_perms = [
         ('UNLOCK', 'Mở khóa', 'Mở khóa từ xa', False),
         ('LOCK', 'Khóa', 'Khóa từ xa', False),
@@ -54,14 +55,14 @@ def create_demo_data():
         Permission.objects.get_or_create(code=code, defaults={'name': name, 'description': desc, 'is_sensitive': sensitive})
     print("✅ Permissions")
 
-    # 3. Tạo 2 User (chủ + người dùng chung)
+    # 3. Tạo 2 User
     owner = User.objects.create_user(email="owner@smartlock.com", username="owner", password="Demo123@",
                                      full_name="Chủ Smart Lock", is_admin=True, is_active=True, email_verified=True)
     demo_user = User.objects.create_user(email="demo@smartlock.com", username="demo_user", password="Demo123@",
                                          full_name="Người dùng demo", is_active=True, email_verified=True)
     print("✅ Users")
 
-    # 4. Tạo thiết bị mẫu (khóa)
+    # 4. Tạo thiết bị mẫu
     device = Device.objects.create(
         device_code="SMARTLOCK-001",
         provisioning_secret_hash=_hash_token("secret1234567890"),
@@ -77,7 +78,7 @@ def create_demo_data():
     )
     print("✅ Device")
 
-    # 5. Tạo thẻ NFC mẫu
+    # 5. Tạo thẻ NFC
     card = AccessCard.objects.create(
         card_uid_hash=_hash_token("abc123456789abcdef"),
         user=demo_user,
@@ -87,7 +88,7 @@ def create_demo_data():
     CardDeviceAccess.objects.create(access_card=card, device=device)
     print("✅ AccessCard + CardDeviceAccess")
 
-    # 6. Ghi dữ liệu thiết bị (giống cách views ghi)
+    # 6. Ghi dữ liệu thiết bị
     DeviceStatusLog.objects.create(
         device=device,
         battery_level=92,
@@ -103,7 +104,7 @@ def create_demo_data():
     NfcReaderConfig.objects.create(reader=reader, auto_register=True, grant_permission=["UNLOCK", "LOCK"])
     print("✅ NfcReader + NfcReaderConfig")
 
-    # 8. Tạo mã chia sẻ (chỉ chủ được tạo - user chỉ được nhận)
+    # 8. Tạo mã chia sẻ (chỉ chủ được tạo)
     share_code = ShareAccessCode.objects.create(
         device=device,
         created_by=owner,
@@ -141,8 +142,8 @@ def create_demo_data():
     print("\n🎉 DATA MẪU ĐÃ TẠO HOÀN TẤT!")
     print("   Chủ: owner@smartlock.com | Mật khẩu: Demo123@")
     print("   Người dùng: demo@smartlock.com | Mật khẩu: Demo123@")
-    print("   Thiết bị: SMARTLOCK-001 (cửa phòng khách)")
-    print("   Thẻ NFC: abc123456789abcdef (gán vào thiết bị)")
+    print("   Thiết bị: SMARTLOCK-001")
+    print("   Thẻ NFC: abc123456789abcdef")
     print("   Mã chia sẻ: [sẽ chạy được khi test]")
 
 if __name__ == "__main__":
