@@ -1,44 +1,42 @@
-{% load static %}
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Danh sách thiết bị</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
-    <style>.card { border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }</style>
-</head>
-<body class="bg-light">
-    <div class="container">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h4 class="mb-0">Danh sách thiết bị</h4>
-            <a href="{% url 'smartlock:device-detail' %}" class="btn btn-primary"><i class="fa-solid fa-plus me-2"></i> Thêm thiết bị mới</a>
+{% extends 'account/base/layout.html' %}
+{% block title %}Thiết bị{% endblock %}
+{% block page_title %}Danh sách thiết bị{% endblock %}
+{% block page_actions %}
+<button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addDevice"><i class="fa-solid fa-plus me-2"></i>Thêm thiết bị</button>
+{% endblock %}
+
+{% block content %}
+<div class="card"><div class="table-responsive">
+    <table class="table table-hover mb-0">
+        <thead><tr><th>Tên</th><th>Mã thiết bị</th><th>Vai trò</th><th>Trạng thái</th><th>Pin</th><th class="text-end">Hành động</th></tr></thead>
+        <tbody>
+            {% for d in device_list %}
+            <tr>
+                <td class="fw-semibold">{{ d.name }}<div class="small text-muted fw-normal">{{ d.location|default:"" }}</div></td>
+                <td><code>{{ d.device_code }}</code></td>
+                <td>{% if d.owner_id == user.id %}<span class="badge bg-primary">Chủ sở hữu</span>{% else %}<span class="badge bg-info text-dark">Được chia sẻ</span>{% endif %}</td>
+                <td><span class="badge {% if d.status == 'online' %}bg-success{% elif d.status == 'maintenance' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ d.status|title }}</span></td>
+                <td>{{ d.battery_level }}%</td>
+                <td class="text-end"><a href="{% url 'smartlock:device-detail' d.id %}" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-eye me-1"></i>Xem</a></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-center text-muted py-5">Bạn chưa có thiết bị nào. Bấm “Thêm thiết bị” để bắt đầu.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div></div>
+
+<div class="modal fade" id="addDevice" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+    <form method="post" action="{% url 'smartlock:device-add' %}">
+        {% csrf_token %}
+        <div class="modal-header"><h5 class="modal-title">Thêm thiết bị mới</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <p class="text-muted small">Nhập mã thiết bị và mã bí mật in trên hộp/thiết bị.</p>
+            <div class="mb-3"><label class="form-label">Mã thiết bị</label><input type="text" name="device_code" class="form-control" required></div>
+            <div class="mb-3"><label class="form-label">Mã bí mật</label><input type="password" name="secret" class="form-control" required autocomplete="off"></div>
+            <div class="mb-1"><label class="form-label">Tên hiển thị (không bắt buộc)</label><input type="text" name="name" class="form-control" maxlength="100"></div>
         </div>
-        <table class="table table-hover table-striped">
-            <thead class="table-light">
-                <tr>
-                    <th>Tên</th>
-                    <th>Mã thiết bị</th>
-                    <th>Trạng thái</th>
-                    <th>Hành động</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for d in device_list %}
-                <tr>
-                    <td>{{ d.name }}</td>
-                    <td><code>{{ d.device_code }}</code></td>
-                    <td>
-                        <span class="badge bg-{{ 'success' if d.status == 'online' else 'danger' }}">{{ d.status }}</span>
-                    </td>
-                    <td>
-                        <a href="{% url 'smartlock:device-detail' d.id %}" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-eye"></i> Xem</a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</body>
-</html>
+        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button><button class="btn btn-primary">Thêm thiết bị</button></div>
+    </form>
+</div></div></div>
+{% endblock %}
