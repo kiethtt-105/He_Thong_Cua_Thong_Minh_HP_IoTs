@@ -324,6 +324,13 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        // ==================== THAM SỐ TỪ PYTHON ====================
+        let currentDeviceId = {{ current_device.id|default:0 }};
+        let currentDeviceName = '{{ current_device.name|default:"thiết bị" }}';
+        let currentDeviceStatus = '{{ current_device.status|default:"offline" }}';
+
+        let isOnline = currentDeviceStatus === 'online';
+
         let activityChart;
 
         function syncData() {
@@ -340,27 +347,27 @@
         }
 
         function performLock() {
-            if (!{{ current_device.id|default:0 }} || !{{ current_device.status == 'online'|default:False }}) {
+            if (!currentDeviceId || !isOnline) {
                 alert("⚠️ Thiết bị không online hoặc chưa chọn.");
                 return;
             }
             if (confirm("Bạn có chắc chắn muốn khóa thiết bị?")) {
-                alert("🔒 Đã gửi lệnh Khóa đến thiết bị " + {{ current_device.name|default:"thiết bị" }});
+                alert("🔒 Đã gửi lệnh Khóa đến thiết bị " + currentDeviceName);
             }
         }
 
         function performUnlock() {
-            if (!{{ current_device.id|default:0 }} || !{{ current_device.status == 'online'|default:False }}) {
+            if (!currentDeviceId || !isOnline) {
                 alert("⚠️ Thiết bị không online hoặc chưa chọn.");
                 return;
             }
             if (confirm("Bạn có chắc chắn muốn mở khóa thiết bị?")) {
-                alert("🔓 Đã gửi lệnh Mở khóa đến thiết bị " + {{ current_device.name|default:"thiết bị" }});
+                alert("🔓 Đã gửi lệnh Mở khóa đến thiết bị " + currentDeviceName);
             }
         }
 
         function checkOTA() {
-            alert("🔄 Kiểm tra cập nhật OTA cho thiết bị " + {{ current_device.name|default:"thiết bị" }} + "...\n\nPhiên bản hiện tại: {{ current_device.firmware_version|default:'v1.0.0' }}\nPhiên bản mới: v2.1.5");
+            alert("🔄 Kiểm tra cập nhật OTA cho thiết bị " + currentDeviceName + "...\n\nPhiên bản hiện tại: {{ current_device.firmware_version|default:'v1.0.0' }}\nPhiên bản mới: v2.1.5");
         }
 
         // Chart.js - Tương tác mạnh
