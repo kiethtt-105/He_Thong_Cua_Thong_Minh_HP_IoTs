@@ -154,23 +154,35 @@ CSRF_TRUSTED_ORIGINS = [
 EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", 10))
 
 
-#==================== LOGGING CONFIGURATION ====================
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {'format': '[{asctime}] {levelname} {name}: {message}', 'style': '{'},
-    },
-    'handlers': {
-        'console': {'class': 'logging.StreamHandler', 'formatter': 'verbose'},
-        'file': {
-            'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'smartlock.log',
-            'formatter': 'verbose',
-            'encoding': 'utf-8',
+    "version": 1,
+    "disable_existing_loggers": False,
+
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {name} {message}",
+            "style": "{",
         },
     },
-    'loggers': {
-        'smartlock': {'handlers': ['console', 'file'], 'level': 'DEBUG', 'propagate': False},
+
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+
+        "smartlock": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
