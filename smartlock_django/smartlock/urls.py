@@ -1,12 +1,25 @@
-# smartlock/urls.py
 from django.urls import path
 from . import views
 
 app_name = 'smartlock'
 
 urlpatterns = [
+    # ====================== ADMIN-SYS (Admin riêng) ======================
+    path('admin-sys/login/', views.admin_login, name='admin-sys-login'),
+    path('admin-sys/logout/', views.admin_logout, name='admin-sys-logout'),
+    path('admin-sys/dashboard/', views.admin_dashboard, name='admin-sys-dashboard'),
+    path('admin-sys/users/', views.admin_users_list, name='admin-sys-users-list'),
+    path('admin-sys/users/<uuid:user_id>/', views.admin_user_detail, name='admin-sys-user-detail'),
+    path('admin-sys/devices/', views.admin_devices_list, name='admin-sys-devices-list'),
+    path('admin-sys/devices/<uuid:device_id>/', views.admin_device_detail, name='admin-sys-device-detail'),
+    path('admin-sys/support/', views.admin_support_requests, name='admin-sys-support-requests'),
+    path('admin-sys/support/<uuid:request_id>/', views.admin_support_request_detail, name='admin-sys-support-request-detail'),
+    path('admin-sys/logs/', views.admin_audit_logs, name='admin-sys-audit-logs'),
+    path('admin-sys/settings/', views.admin_settings_system, name='admin-sys-settings-system'),
+
+    # ====================== USER ROUTES (User thường) ======================
     path('', views.dashboard, name='dashboard'),
-    path('login/', views.login_view, name='login'),
+    path('login/', views.login_view, name='login'),                    # User thường
     path('logout/', views.logout_view, name='logout'),
     path('register/', views.register, name='register'),
     path('verify-email/resend/', views.resend_verification, name='resend_verification'),
@@ -18,8 +31,6 @@ urlpatterns = [
     path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
     path('devices/add/', views.device_add, name='device-add'),
     path('devices/<uuid:device_id>/command/', views.device_command, name='device-command'),
-
-
 
     path('nfc/tags/', views.nfc_tags, name='nfc-tags'),
     path('nfc/reader/', views.nfc_reader, name='nfc-reader'),
@@ -35,20 +46,4 @@ urlpatterns = [
     path('notifications/', views.notifications_list, name='notifications'),
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
-
-
-
-    #ADMIN
-
-    path('admin/login/', views.admin_login, name='admin-login'),
-    path('admin/logout/', views.admin_logout, name='admin-logout'),
-    path('admin/dashboard/', views.admin_dashboard, name='admin-dashboard'),
-    path('admin/users/', views.admin_users_list, name='admin-users-list'),
-    path('admin/users/<uuid:user_id>/', views.admin_user_detail, name='admin-user-detail'),
-    path('admin/devices/', views.admin_devices_list, name='admin-devices-list'),
-    path('admin/devices/<uuid:device_id>/', views.admin_device_detail, name='admin-device-detail'),
-    path('admin/support/', views.admin_support_requests, name='admin-support-requests'),
-    path('admin/support/<uuid:request_id>/', views.admin_support_request_detail, name='admin-support-request-detail'),
-    path('admin/logs/', views.admin_audit_logs, name='admin-audit-logs'),
-    path('admin/settings/', views.admin_settings_system, name='admin-settings-system'),
 ]

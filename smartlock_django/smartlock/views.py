@@ -1061,23 +1061,6 @@ def audit_logs(request):
     return render(request, 'account/audit/logs.html', context)
 
 
-# ====================== ADMIN VIEWS ======================
-
-def admin_login(request):
-    if request.user.is_authenticated and request.user.is_superuser:
-        return redirect('admin-sys:admin-dashboard')
-    if request.method == 'POST':
-        identifier = (request.POST.get('identifier') or '').strip()
-        password = request.POST.get('password') or ''
-        user = _find_user(identifier)
-        if user and user.is_superuser and user.check_password(password):
-            login(request, user)
-            _audit(request, 'ADMIN_LOGIN')
-            messages.success(request, 'Đăng nhập Admin thành công!')
-            return redirect('admin-sys:admin-dashboard')
-        messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
-    return render(request, 'admin-sys/base/login.html', {'title': 'Đăng nhập Admin'})
-
 
 @require_POST
 def admin_logout(request):
@@ -1177,3 +1160,33 @@ def admin_settings_system(request):
         messages.success(request, 'Đã lưu cài đặt hệ thống Admin.')
         return redirect('admin-sys:admin-settings-system')
     return render(request, 'admin-sys/base/system.html', {'system_settings': st})
+
+
+
+    # ====================== LOGIN CHUNG (User + Admin) ======================
+
+def check_login_redirect(request):
+    if not request.user.is_authenticated:
+        return redirect('smartlock:login')
+
+    if request.user.is_staff or request.user.is_admin:
+        return redirect('admin-sys:admin-dashboard')  
+
+    return redirect('smartlock:dashboard')
+
+# ====================== ADMIN LOGIN ======================
+
+def admin_login(request):
+    if request.user.is_authenticated and request.user.is_superuser:
+        return redirect('admin-sys:admin-sys-dashboard')
+    if request.method == 'POST':
+        identifier = (request.POST.get('identifier') or '').strip()
+        password = request.POST.get('password') or ''
+        user = _find_user(identifier)
+        if user and user.is_superuser and user.check_password(password):
+            login(request, user)
+            _audit(request, 'ADMIN_LOGIN')
+            messages.success(request, 'Đăng nhập Admin thành công!')
+            return redirect('admin-sys:admin-sys-dashboard')
+        messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
+    return render(request, 'admin-sys/base/login.html')
