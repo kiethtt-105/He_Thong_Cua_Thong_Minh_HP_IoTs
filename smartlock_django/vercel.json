@@ -1,11 +1,11 @@
 {
   "builds": [
     {
-      "src": "smartlock_django/smartlock_django/wsgi.py",
+      "src": "smartlock_django/wsgi.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
-    { "src": "/(.*)", "dest": "smartlock_django/smartlock_django/wsgi.py" }
+    { "src": "/(.*)", "dest": "smartlock_django/wsgi.py" }
   ]
 }
