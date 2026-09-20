@@ -180,7 +180,7 @@ class Device(models.Model):
     provisioning_secret_hash = models.CharField(max_length=255)
     device_mode = models.CharField(max_length=20, default='physical', choices=[('physical', 'Physical'), ('simulated', 'Simulated')])
     owner = models.ForeignKey(User, on_delete=models.RESTRICT, null=True, blank=True)
-    is_purchased = models.BooleanField(default=False)          # <--- THAY ĐỔI MỚI
+    # is_purchased = models.BooleanField(default=False)          # <--- THAY ĐỔI MỚI
     name = models.CharField(max_length=100)
     mac_address = models.CharField(max_length=17, blank=True, null=True)
     firmware_version = models.CharField(max_length=30, blank=True, null=True)

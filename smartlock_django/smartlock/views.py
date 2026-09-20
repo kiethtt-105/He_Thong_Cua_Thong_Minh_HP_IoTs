@@ -30,6 +30,7 @@ from django.utils.http import (
 )
 from django.views.decorators.http import require_POST
 
+from .utils import SmartlockUtils
 from .email_templates import render_email
 from .models import (
     AccessCard, Announcement, AuditLog, CardDeviceAccess, Device, DeviceAccess,
@@ -40,29 +41,21 @@ from .models import (
 
 logger = logging.getLogger('smartlock.views')
 
+# ====================== CONSTANTS ======================
 FROM_EMAIL = 'no-reply@smartlock.com'
-MAX_FAILED_ATTEMPTS = 5          # số lần sai trước khi khóa
-COMMAND_TTL_SECONDS = 120        # lệnh điều khiển hết hạn sau 2 phút
-SHARED_ACCESS_HOURS = 24         # quyền nhận qua mã chia sẻ có hiệu lực 24h
-SUPPORT_TTL_HOURS = 24
-PAGE_SIZE = 20
-ALLOWED_COMMANDS = {'LOCK': 'LOCK', 'UNLOCK': 'UNLOCK', 'REBOOT': None}  # None = chỉ chủ thiết bị
-RECOVERY_ACTIONS = ('RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER')
-DEFAULT_PERMISSIONS = [
-    ('UNLOCK', 'Mở khóa', 'Mở khóa từ xa', False),
-    ('LOCK', 'Khóa', 'Khóa từ xa', False),
-    ('ADD_CARD', 'Thêm thẻ NFC', 'Thêm thẻ NFC mới', True),
-    ('REMOVE_CARD', 'Xóa thẻ NFC', 'Xóa thẻ NFC', True),
-    ('RESET', 'Reset', 'Reset thiết bị', True),
-    ('OTA_UPDATE', 'OTA Update', 'Cập nhật firmware', True),
-]
+MAX_FAILED_ATTEMPTS = SmartlockUtils.MAX_FAILED_ATTEMPTS
+COMMAND_TTL_SECONDS = SmartlockUtils.COMMAND_TTL_SECONDS
+SHARED_ACCESS_HOURS = SmartlockUtils.SHARED_ACCESS_HOURS
+SUPPORT_TTL_HOURS = SmartlockUtils.SUPPORT_TTL_HOURS
+PAGE_SIZE = SmartlockUtils.PAGE_SIZE
+ALLOWED_COMMANDS = SmartlockUtils.ALLOWED_COMMANDS
+RECOVERY_ACTIONS = SmartlockUtils.RECOVERY_ACTIONS
+
+# ====================== AUTH REQUIRED DECORATOR (đưa lên đầu) ======================
 auth_required = login_required(login_url='smartlock:login')
 
-
 # ====================== HELPERS ======================
-
 def _send_mail(subject, plain, html, to):
-    """Gửi mail và ghi log chi tiết (không để lỗi SMTP làm sập view)."""
     logger.info("send_mail: to=%s subject=%r plain_preview=%r", to, subject, plain[:200])
     try:
         n = send_mail(subject, plain, FROM_EMAIL, [to], html_message=html)
@@ -72,28 +65,22 @@ def _send_mail(subject, plain, html, to):
         logger.exception("send_mail: THẤT BẠI -> %s", to)
         return False
 
-
 def _hash_token(token) -> str:
     return hashlib.sha256(str(token).encode()).hexdigest()
-
 
 def _client_ip(request):
     xff = request.META.get('HTTP_X_FORWARDED_FOR')
     ip = xff.split(',')[0].strip() if xff else request.META.get('REMOTE_ADDR')
     return ip or '0.0.0.0'
 
-
 def _user_agent(request):
     return (request.META.get('HTTP_USER_AGENT') or '')[:500]
-
 
 def _settings():
     return SystemSettings.objects.get_or_create(pk=1)[0]
 
-
 def _is_admin(user):
     return bool(user.is_staff or user.is_superuser or user.is_admin)
-
 
 def _parse_uuid(value):
     try:
@@ -101,9 +88,7 @@ def _parse_uuid(value):
     except (ValueError, AttributeError, TypeError):
         return None
 
-
 def _parse_dt(value):
-    """'2026-01-31T14:30' (datetime-local) -> aware datetime, hoặc None."""
     if not value:
         return None
     try:
@@ -111,13 +96,11 @@ def _parse_dt(value):
     except ValueError:
         return None
 
-
 def _find_user(identifier):
     identifier = (identifier or '').strip()
     if not identifier:
         return None
     return User.objects.filter(Q(email__iexact=identifier) | Q(username__iexact=identifier)).first()
-
 
 def _audit(request, action, *, device=None, target_user=None, success=True,
            severity='info', metadata=None, actor='auto', username_attempt=None):
@@ -132,20 +115,16 @@ def _audit(request, action, *, device=None, target_user=None, success=True,
     except Exception:
         logger.exception("audit: không ghi được log %s", action)
 
-
 def _notify(user, title, message, severity='info', device=None, type_='SYSTEM'):
     Notification.objects.create(
         user=user, device=device, type=type_, title=title[:150], message=message, severity=severity,
     )
 
-
 def _ip_blacklisted(ip):
     lines = [l.strip() for l in (_settings().ip_blacklist or '').splitlines()]
     return ip in [l for l in lines if l]
 
-
 def _accessible_devices(user):
-    """Thiết bị user sở hữu + thiết bị được chia sẻ (còn hiệu lực)."""
     now = timezone.now()
     shared_ids = (
         DeviceAccess.objects.filter(user=user, is_active=True, accepted=True, valid_from__lte=now)
@@ -153,7 +132,6 @@ def _accessible_devices(user):
         .values('device_id')
     )
     return Device.objects.filter(Q(owner=user) | Q(id__in=shared_ids))
-
 
 def _has_permission(user, device, code):
     if device.owner_id == user.id:
@@ -166,13 +144,10 @@ def _has_permission(user, device, code):
         ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)).exists()
     )
 
-
 def _pick_device(queryset, raw_id):
-    """Chọn thiết bị theo id (nếu hợp lệ), mặc định thiết bị đầu tiên."""
     dev_id = _parse_uuid(raw_id)
     device = queryset.filter(id=dev_id).first() if dev_id else None
     return device or queryset.first()
-
 
 def _ensure_default_permissions():
     if not Permission.objects.exists():
@@ -181,13 +156,11 @@ def _ensure_default_permissions():
                 code=code, defaults={'name': name, 'description': desc, 'is_sensitive': sensitive},
             )
 
-
 def _redirect_with(url_name, **params):
     url = reverse(url_name)
     if params:
         url += '?' + '&'.join(f'{k}={v}' for k, v in params.items())
     return redirect(url)
-
 
 def _register_failure(user, ip):
     st = _settings()
@@ -207,12 +180,10 @@ def _register_failure(user, ip):
                 severity='critical', type_='LOGIN_LOCKOUT')
     lock.save()
 
-
 def _reset_lockout(user):
     LoginLockout.objects.filter(user=user).update(
         failed_attempts=0, stage=0, locked_until=None,
     )
-
 
 def _send_verification(request, user):
     st = _settings()
@@ -236,13 +207,10 @@ def _send_verification(request, user):
     subject, html, plain = render_email('user_verification.html', context)
     return _send_mail(subject, plain, html, user.email)
 
-
 def _page(request, queryset):
     return Paginator(queryset, PAGE_SIZE).get_page(request.GET.get('page'))
 
-
 # ====================== AUTH ======================
-
 def login_view(request):
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
@@ -294,7 +262,6 @@ def login_view(request):
             return redirect(next_url)
         return redirect('smartlock:dashboard')
 
-    # Thất bại
     if user and not user.is_active and user.check_password(password):
         messages.warning(request, 'Tài khoản chưa được kích hoạt. Vui lòng xác thực email.')
     else:
@@ -425,7 +392,6 @@ def password_reset_request(request):
             subject, html, plain = render_email('password_reset.html', context)
             _send_mail(subject, plain, html, user.email)
             _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user)
-        # Luôn thông báo giống nhau (không lộ email nào tồn tại)
         messages.success(request, 'Nếu email tồn tại, link đặt lại mật khẩu đã được gửi.')
     return render(request, 'account/base/reset_password.html', {'mode': 'request'})
 
@@ -464,7 +430,6 @@ def reset_password(request, uidb64, token):
 
 
 # ====================== DASHBOARD ======================
-
 @auth_required
 def dashboard(request):
     user = request.user
@@ -484,7 +449,6 @@ def dashboard(request):
                 left = (share_code.expires_at - now).total_seconds()
                 share_progress = max(0, min(100, int(left / total * 100)))
 
-    # Biểu đồ hoạt động 7 ngày
     today = timezone.localdate()
     days = [today - timedelta(days=i) for i in range(6, -1, -1)]
     counts = {
@@ -513,41 +477,45 @@ def dashboard(request):
 
 
 # ====================== DEVICES ======================
+@auth_required
+def device_add(request):
+    if request.method == 'POST':
+        name = (request.POST.get('name') or '').strip()
+        if not name:
+            messages.error(request, 'Tên thiết bị không được để trống.')
+            return redirect('smartlock:devices-list')
+
+        # Tạo device code tự động (dễ mở rộng)
+        device_code = f'DEV-{secrets.token_hex(4).upper()}'
+        while Device.objects.filter(device_code=device_code).exists():
+            device_code = f'DEV-{secrets.token_hex(4).upper()}'
+
+        device = Device.objects.create(
+            name=name,
+            device_code=device_code,
+            provisioning_secret_hash=secrets.token_hex(32),
+            status='provisioning',
+            owner=request.user,
+            bluetooth_enabled=True,
+            wifi_enabled=True,
+            nfc_enabled=True,
+            battery_level=100,
+        )
+
+        _audit(request, 'DEVICE_ADDED', device=device, actor=request.user)
+        _notify(request.user, 'Thiết bị mới đã được tạo',
+                f'Dữ liệu thiết bị đã được khởi tạo. Vui lòng cấu hình device code: {device_code}')
+
+        messages.success(request, f'Đã thêm thiết bị "{name}" thành công!')
+        return redirect('smartlock:devices-list')
+
+    return render(request, 'account/devices/add.html')
+
 
 @auth_required
 def devices_list(request):
     devices = _accessible_devices(request.user).order_by('name')
     return render(request, 'account/devices/list.html', {'device_list': devices})
-
-
-@auth_required
-@require_POST
-def device_add(request):
-    """Nhận thiết bị: nhập mã thiết bị + mã bí mật in trên hộp (provisioning secret)."""
-    code = (request.POST.get('device_code') or '').strip()
-    secret = request.POST.get('secret') or ''
-    name = (request.POST.get('name') or '').strip()
-
-    with transaction.atomic():
-        device = (Device.objects.select_for_update()
-                  .filter(device_code=code, owner__isnull=True, status='provisioning').first())
-        valid = bool(device) and hmac.compare_digest(
-            device.provisioning_secret_hash.encode(), _hash_token(secret).encode())
-        if not valid:
-            _audit(request, 'DEVICE_CLAIM_FAILED', success=False, severity='warning',
-                   metadata={'device_code': code})
-            messages.error(request, 'Mã thiết bị hoặc mã bí mật không đúng, hoặc thiết bị đã có chủ.')
-            return redirect('smartlock:devices-list')
-        device.owner = request.user
-        device.is_purchased = True
-        device.status = 'offline'
-        if name:
-            device.name = name[:100]
-        device.save()
-
-    _audit(request, 'DEVICE_CLAIMED', device=device)
-    messages.success(request, f'Đã thêm thiết bị "{device.name}".')
-    return redirect('smartlock:device-detail', device_id=device.id)
 
 
 @auth_required
@@ -619,7 +587,6 @@ def device_command(request, device_id):
 
 
 # ====================== NFC ======================
-
 @auth_required
 def nfc_tags(request):
     if request.method == 'POST':
@@ -652,6 +619,10 @@ def nfc_tags(request):
 def nfc_reader(request):
     devices = Device.objects.filter(owner=request.user).order_by('name')
     device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'))
+
+    if not device or device.owner_id != request.user.id:
+        messages.error(request, 'Không tìm thấy thiết bị hoặc bạn không phải chủ.')
+        return redirect('smartlock:nfc-reader')
 
     if request.method == 'POST' and device:
         action = request.POST.get('action')
@@ -700,7 +671,7 @@ def nfc_reader(request):
                         card_uid_hash=_hash_token(uid), user=request.user, name=name, is_active=True)
                     CardDeviceAccess.objects.create(access_card=card, device=device)
             except IntegrityError:
-                messages.error(request, 'Thẻ này đã được đăng ký.')
+                messages.error(request, 'Thẻ này đã được đăng kỳ.')
                 return back()
             reader = NfcReader.objects.filter(device=device, is_active=True).first()
             NfcLog.objects.create(reader=reader, nfc_tag=card, device=device, user=request.user,
@@ -722,7 +693,6 @@ def nfc_reader(request):
 
 
 # ====================== SHARE & SUPPORT ======================
-
 @auth_required
 def share_codes(request):
     user = request.user
@@ -732,8 +702,9 @@ def share_codes(request):
         action = request.POST.get('action')
         if action == 'create':
             device = owned.filter(id=_parse_uuid(request.POST.get('device_id'))).first()
-            if not device:
+            if not device or device.owner_id != user.id:
                 messages.error(request, 'Vui lòng chọn thiết bị của bạn.')
+                return redirect('smartlock:share-codes')
             else:
                 try:
                     minutes = int(request.POST.get('minutes') or _settings().share_code_expiry_minutes)
@@ -781,12 +752,11 @@ def share_codes(request):
 
 @auth_required
 def share_request(request):
-    """Nhập mã 6 số của người khác để nhận quyền truy cập thiết bị."""
     user = request.user
     if request.method == 'POST':
         plain = re.sub(r'\D', '', request.POST.get('code') or '')
         window = timezone.now() - timedelta(minutes=15)
-        fails = AuditLog.objects.filter(actor_user=user, action='SHARE_CODE_REDEEM_FAILED',
+        fails = AuditLog.objects.filter(actor_user=user, action='SHARE_CODE_REDEEMED',
                                         created_at__gte=window).count()
         if fails >= 5:
             messages.error(request, 'Bạn nhập sai quá nhiều lần. Vui lòng thử lại sau 15 phút.')
@@ -817,8 +787,9 @@ def share_request(request):
             _notify(match.created_by, 'Mã chia sẻ đã được sử dụng',
                     f'{user.username} đã nhận quyền truy cập "{match.device.name}".',
                     device=match.device, type_='SHARE')
-            match.delete()  # mã dùng một lần
+            match.delete()
             messages.success(request, f'Đã nhận quyền truy cập thiết bị "{access.device.name}".')
+            _reset_lockout(user)
         return redirect('smartlock:share-request')
 
     now = timezone.now()
@@ -835,9 +806,8 @@ def support_requests(request):
     if request.method == 'POST':
         device = Device.objects.filter(id=_parse_uuid(request.POST.get('device_id')), owner=user).first()
         action = request.POST.get('action')
-        valid_actions = dict(SupportRequest._meta.get_field('action').choices)
-        if not device or action not in valid_actions:
-            messages.error(request, 'Vui lòng chọn thiết bị và loại yêu cầu hợp lệ.')
+        if not device or device.owner_id != user.id:
+            messages.error(request, 'Không phải thiết bị của bạn.')
             return redirect('smartlock:support-requests')
 
         auth_code = secrets.token_hex(4).upper()
@@ -883,7 +853,6 @@ def support_request_detail(request, request_id):
 
 
 # ====================== PERMISSIONS ======================
-
 @auth_required
 def permissions_manage(request):
     _ensure_default_permissions()
@@ -892,6 +861,9 @@ def permissions_manage(request):
     device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'))
 
     if request.method == 'POST' and device:
+        if device.owner_id != user.id:
+            messages.error(request, 'Chỉ chủ thiết bị mới được cấp quyền.')
+            return redirect('smartlock:permissions-manage', device=device.id)
         action = request.POST.get('action')
         back = lambda: _redirect_with('smartlock:permissions-manage', device=device.id)
         perms = Permission.objects.filter(code__in=request.POST.getlist('permissions'))
@@ -959,7 +931,6 @@ def permissions_manage(request):
 
 
 # ====================== SETTINGS / PROFILE / LOGS ======================
-
 @auth_required
 def settings_system(request):
     if not _is_admin(request.user):
@@ -1008,8 +979,7 @@ def notifications_list(request):
         if action == 'mark_all':
             Notification.objects.filter(user=user, is_read=False).update(is_read=True, read_at=now)
         elif action == 'mark_read':
-            Notification.objects.filter(user=user, id=_parse_uuid(request.POST.get('id'))) \
-                .update(is_read=True, read_at=now)
+            Notification.objects.filter(user=user, id=_parse_uuid(request.POST.get('id'))).update(is_read=True, read_at=now)
         elif action == 'delete_all_read':
             Notification.objects.filter(user=user, is_read=True).delete()
         return redirect(request.META.get('HTTP_REFERER') or 'smartlock:notifications')

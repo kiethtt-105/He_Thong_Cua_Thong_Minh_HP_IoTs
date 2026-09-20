@@ -30,8 +30,8 @@ class SystemSettingsAdmin(admin.ModelAdmin):
 
 @admin.register(Device)
 class DeviceAdmin(admin.ModelAdmin):
-    list_display = ('name', 'owner', 'status', 'is_purchased', 'device_code')
-    list_filter = ('status', 'is_purchased', 'owner')
+    list_display = ('name', 'owner', 'status', 'device_code')
+    list_filter = ('status', 'owner')
     search_fields = ('name', 'device_code')
 
 
