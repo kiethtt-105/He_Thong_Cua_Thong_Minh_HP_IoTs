@@ -150,14 +150,14 @@ def main():
             fail += 1
             if "auth" in str(exc).lower() or "535" in str(exc):
                 print("      Gợi ý: Gmail cần App Password 16 ký tự (bật xác minh 2 bước), không dùng mật khẩu thường.")
-                break  # sai đăng nhập thì các email sau cũng lỗi, dừng luôn
+                break  
         if idx < len(names):
             time.sleep(DELAY_SECONDS)
 
     print("\n" + "-" * 60)
     print(f" Kết quả: {ok} thành công, {fail} thất bại")
     if ok:
-        print(f" Mở hộp thư {to_addr} để xem (nếu không thấy, kiểm tra mục Spam/Quảng cáo).")
+        print(f" Mở hộp thư {to_addr} để xem (Kiểm tra mục Spam).")
     print("-" * 60)
     return 0 if fail == 0 else 1
 

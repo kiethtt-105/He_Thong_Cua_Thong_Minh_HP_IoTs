@@ -1,17 +1,17 @@
 #!/usr/bin/env python
 """
-Công cụ kiểm tra template email Smart Lock.  Đặt cạnh manage.py.
+Kiểm tra template email Smart Lock. 
 
-  python test_email.py                          # render mọi email -> email_previews/, tự mở trình duyệt
-  python test_email.py --list                   # liệt kê các template
-  python test_email.py --only password_reset    # chỉ 1 (hoặc nhiều) template
+  python test_email.py                          # render  email 
+  python test_email.py --list                   # liệt kê template
+  python test_email.py --only password_reset    # chỉ 1 (|| nhiều) template
   python test_email.py --send you@gmail.com     # GỬI THẬT tất cả email đến địa chỉ này
   python test_email.py --send you@gmail.com --only password_reset share_code_notification
   python test_email.py --smtp-check             # chỉ kiểm tra đăng nhập SMTP
   python test_email.py --base-url https://he-thong-cua-thong-minh-hp-iots.vercel.app
 
-Chế độ mặc định KHÔNG gửi mail và KHÔNG cần database.
-"""
+LẤY DƯ LIEU MAIL CONF TỪ .ENV
+  """
 import argparse
 import html as html_lib
 import os
@@ -32,11 +32,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "smartlock_django.settings")
 OK, BAD, WARN = "[OK] ", "[LỖI]", "[!]  "
 
 
-# --------------------------------------------------------------------------
-# Dữ liệu mẫu. Với 2 email đang dùng thật trong views.py, key được giữ ĐÚNG
-# như views.py truyền (ví dụ 'reset_link') để kiểm tra luôn cả việc ánh xạ biến.
-# 'expect' = các giá trị BẮT BUỘC phải xuất hiện trong email.
-# --------------------------------------------------------------------------
+
 def build_samples(base_url, reset_minutes):
     base = base_url.rstrip("/")
     verify_link = f"{base}/verify-email/3f2c9d1e-8a4b-4c1f-9e2a-7d5b6c0a1f34/"
@@ -82,7 +78,6 @@ def build_samples(base_url, reset_minutes):
 
 # --------------------------------------------------------------------------
 def lint(name, ctx, expect, subject, html, plain):
-    """Trả về danh sách vấn đề tìm thấy trong email đã render."""
     issues = []
     if not subject.strip():
         issues.append("Subject rỗng")
@@ -106,7 +101,6 @@ def lint(name, ctx, expect, subject, html, plain):
         if value not in plain:
             issues.append(f"Bản text thiếu giá trị: {value[:60]}")
 
-    # Mọi biến {xxx} trong body text thuần đều phải có trong context (nếu không sẽ bị bỏ trống)
     from smartlock.email_templates import EMAIL_TEMPLATES
     body = EMAIL_TEMPLATES.get(name, {}).get("body", "")
     fields = {f for _, f, _, _ in string.Formatter().parse(body) if f}

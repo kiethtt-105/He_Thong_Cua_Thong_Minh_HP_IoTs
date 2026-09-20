@@ -23,3 +23,11 @@ python manage.py createsuperuser
 
 4. RUN + TEST
 python manage.py runserver
+
+
+
+
+TEST_TEMPLATE MAIL
+.\He_Thong_Cua_Thong_Minh_HP_IoTs\smartlock_django\test_email.py
+
+.\He_Thong_Cua_Thong_Minh_HP_IoTs\smartlock_django\test_send_mail.py
