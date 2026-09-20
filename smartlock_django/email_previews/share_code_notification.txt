@@ -6,5 +6,7 @@ Mã chia sẻ (6 chữ số): 482951
 
 Mã chỉ có hiệu lực trong 10 phút. Không chia sẻ mã này với người khác.
 
+Truy cập: http://localhost:8000/dashboard/
+
 Trân trọng,
 Đội ngũ Smart Lock

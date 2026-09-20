@@ -1,3 +1,7 @@
+Bảo trì hệ thống
+
 Hệ thống sẽ bảo trì từ 23:00 đến 23:30 ngày 25/09.
 
 Trong thời gian này bạn không thể điều khiển khóa từ xa.
+
+Truy cập: http://localhost:8000

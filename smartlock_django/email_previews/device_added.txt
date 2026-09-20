@@ -3,5 +3,7 @@ Xin chào Nguyễn Văn A,
 Quản trị viên vừa thêm thiết bị Cửa chính - Tầng 1 (SL-ESP32-0A41) vào tài khoản của bạn.
 Bạn có thể truy cập ngay để điều khiển.
 
+Truy cập: http://localhost:8000/dashboard/
+
 Trân trọng,
 Đội ngũ Smart Lock

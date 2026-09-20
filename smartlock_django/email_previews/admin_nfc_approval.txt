@@ -6,5 +6,7 @@ Tài khoản user@example.com đã thêm thẻ NFC mới:
 
 Thẻ chỉ hoạt động sau khi bạn xác nhận.
 
+Truy cập: http://localhost:8000/admin-sys/
+
 Trân trọng,
 Đội ngũ Smart Lock
