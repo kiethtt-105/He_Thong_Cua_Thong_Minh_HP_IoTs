@@ -1,0 +1,12 @@
+Xin chào Trần Tuấn Kiệt,
+
+Cảm ơn bạn đã đăng ký tài khoản Smart Lock.
+Để kích hoạt tài khoản, vui lòng mở liên kết sau:
+
+http://localhost:8000/verify-email/3f2c9d1e-8a4b-4c1f-9e2a-7d5b6c0a1f34/
+
+Liên kết có hiệu lực trong 30 phút.
+Nếu bạn không thực hiện đăng ký, hãy bỏ qua email này.
+
+Trân trọng,
+Đội ngũ Smart Lock

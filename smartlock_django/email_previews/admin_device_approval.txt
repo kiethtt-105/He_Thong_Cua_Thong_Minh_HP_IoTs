@@ -1,0 +1,7 @@
+Xin chào Quản trị viên,
+
+Thiết bị SL-ESP32-0A41 của user@example.com đang chờ kích hoạt.
+Vui lòng kiểm tra và kích hoạt (hoặc thông báo cho chủ thiết bị).
+
+Trân trọng,
+Đội ngũ Smart Lock

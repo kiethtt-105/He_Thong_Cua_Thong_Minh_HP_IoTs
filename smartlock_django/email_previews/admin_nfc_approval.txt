@@ -1,0 +1,10 @@
+Xin chào Quản trị viên,
+
+Tài khoản user@example.com đã thêm thẻ NFC mới:
+- Tên thẻ: Thẻ nhân viên
+- UID: 04:A2:3B:19:7C:80
+
+Thẻ chỉ hoạt động sau khi bạn xác nhận.
+
+Trân trọng,
+Đội ngũ Smart Lock
