@@ -101,6 +101,7 @@ INSTALLED_APPS = [
     'allauth',
     'allauth.account',
     'django_extensions',  
+    'manage_sys'
 ]
 
 
@@ -108,6 +109,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
+    'manage_sys.middleware.ManageSysSessionCookieMiddleware',   
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -116,6 +118,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
     'django_otp.middleware.OTPMiddleware',
+
 ]
 
 
@@ -255,3 +258,7 @@ LOGGING = {
         },
     },
 }
+
+#
+MANAGE_SYS_URL_PREFIX = '/manage-sys/'
+MANAGE_SYS_SESSION_SECONDS = 2 * 60 * 60

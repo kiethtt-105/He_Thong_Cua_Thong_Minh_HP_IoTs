@@ -1,0 +1,119 @@
+{% extends 'manage_sys/base.html' %}
+{% load manage_sys_tags %}
+{% block title %}{{ target.email }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0"><i class="bi bi-person"></i> {{ target.email }}
+        {% if target_is_manager %}<span class="badge text-bg-dark">Admin</span>{% endif %}
+        {% if target.is_active %}<span class="badge text-bg-success">Hoạt động</span>{% else %}<span class="badge text-bg-secondary">Không hoạt động</span>{% endif %}
+        {% if is_locked %}<span class="badge text-bg-danger">Bị khóa</span>{% endif %}
+    </h4>
+    <a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left"></i> Danh sách</a>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">Thông tin tài khoản</div>
+            <ul class="list-group list-group-flush small">
+                <li class="list-group-item d-flex justify-content-between"><span class="text-muted">Username</span><span>{{ target.username }}</span></li>
+                <li class="list-group-item d-flex justify-content-between"><span class="text-muted">Họ tên</span><span>{{ target.full_name|default:"—" }}</span></li>
+                <li class="list-group-item d-flex justify-content-between"><span class="text-muted">SĐT</span><span>{{ target.phone|default:"—" }}</span></li>
+                <li class="list-group-item d-flex justify-content-between"><span class="text-muted">Email đã xác thực</span><span>{{ target.email_verified|yesno:"Có,Chưa" }}</span></li>
+                <li class="list-group-item d-flex justify-content-between"><span class="text-muted">Quyền</span><span>{% if target.is_superuser %}Superuser{% elif target.is_admin or target.is_staff %}Admin{% else %}User{% endif %}</span></li>
+                <li class="list-group-item d-flex justify-content-between"><span class="text-muted">Đăng ký</span><span>{{ target.created_at|date:"d/m/Y H:i" }}</span></li>
+                <li class="list-group-item d-flex justify-content-between"><span class="text-muted">Cập nhật</span><span>{{ target.updated_at|date:"d/m/Y H:i" }}</span></li>
+                {% if lock %}
+                <li class="list-group-item d-flex justify-content-between"><span class="text-muted">Lần sai / mốc khóa</span><span>{{ lock.failed_attempts }} / {{ lock.stage }}</span></li>
+                {% if is_locked %}<li class="list-group-item d-flex justify-content-between"><span class="text-muted">Khóa đến</span><span>{{ lock.locked_until|date:"d/m H:i" }}</span></li>{% endif %}
+                {% endif %}
+            </ul>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Thao tác</div>
+            <div class="card-body">
+                {% if deny_reason %}
+                    <div class="alert alert-secondary small mb-0">{{ deny_reason }}</div>
+                {% else %}
+                <div class="d-grid gap-2">
+                    <form method="post" onsubmit="return confirm('{% if target.is_active %}Vô hiệu hóa{% else %}Kích hoạt{% endif %} tài khoản này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="toggle_active">
+                        <button class="btn w-100 {% if target.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}">
+                            <i class="bi bi-power"></i> {% if target.is_active %}Vô hiệu hóa tài khoản{% else %}Kích hoạt tài khoản{% endif %}
+                        </button>
+                    </form>
+                    {% if is_locked or lock.failed_attempts %}
+                    <form method="post">
+                        {% csrf_token %}<input type="hidden" name="action" value="unlock">
+                        <button class="btn btn-outline-warning w-100"><i class="bi bi-unlock"></i> Mở khóa đăng nhập</button>
+                    </form>
+                    {% endif %}
+                    {% if request.user.is_superuser %}
+                        {% if target_is_manager %}
+                        <form method="post" onsubmit="return confirm('Thu hồi TOÀN BỘ quyền quản trị của tài khoản này?')">
+                            {% csrf_token %}<input type="hidden" name="action" value="revoke_admin">
+                            <button class="btn btn-outline-dark w-100"><i class="bi bi-shield-x"></i> Thu hồi quyền quản trị</button>
+                        </form>
+                        {% else %}
+                        <form method="post" onsubmit="return confirm('Cấp quyền quản trị cho tài khoản này?')">
+                            {% csrf_token %}<input type="hidden" name="action" value="grant_admin">
+                            <button class="btn btn-outline-dark w-100"><i class="bi bi-shield-check"></i> Cấp quyền quản trị</button>
+                        </form>
+                        {% endif %}
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header">Thiết bị sở hữu ({{ devices|length }})</div>
+            <div class="table-responsive"><table class="table table-sm table-hover mb-0">
+                <thead><tr><th>Mã</th><th>Tên</th><th>Trạng thái</th><th>Pin</th><th></th></tr></thead>
+                <tbody>
+                {% for d in devices %}
+                <tr><td class="mono">{{ d.device_code }}</td><td>{{ d.name }}</td><td><span class="badge text-bg-{{ d.status|badge }}">{{ d.status|vi }}</span></td><td>{{ d.battery_level }}%</td><td class="text-end"><a class="btn btn-sm btn-outline-info" href="{% url 'manage_sys:device-detail' d.id %}">Xem</a></td></tr>
+                {% empty %}<tr><td colspan="5" class="text-center text-muted py-3">Chưa sở hữu thiết bị nào</td></tr>{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Được chia sẻ quyền truy cập (10 gần nhất)</div>
+            <div class="table-responsive"><table class="table table-sm mb-0">
+                <thead><tr><th>Thiết bị</th><th>Nguồn</th><th>Hết hạn</th></tr></thead>
+                <tbody>
+                {% for a in accesses %}<tr><td>{{ a.device.name }}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
+                {% empty %}<tr><td colspan="3" class="text-center text-muted py-3">Không có</td></tr>{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-xl-6">
+                <div class="card h-100">
+                    <div class="card-header">Đăng nhập gần đây</div>
+                    <div class="table-responsive"><table class="table table-sm mb-0">
+                        <thead><tr><th>Thời gian</th><th>IP</th><th>KQ</th></tr></thead>
+                        <tbody>
+                        {% for a in login_attempts %}<tr><td>{{ a.created_at|date:"d/m H:i" }}</td><td class="mono">{{ a.ip_address }}</td><td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td></tr>
+                        {% empty %}<tr><td colspan="3" class="text-center text-muted py-3">Chưa có</td></tr>{% endfor %}
+                        </tbody></table></div>
+                </div>
+            </div>
+            <div class="col-xl-6">
+                <div class="card h-100">
+                    <div class="card-header">Nhật ký liên quan</div>
+                    <div class="table-responsive"><table class="table table-sm mb-0">
+                        <thead><tr><th>Thời gian</th><th>Hành động</th></tr></thead>
+                        <tbody>
+                        {% for l in logs %}<tr><td>{{ l.created_at|date:"d/m H:i" }}</td><td class="mono">{{ l.action }}</td></tr>
+                        {% empty %}<tr><td colspan="2" class="text-center text-muted py-3">Chưa có</td></tr>{% endfor %}
+                        </tbody></table></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

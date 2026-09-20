@@ -213,8 +213,6 @@ def _page(request, queryset):
 # ====================== AUTH ======================
 def login_view(request):
     if request.user.is_authenticated:
-        if request.user.is_admin:
-            return redirect('smartlock:manage-sys-dashboard')
         return redirect('smartlock:dashboard')
 
     next_url = request.POST.get('next') or request.GET.get('next') or ''
@@ -251,6 +249,17 @@ def login_view(request):
 
     auth_user = authenticate(request, username=user.email, password=password) if user else None
 
+    # Tài khoản quản trị chỉ được đăng nhập ở cổng quản trị riêng (app manage_sys).
+    if auth_user and _is_admin(auth_user):
+        LoginAttemptLog.objects.create(
+            identifier=identifier[:255], user=user, ip_address=ip,
+            user_agent=_user_agent(request), success=False,
+        )
+        _audit(request, 'LOGIN_ADMIN_REJECTED', success=False, severity='warning',
+               actor=None, target_user=user, username_attempt=identifier[:150])
+        messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
+        return render(request, 'account/base/login.html', ctx)
+
     LoginAttemptLog.objects.create(
         identifier=identifier[:255], user=user, ip_address=ip,
         user_agent=_user_agent(request), success=bool(auth_user),
@@ -260,14 +269,12 @@ def login_view(request):
         _reset_lockout(auth_user)
         login(request, auth_user)
         request.session.set_expiry(_settings().session_timeout_hours * 3600)
-        _audit(request, 'LOGIN' if not auth_user.is_admin else 'MANAGE_LOGIN', actor=auth_user)
+        _audit(request, 'LOGIN', actor=auth_user)
         messages.success(request, 'Đăng nhập thành công!')
 
         if next_url and url_has_allowed_host_and_scheme(next_url, {request.get_host()}):
             return redirect(next_url)
 
-        if auth_user.is_admin:
-            return redirect('smartlock:manage-sys-dashboard')
         return redirect('smartlock:dashboard')
 
     if user and not user.is_active and user.check_password(password):
@@ -1067,204 +1074,3 @@ def audit_logs(request):
     context = {'audit_logs': _page(request, qs), 'show_all': show_all,
                'status': status or '', 'q': q, 'qs': extra, 'can_see_all': _is_admin(request.user)}
     return render(request, 'account/audit/logs.html', context)
-
-
-
-@require_POST
-def admin_logout(request):
-    _audit(request, 'ADMIN_LOGOUT')
-    logout(request)
-    messages.success(request, 'Đã đăng xuất Admin.')
-    return redirect('admin-sys:admin-login')
-
-
-@auth_required
-def admin_dashboard(request):
-    if not _is_admin(request.user):
-        messages.error(request, 'Bạn không có quyền truy cập Admin.')
-        return redirect('smartlock:dashboard')
-
-    devices = Device.objects.all().order_by('name')
-    support_reqs = SupportRequest.objects.all().select_related('device').order_by('-created_at')[:6]
-    notifications = Notification.objects.filter(user=request.user).order_by('-created_at')[:5]
-
-    context = {
-        'title': 'Admin Dashboard',
-        'total_devices': Device.objects.count(),
-        'online_devices': Device.objects.filter(status='online').count(),
-        'support_pending': SupportRequest.objects.filter(status='pending').count(),
-        'support_requests': support_reqs,
-        'recent_notifications': notifications,
-    }
-    return render(request, 'admin-sys/base/dashboard.html', context)
-
-
-@auth_required
-def admin_users_list(request):
-    if not _is_admin(request.user):
-        return redirect('admin-sys:admin-dashboard')
-    users = User.objects.all().order_by('-created_at')
-    return render(request, 'admin-sys/base/users.html', {'users': users})
-
-
-@auth_required
-def admin_user_detail(request, user_id):
-    if not _is_admin(request.user):
-        return redirect('admin-sys:admin-dashboard')
-    user = get_object_or_404(User, id=user_id)
-    return render(request, 'admin-sys/base/user_detail.html', {'user': user})
-
-
-@auth_required
-def admin_devices_list(request):
-    if not _is_admin(request.user):
-        return redirect('admin-sys:admin-dashboard')
-    devices = Device.objects.all().order_by('name')
-    return render(request, 'admin-sys/base/devices.html', {'devices': devices})
-
-
-@auth_required
-def admin_device_detail(request, device_id):
-    if not _is_admin(request.user):
-        return redirect('admin-sys:admin-dashboard')
-    device = get_object_or_404(Device, id=device_id)
-    return render(request, 'admin-sys/base/device_detail.html', {'device': device})
-
-
-@auth_required
-def admin_support_requests(request):
-    if not _is_admin(request.user):
-        return redirect('admin-sys:admin-dashboard')
-    reqs = SupportRequest.objects.all().select_related('device').order_by('-created_at')
-    return render(request, 'admin-sys/support/requests.html', {'support_requests': reqs})
-
-
-@auth_required
-def admin_support_request_detail(request, request_id):
-    if not _is_admin(request.user):
-        return redirect('admin-sys:admin-dashboard')
-    sr = get_object_or_404(SupportRequest, id=request_id)
-    return render(request, 'admin-sys/support/request_detail.html', {'support_request': sr})
-
-
-@auth_required
-def admin_audit_logs(request):
-    if not _is_admin(request.user):
-        return redirect('admin-sys:admin-dashboard')
-    logs = AuditLog.objects.all().select_related('actor_user', 'device').order_by('-created_at')
-    return render(request, 'admin-sys/base/logs.html', {'audit_logs': logs})
-
-
-@auth_required
-def admin_settings_system(request):
-    if not _is_admin(request.user):
-        return redirect('admin-sys:admin-dashboard')
-    st = _settings()
-    if request.method == 'POST':
-        st.registration_enabled = 'registration_enabled' in request.POST
-        st.ip_whitelist = (request.POST.get('ip_whitelist') or '').strip()
-        st.ip_blacklist = (request.POST.get('ip_blacklist') or '').strip()
-        st.save()
-        messages.success(request, 'Đã lưu cài đặt hệ thống Admin.')
-        return redirect('admin-sys:admin-settings-system')
-    return render(request, 'admin-sys/base/system.html', {'system_settings': st})
-
-
-@require_POST
-def manage_logout(request):
-    _audit(request, 'MANAGE_LOGOUT')
-    logout(request)
-    messages.success(request, 'Đã đăng xuất Admin.')
-    return redirect('smartlock:manage-sys-login')
-
-
-@auth_required
-def manage_dashboard(request):
-    if not _is_admin(request.user):
-        messages.error(request, 'Bạn không có quyền truy cập Manage Sys.')
-        return redirect('smartlock:dashboard')
-
-    devices = Device.objects.all().order_by('name')
-    support_reqs = SupportRequest.objects.all().select_related('device').order_by('-created_at')[:6]
-    notifications = Notification.objects.filter(user=request.user).order_by('-created_at')[:5]
-
-    context = {
-        'title': 'Manage Sys Dashboard',
-        'total_devices': Device.objects.count(),
-        'online_devices': Device.objects.filter(status='online').count(),
-        'support_pending': SupportRequest.objects.filter(status='pending').count(),
-        'support_requests': support_reqs,
-        'recent_notifications': notifications,
-    }
-    return render(request, 'admin-sys/base/dashboard.html', context)
-
-
-@auth_required
-def manage_users_list(request):
-    if not _is_admin(request.user):
-        return redirect('smartlock:manage-sys-dashboard')
-    users = User.objects.all().order_by('-created_at')
-    return render(request, 'admin-sys/base/users.html', {'users': users})
-
-
-@auth_required
-def manage_user_detail(request, user_id):
-    if not _is_admin(request.user):
-        return redirect('smartlock:manage-sys-dashboard')
-    user = get_object_or_404(User, id=user_id)
-    return render(request, 'admin-sys/base/user_detail.html', {'user': user})
-
-
-@auth_required
-def manage_devices_list(request):
-    if not _is_admin(request.user):
-        return redirect('smartlock:manage-sys-dashboard')
-    devices = Device.objects.all().order_by('name')
-    return render(request, 'admin-sys/base/devices.html', {'devices': devices})
-
-
-@auth_required
-def manage_device_detail(request, device_id):
-    if not _is_admin(request.user):
-        return redirect('smartlock:manage-sys-dashboard')
-    device = get_object_or_404(Device, id=device_id)
-    return render(request, 'admin-sys/base/device_detail.html', {'device': device})
-
-
-@auth_required
-def manage_support_requests(request):
-    if not _is_admin(request.user):
-        return redirect('smartlock:manage-sys-dashboard')
-    reqs = SupportRequest.objects.all().select_related('device').order_by('-created_at')
-    return render(request, 'admin-sys/support/requests.html', {'support_requests': reqs})
-
-
-@auth_required
-def manage_support_request_detail(request, request_id):
-    if not _is_admin(request.user):
-        return redirect('smartlock:manage-sys-dashboard')
-    sr = get_object_or_404(SupportRequest, id=request_id)
-    return render(request, 'admin-sys/support/request_detail.html', {'support_request': sr})
-
-
-@auth_required
-def manage_audit_logs(request):
-    if not _is_admin(request.user):
-        return redirect('smartlock:manage-sys-dashboard')
-    logs = AuditLog.objects.all().select_related('actor_user', 'device').order_by('-created_at')
-    return render(request, 'admin-sys/base/logs.html', {'audit_logs': logs})
-
-
-@auth_required
-def manage_settings_system(request):
-    if not _is_admin(request.user):
-        return redirect('smartlock:manage-sys-dashboard')
-    st = _settings()
-    if request.method == 'POST':
-        st.registration_enabled = 'registration_enabled' in request.POST
-        st.ip_whitelist = (request.POST.get('ip_whitelist') or '').strip()
-        st.ip_blacklist = (request.POST.get('ip_blacklist') or '').strip()
-        st.save()
-        messages.success(request, 'Đã lưu cài đặt hệ thống Manage Sys.')
-        return redirect('smartlock:manage-sys-settings-system')
-    return render(request, 'admin-sys/base/system.html', {'system_settings': st})
