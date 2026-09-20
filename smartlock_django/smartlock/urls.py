@@ -35,4 +35,20 @@ urlpatterns = [
     path('notifications/', views.notifications_list, name='notifications'),
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
+
+
+
+    #ADMIN
+
+    path('admin/login/', views.admin_login, name='admin-login'),
+    path('admin/logout/', views.admin_logout, name='admin-logout'),
+    path('admin/dashboard/', views.admin_dashboard, name='admin-dashboard'),
+    path('admin/users/', views.admin_users_list, name='admin-users-list'),
+    path('admin/users/<uuid:user_id>/', views.admin_user_detail, name='admin-user-detail'),
+    path('admin/devices/', views.admin_devices_list, name='admin-devices-list'),
+    path('admin/devices/<uuid:device_id>/', views.admin_device_detail, name='admin-device-detail'),
+    path('admin/support/', views.admin_support_requests, name='admin-support-requests'),
+    path('admin/support/<uuid:request_id>/', views.admin_support_request_detail, name='admin-support-request-detail'),
+    path('admin/logs/', views.admin_audit_logs, name='admin-audit-logs'),
+    path('admin/settings/', views.admin_settings_system, name='admin-settings-system'),
 ]
