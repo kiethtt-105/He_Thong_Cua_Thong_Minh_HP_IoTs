@@ -1,0 +1,22 @@
+1. Tao Moi Truong Ảo
+Tại Gốc Repo (./He_Thong_Cua_Thong_Minh_HP_IoTs)
+
+python -m venv .venv
+
+.venv\Scripts\activate
+
+2. Cài đặt requirements
+cd smartlock_django
+pip install -r requirements.txt
+
+
+3. Tạo DTB (local)
+(*) sua file .env.txt thành .env + cấu hình thông tin cần thiết
+
+python manage.py makemigrations smart_lock
+python manage.py
+-- Tạo ADMIN
+python manage.py createsuperuser
+
+4. RUN + TEST
+python manage.py runserver
