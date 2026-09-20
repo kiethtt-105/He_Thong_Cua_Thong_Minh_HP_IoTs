@@ -1,60 +1,93 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
-    <title>Dashboard Admin - Khoa Của Thông Minh</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Admin - Smart Lock</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <style>
-        .stat-card { transition: transform 0.2s; }
-        .stat-card:hover { transform: translateY(-5px); }
+        .stat-card { transition: all 0.3s; }
+        .stat-card:hover { transform: translateY(-8px); box-shadow: 0 10px 30px rgba(0,0,0,0.15); }
     </style>
 </head>
-<body class="bg-light">
-    <div class="container-fluid">
-        <div class="row">
-            <!-- Sidebar -->
-            <div class="col-md-3 bg-white border-end min-vh-100 p-3">
-                <h4 class="mb-4">Admin Panel</h4>
-                <nav>
-                    <a href="users.html" class="list-group-item list-group-item-action">Quản lý User</a>
-                    <a href="devices.html" class="list-group-item list-group-item-action">Quản lý Device</a>
-                    <a href="support.html" class="list-group-item list-group-item-action">Support Request</a>
-                </nav>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand fw-bold" href="{% url 'admin-sys:admin-dashboard' %}">Admin - Smart Lock</a>
+            <div class="d-flex align-items-center gap-3">
+                <div class="dropdown">
+                    <button class="btn btn-light dropdown-toggle" type="button" id="userDropdown" data-bs-toggle="dropdown">
+                        {{ request.user.email }}
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><a class="dropdown-item" href="{% url 'admin-sys:admin-users-list' %}">Quản lý Users</a></li>
+                        <li><a class="dropdown-item" href="{% url 'admin-sys:admin-devices-list' %}">Quản lý Thiết bị</a></li>
+                        <li><a class="dropdown-item" href="{% url 'admin-sys:admin-settings-system' %}">Cài đặt Hệ thống</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item text-danger" href="{% url 'admin-sys:admin-logout' %}">Đăng xuất Admin</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid py-4">
+        <h4 class="mb-4"><i class="bi bi-speedometer2"></i> Dashboard Admin</h4>
+
+        <div class="row g-4">
+            <div class="col-12">
+                <div class="row g-3">
+                    <div class="col-md-3"><div class="card stat-card bg-primary text-white h-100"> <div class="card-body"><div class="fs-1 fw-bold">{{ total_devices }}</div><div class="small">TỔNG THIẾT BỊ</div></div></div></div>
+                    <div class="col-md-3"><div class="card stat-card bg-success text-white h-100"> <div class="card-body"><div class="fs-1 fw-bold">{{ online_devices }}</div><div class="small">ĐANG ONLINE</div></div></div></div>
+                    <div class="col-md-3"><div class="card stat-card bg-warning text-dark h-100"> <div class="card-body"><div class="fs-1 fw-bold">{{ support_pending }}</div><div class="small">YÊU CẦU HỖ TRỢ</div></div></div></div>
+                    <div class="col-md-3"><div class="card stat-card bg-info text-white h-100"> <div class="card-body"><div class="fs-1 fw-bold">{{ notifications|length }}</div><div class="small">THÔNG BÁO MỚI</div></div></div></div>
+                </div>
             </div>
 
-            <!-- Main Content -->
-            <div class="col-md-9 p-4">
-                <h2 class="mb-4">Dashboard Admin</h2>
+            <div class="col-lg-8">
+                <div class="card h-100">
+                    <div class="card-header"><i class="bi bi-list-task"></i> Yêu cầu hỗ trợ mới nhất</div>
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead><tr><th>STT</th><th>Thiết bị</th><th>Hành động</th><th>Trạng thái</th><th>Hạn chót</th></tr></thead>
+                            <tbody>
+                                {% for sr in support_requests %}
+                                <tr>
+                                    <td>#{{ sr.id }}</td>
+                                    <td>{{ sr.device.name }}</td>
+                                    <td>{{ sr.action }}</td>
+                                    <td><span class="badge bg-{{ sr.status }}">{{ sr.status }}</span></td>
+                                    <td>{{ sr.expires_at|date:"d/m H:i" }}</td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="5" class="text-center py-4 text-muted">Không có yêu cầu hỗ trợ nào</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
 
-                <div class="row g-4">
-                    <div class="col-md-4">
-                        <div class="card stat-card bg-primary text-white h-100">
-                            <div class="card-body">
-                                <h5>5</h5>
-                                <p>Người dùng</p>
-                            </div>
+            <div class="col-lg-4">
+                <div class="card h-100">
+                    <div class="card-header"><i class="bi bi-journal-text"></i> Nhật ký mới nhất</div>
+                    <div class="list-group list-group-flush">
+                        {% for log in recent_notifications %}
+                        <div class="list-group-item list-group-item-action d-flex justify-content-between align-items-start">
+                            <div><strong>{{ log.title }}</strong><br><small class="text-muted">{{ log.message|truncatewords:15 }}</small></div>
+                            <small class="text-muted">{{ log.created_at|date:"H:i" }}</small>
                         </div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="card stat-card bg-success text-white h-100">
-                            <div class="card-body">
-                                <h5>12</h5>
-                                <p>Thiết bị</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="card stat-card bg-warning text-white h-100">
-                            <div class="card-body">
-                                <h5>3</h5>
-                                <p>Yêu cầu hỗ trợ</p>
-                            </div>
-                        </div>
+                        {% empty %}
+                        <div class="list-group-item text-center text-muted">Không có thông báo mới</div>
+                        {% endfor %}
                     </div>
                 </div>
             </div>
         </div>
     </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
