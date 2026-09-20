@@ -2,40 +2,90 @@
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env
+# Load .env (local). Trên Vercel không có file .env, biến lấy từ Environment Variables.
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(BASE_DIR.parent / ".env")   # .env nằm ở thư mục gốc repo
+load_dotenv()                           # fallback: .env ở thư mục hiện tại
 
 
-#==================== SECURITY CONFIGURATION ====================
+# ==================== HELPERS ====================
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def env_int(name, default):
+    try:
+        return int(str(os.environ.get(name, default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def env_list(name, default=""):
+    raw = os.environ.get(name, default)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+# ==================== SECURITY CONFIGURATION ====================
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
-DEBUG = os.environ.get("DEBUG", "False") == "True"
+if not SECRET_KEY:
+    raise ImproperlyConfigured("Thiếu biến môi trường DJANGO_SECRET_KEY")
+
+DEBUG = env_bool("DEBUG", False)
+
+# Khóa mã hóa Fernet và cấu hình OTP (đọc từ .env)
+FERNET_KEY = os.environ.get("FERNET_KEY")
+OTP_EXPIRY_MINUTES = env_int("OTP_EXPIRY_MINUTES", 5)
+OTP_MAX_ATTEMPTS = env_int("OTP_MAX_ATTEMPTS", 5)
+
+# ==================== MQTT ====================
+MQTT_HOST = os.environ.get("MQTT_HOST")
+MQTT_PORT = env_int("MQTT_PORT", 1883)
+MQTT_TOPIC_PREFIX = os.environ.get("MQTT_TOPIC_PREFIX", "")
 
 
-#==================== CACHE CONFIGURATION ====================
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
-        'LOCATION': 'email_cache',           # tạo bảng email_cache trong DB
-        'OPTIONS': {
-            'MAX_ENTRIES': 10000,            # tối đa 10.000 email trong cache
-            'TIMEOUT': 60 * 60 * 24,         # 1 ngày
-        },
-    }
-}
+# ==================== HOST CONFIGURATION (100% từ .env) ====================
+# Ví dụ: ALLOWED_HOSTS=localhost,127.0.0.1,ten-mien.vercel.app
+# Muốn cho phép mọi link preview của Vercel: thêm ".vercel.app"
+ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
 
 
-#==================== HOST CONFIGURATION ====================
-ALLOWED_HOSTS = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
-if DEBUG and not ALLOWED_HOSTS:
-    ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]
+# ==================== CSRF TRUSTED ORIGINS ====================
+# Tự sinh từ ALLOWED_HOSTS, hoặc ghi đè bằng biến CSRF_TRUSTED_ORIGINS (phân tách bằng dấu phẩy)
+_explicit_origins = env_list("CSRF_TRUSTED_ORIGINS")
+if _explicit_origins:
+    CSRF_TRUSTED_ORIGINS = _explicit_origins
+else:
+    CSRF_TRUSTED_ORIGINS = []
+    for _host in ALLOWED_HOSTS:
+        if _host == "*":
+            continue
+        if _host in ("localhost", "127.0.0.1", "0.0.0.0"):
+            CSRF_TRUSTED_ORIGINS += [f"http://{_host}", f"http://{_host}:8000"]
+        elif _host.startswith("."):
+            CSRF_TRUSTED_ORIGINS.append(f"https://*{_host}")
+        else:
+            CSRF_TRUSTED_ORIGINS.append(f"https://{_host}")
 
-if not DEBUG:
-    ALLOWED_HOSTS = ["*.vercel.app", "127.0.0.1", "localhost"]
 
-#==================== APPLICATION CONFIGURATION ====================
+# ==================== PROXY / HTTPS (Vercel) ====================
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Mặc định bật cookie Secure khi DEBUG=False (Vercel dùng HTTPS).
+# Chạy local bằng http://localhost với DEBUG=False: đặt SECURE_COOKIES=False trong .env
+SECURE_COOKIES = env_bool("SECURE_COOKIES", not DEBUG)
+if SECURE_COOKIES:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+
+# ==================== APPLICATION CONFIGURATION ====================
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -44,8 +94,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'django_otp',
-    'django_otp.plugins.otp_totp',   
-    'django_otp.plugins.otp_static',  
+    'django_otp.plugins.otp_totp',
+    'django_otp.plugins.otp_static',
     'smartlock',
     'rest_framework',
     'allauth',
@@ -53,9 +103,10 @@ INSTALLED_APPS = [
 ]
 
 
-#==================== MIDDLEWARE CONFIGURATION ====================
+# ==================== MIDDLEWARE CONFIGURATION ====================
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -63,14 +114,15 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
-    'django_otp.middleware.OTPMiddleware',           
+    'django_otp.middleware.OTPMiddleware',
 ]
 
-#==================== URL CONFIGURATION ====================
+
+# ==================== URL CONFIGURATION ====================
 ROOT_URLCONF = 'smartlock_django.urls'
 
 
-#==================== TEMPLATE CONFIGURATION ====================
+# ==================== TEMPLATE CONFIGURATION ====================
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -88,47 +140,66 @@ TEMPLATES = [
 ]
 
 
-#==================== WSGI/ASGI CONFIGURATION ====================
+# ==================== WSGI/ASGI CONFIGURATION ====================
 WSGI_APPLICATION = 'smartlock_django.wsgi.application'
 ASGI_APPLICATION = 'smartlock_django.asgi.application'
 
 
-#==================== DATABASE CONFIGURATION ====================
+# ==================== DATABASE CONFIGURATION ====================
+# Dùng Supabase Transaction Pooler: DB_HOST=...pooler.supabase.com, DB_PORT=6543
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
+        'ENGINE': os.environ.get("ENGINE", "django.db.backends.postgresql"),
         'NAME': os.environ.get("DB_NAME"),
         'USER': os.environ.get("DB_USER"),
         'PASSWORD': os.environ.get("DB_PASSWORD"),
         'HOST': os.environ.get("DB_HOST"),
-        'PORT': os.environ.get("DB_PORT", "5432"),
+        'PORT': os.environ.get("DB_PORT", "6543"),
+        'CONN_MAX_AGE': 0,                        # serverless: không giữ kết nối
+        'DISABLE_SERVER_SIDE_CURSORS': True,      # bắt buộc với pooler transaction mode
+        'OPTIONS': {'sslmode': os.environ.get("DB_SSLMODE", "require")},
     }
 }
 
 
-#==================== AUTH CONFIGURATION ====================
+# ==================== CACHE CONFIGURATION ====================
+# Cần chạy 1 lần: python manage.py createcachetable
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'email_cache',
+        'TIMEOUT': 60 * 60 * 24,                  # 1 ngày
+        'OPTIONS': {
+            'MAX_ENTRIES': 10000,
+        },
+    }
+}
+
+
+# ==================== AUTH CONFIGURATION ====================
 AUTH_USER_MODEL = 'smartlock.User'
 
 
-#==================== LOGIN/LOGOUT CONFIGURATION ====================
+# ==================== LOGIN/LOGOUT CONFIGURATION ====================
 LOGIN_URL = 'smartlock:login'
 LOGIN_REDIRECT_URL = 'smartlock:dashboard'
 LOGOUT_REDIRECT_URL = 'smartlock:login'
 
 
-#==================== EMAIL CONFIGURATION ====================
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+# ==================== EMAIL CONFIGURATION ====================
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = os.environ.get("EMAIL_HOST")
-EMAIL_PORT = int(os.environ.get("EMAIL_PORT", 465))
-EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "True").lower() == "true"
+EMAIL_PORT = env_int("EMAIL_PORT", 465)
+EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", False)
+EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", True)
 EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL")
-EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", 10))
-EMAIL_BATCH_SIZE = int(os.environ.get("EMAIL_BATCH_SIZE", 100))
+EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
+EMAIL_BATCH_SIZE = env_int("EMAIL_BATCH_SIZE", 100)
 
 
-#==================== INTERNATIONALIZATION CONFIGURATION ====================
+# ==================== INTERNATIONALIZATION CONFIGURATION ====================
 LANGUAGE_CODE = 'vi'
 TIME_ZONE = 'Asia/Ho_Chi_Minh'
 USE_I18N = True
@@ -136,24 +207,19 @@ USE_TZ = True
 
 
 # ==================== STATIC FILES CONFIGURATION ====================
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 
 
-#==================== MEDIA FILES CONFIGURATION ====================
+# ==================== MEDIA FILES CONFIGURATION ====================
 SUPABASE_URI = os.environ.get("SUPABASE_URI")
 
 
-#==================== CSRF TRUSTED ORIGINS CONFIGURATION ====================
-CSRF_TRUSTED_ORIGINS = [
-    "http://127.0.0.1", "http://127.0.0.1:8000", "http://localhost", "http://localhost:8000",
-    "https://he-thong-cua-thong-minh-hp-iots.vercel.app",
-]
-
-
-#==================== EMAIL CONFIGURATION ====================
-EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", 10))
-
-
+# ==================== LOGGING ====================
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

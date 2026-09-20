@@ -1,9 +1,21 @@
+# Python
 __pycache__/
 *.pyc
-.env
+
+# Virtual environments
+.venv/
 venv/
 env/
-#staticfiles/
+
+# Secrets - KHÔNG được commit
+.env
+.env.*
+*.env.txt
+!.env.example
+
+# Logs, OS, local DB
 *.log
 .DS_Store
 db.sqlite3
+
+# staticfiles/ được commit để Vercel phục vụ (whitenoise), nên không ignore
