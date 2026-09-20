@@ -36,7 +36,6 @@ def guess_base_url(settings):
 
 
 def sample_context(name, base, reset_minutes):
-    """Dữ liệu mẫu cho từng template. Template mới chưa khai báo sẽ dùng bộ dữ liệu chung."""
     base = base.rstrip("/")
     samples = {
         "user_verification.html": dict(
