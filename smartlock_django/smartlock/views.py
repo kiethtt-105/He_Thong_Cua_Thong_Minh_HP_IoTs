@@ -418,6 +418,7 @@ def password_reset_request(request):
             )
             context = {
                 'full_name': user.full_name or user.username,
+                'password_reset_link': reset_link,
                 'reset_link': reset_link,
                 'expiry_minutes': dj_settings.PASSWORD_RESET_TIMEOUT // 60,
             }
