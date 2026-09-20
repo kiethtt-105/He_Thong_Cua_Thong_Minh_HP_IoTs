@@ -114,6 +114,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'smartlock.admin_audit.AuditRequestMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
@@ -262,3 +263,6 @@ LOGGING = {
 #
 MANAGE_SYS_URL_PREFIX = '/manage-sys/'
 MANAGE_SYS_SESSION_SECONDS = 2 * 60 * 60
+
+
+TRUST_PROXY_HEADERS=True
