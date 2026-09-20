@@ -1,3 +1,6 @@
+https://docs.google.com/spreadsheets/d/1Iq2YbGmiSKy-O6es70BR6qHw9W4D3EFje-YO4oynJLM/edit?usp=sharing
+
+
 1. Tao Moi Truong Ảo
 Tại Gốc Repo (./He_Thong_Cua_Thong_Minh_HP_IoTs)
 
@@ -13,7 +16,7 @@ pip install -r requirements.txt
 3. Tạo DTB (local)
 (*) sua file .env.txt thành .env + cấu hình thông tin cần thiết
 
-python manage.py makemigrations smart_lock
+python manage.py makemigrations smartlock
 python manage.py
 -- Tạo ADMIN
 python manage.py createsuperuser
