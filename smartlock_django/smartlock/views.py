@@ -437,7 +437,7 @@ def reset_password(request, uidb64, token):
         user = None
 
     if user is None or not user.is_active or not default_token_generator.check_token(user, token):
-        messages.error(request, 'Link đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.')
+        messages.error(request, 'Yêu cầu không hợp lệ')
         return render(request, 'account/base/reset_password.html', {'mode': 'expired'})
 
     ctx = {'mode': 'confirm'}
