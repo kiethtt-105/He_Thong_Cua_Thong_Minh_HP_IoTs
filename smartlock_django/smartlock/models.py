@@ -458,6 +458,97 @@ class AuditLog(models.Model):
         ]
 
 
+# ==================== NHÓM F: XÁC THỰC 2 LỚP (2FA) ====================
+class TwoFactorConfig(models.Model):
+    """Cấu hình 2FA của 1 user. is_enabled = công tắc tổng; từng phương thức bật riêng bên dưới."""
+    METHOD_TOTP = 'totp'
+    METHOD_FIDO2 = 'fido2'
+    METHOD_EMAIL = 'email'
+    METHOD_CHOICES = [
+        (METHOD_TOTP, 'Google Authenticator (TOTP)'),
+        (METHOD_FIDO2, 'Passkey / FIDO2'),
+        (METHOD_EMAIL, 'Email OTP'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='two_factor')
+    is_enabled = models.BooleanField(default=False)
+    totp_secret_encrypted = models.CharField(max_length=255, blank=True, default='')
+    totp_confirmed = models.BooleanField(default=False)
+    totp_last_step = models.BigIntegerField(default=0)          # chống dùng lại mã TOTP (replay)
+    email_otp_enabled = models.BooleanField(default=False)
+    preferred_method = models.CharField(max_length=10, choices=METHOD_CHOICES, blank=True, default='')
+    enabled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def set_totp_secret(self, plain: str):
+        self.totp_secret_encrypted = fernet.encrypt(plain.encode()).decode()
+
+    def get_totp_secret(self) -> str:
+        if not self.totp_secret_encrypted:
+            return ''
+        try:
+            return fernet.decrypt(self.totp_secret_encrypted.encode()).decode()
+        except Exception:
+            return ''
+
+    def available_methods(self):
+        """Các phương thức đã thiết lập xong, theo thứ tự totp -> fido2 -> email."""
+        methods = []
+        if self.totp_confirmed and self.totp_secret_encrypted:
+            methods.append(self.METHOD_TOTP)
+        if self.user.fido2_credentials.exists():
+            methods.append(self.METHOD_FIDO2)
+        if self.email_otp_enabled:
+            methods.append(self.METHOD_EMAIL)
+        return methods
+
+    def __str__(self):
+        return f'2FA({self.user_id}) enabled={self.is_enabled}'
+
+
+class Fido2Credential(models.Model):
+    """Passkey / khóa bảo mật FIDO2 (WebAuthn) của user."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fido2_credentials')
+    credential_id = models.CharField(max_length=512, unique=True)     # base64url
+    public_key = models.BinaryField()
+    sign_count = models.BigIntegerField(default=0)
+    transports = models.JSONField(default=list, blank=True)
+    name = models.CharField(max_length=100, default='Passkey')
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+
+class TwoFactorEmailCode(models.Model):
+    """Mã OTP 6 số gửi qua email (chỉ lưu hash)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='two_factor_email_codes')
+    purpose = models.CharField(max_length=10, choices=[('SETUP', 'Setup'), ('VERIFY', 'Verify')])
+    code_hash = models.CharField(max_length=64)
+    attempts = models.IntegerField(default=0)
+    is_used = models.BooleanField(default=False)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['user', 'created_at'], name='idx_tfemail_user_time')]
+
+
+class TwoFactorBackupCode(models.Model):
+    """Mã dự phòng dùng 1 lần khi mất thiết bị (chỉ lưu hash)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='two_factor_backup_codes')
+    code_hash = models.CharField(max_length=64)
+    is_used = models.BooleanField(default=False)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['user', 'is_used'], name='idx_tfbackup_user_used')]
+
+
 # ==================== SIGNALS ====================
 @receiver(pre_save, sender=User)
 def set_updated_at_user(sender, instance, **kwargs):

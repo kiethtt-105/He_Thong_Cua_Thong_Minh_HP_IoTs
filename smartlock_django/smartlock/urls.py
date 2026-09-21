@@ -33,4 +33,26 @@ urlpatterns = [
     path('notifications/', views.notifications_list, name='notifications'),
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
+
+    # ====================== 2FA ======================
+    # Trang xác thực (login / bật / tắt) - chỉ vào được khi có phiên pending_2fa
+    path('two-factor/verify/', views.verify_2fa, name='tf-verify'),
+    path('two-factor/verify/email/send/', views.verify_email_send, name='tf-verify-email-send'),
+    path('two-factor/verify/passkey/options/', views.verify_passkey_options, name='tf-verify-passkey-options'),
+    path('two-factor/verify/passkey/finish/', views.verify_passkey_finish, name='tf-verify-passkey-finish'),
+    path('two-factor/cancel/', views.cancel_2fa, name='tf-cancel'),
+
+    # Cài đặt 2FA (từ trang profile)
+    path('two-factor/enable/', views.enable_2fa, name='tf-enable'),
+    path('two-factor/disable/', views.disable_2fa, name='tf-disable'),
+    path('two-factor/totp/begin/', views.totp_begin, name='tf-totp-begin'),
+    path('two-factor/totp/confirm/', views.totp_confirm, name='tf-totp-confirm'),
+    path('two-factor/totp/cancel/', views.totp_cancel, name='tf-totp-cancel'),
+    path('two-factor/email/send/', views.email_send, name='tf-email-send'),
+    path('two-factor/email/confirm/', views.email_confirm, name='tf-email-confirm'),
+    path('two-factor/passkey/options/', views.passkey_register_options, name='tf-passkey-options'),
+    path('two-factor/passkey/register/', views.passkey_register, name='tf-passkey-register'),
+    path('two-factor/passkey/<uuid:cred_id>/delete/', views.passkey_delete, name='tf-passkey-delete'),
+    path('two-factor/remove/<str:method>/', views.remove_method, name='tf-remove-method'),
+    path('two-factor/backup/regenerate/', views.backup_regenerate, name='tf-backup-regenerate'),
 ]

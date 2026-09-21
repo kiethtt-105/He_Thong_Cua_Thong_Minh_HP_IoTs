@@ -185,6 +185,21 @@ Trân trọng,
 Đội ngũ Smart Lock"""
     },
 
+    "two_factor_code.html": {
+        "purpose": "TWO_FACTOR_CODE",
+        "subject": "Mã xác thực 2 lớp Smart Lock",
+        "body": """Xin chào {full_name},
+
+Mã xác thực (OTP) của bạn là: {otp_code}
+
+Mã có hiệu lực trong {expiry_minutes} phút và chỉ dùng được một lần.
+Tuyệt đối không chia sẻ mã này với bất kỳ ai.
+Nếu không phải bạn yêu cầu, hãy đổi mật khẩu ngay.
+
+Trân trọng,
+Đội ngũ Smart Lock"""
+    },
+
     "system_announcement.html": {
         "purpose": "SYSTEM_ANNOUNCEMENT",
         "subject": "Thông báo hệ thống",

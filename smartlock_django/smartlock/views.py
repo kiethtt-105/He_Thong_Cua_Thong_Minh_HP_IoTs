@@ -1,7 +1,10 @@
 # smartlock/views.py
+import base64
 import hashlib
 import hmac
+import io
 import ipaddress
+import json
 import logging
 import math
 import re
@@ -10,6 +13,9 @@ import uuid
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
+import pyotp
+import qrcode
+import qrcode.image.svg
 from django.conf import settings as dj_settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
@@ -22,7 +28,7 @@ from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -30,15 +36,30 @@ from django.utils.encoding import force_bytes, force_str
 from django.utils.http import (
     url_has_allowed_host_and_scheme, urlsafe_base64_decode, urlsafe_base64_encode,
 )
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_http_methods, require_POST
+from webauthn import (
+    generate_authentication_options,
+    generate_registration_options,
+    options_to_json,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria,
+    PublicKeyCredentialDescriptor,
+    ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
 
 from .utils import SmartlockUtils
 from .email_templates import render_email
 from .models import (
     AccessCard, Announcement, AuditLog, CardDeviceAccess, Device, DeviceAccess,
-    DeviceCommand, DeviceStatusLog, EmailVerificationToken, LoginAttemptLog,
+    DeviceCommand, DeviceStatusLog, EmailVerificationToken, Fido2Credential, LoginAttemptLog,
     LoginLockout, NfcLog, NfcReader, NfcReaderConfig, Notification, Permission,
-    ShareAccessCode, SupportRequest, SystemSettings, User, fernet,
+    ShareAccessCode, SupportRequest, SystemSettings, TwoFactorBackupCode, TwoFactorConfig,
+    TwoFactorEmailCode, User, fernet,
 )
 
 logger = logging.getLogger('smartlock.views')
@@ -57,8 +78,10 @@ RECOVERY_ACTIONS = SmartlockUtils.RECOVERY_ACTIONS
 auth_required = login_required(login_url='smartlock:login')
 
 # ====================== HELPERS ======================
-def _send_mail(subject, plain, html, to):
-    logger.info("send_mail: to=%s subject=%r plain_preview=%r", to, subject, plain[:200])
+def _send_mail(subject, plain, html, to, log_body=True):
+    # log_body=False: không ghi nội dung mail vào log (dùng cho mail chứa mã OTP)
+    logger.info("send_mail: to=%s subject=%r plain_preview=%r", to, subject,
+                plain[:200] if log_body else '<ẩn nội dung>')
     try:
         n = send_mail(subject, plain, None, [to], html_message=html)
         logger.info("send_mail: OK (%s mail) -> %s", n, to)
@@ -322,6 +345,17 @@ def login_view(request):
     )
 
     if auth_user:
+        # ---- 2FA: mật khẩu đúng nhưng chưa đăng nhập, chuyển sang bước xác thực 2 lớp ----
+        # Chưa reset lockout ở đây (chỉ reset sau khi qua bước 2) để không thể
+        # "đăng nhập lại bằng mật khẩu" nhằm xóa bộ đếm rồi dò tiếp mã 2FA.
+        tf = TwoFactorConfig.objects.filter(user=auth_user, is_enabled=True).first()
+        if tf and tf.available_methods():
+            request.session.cycle_key()
+            _start_pending(request, auth_user, 'login',
+                           backend=getattr(auth_user, 'backend', ''), next_url=next_url)
+            _audit(request, 'LOGIN_2FA_REQUIRED', actor=None, target_user=auth_user)
+            return redirect('smartlock:tf-verify')
+
         _reset_lockout(auth_user)
         login(request, auth_user)
         request.session.set_expiry(_settings().session_timeout_hours * 3600)
@@ -1289,6 +1323,7 @@ def profile(request):
         'device_count': Device.objects.filter(owner=user).count(),
         'card_count': AccessCard.objects.filter(user=user).count(),
     }
+    context.update(two_factor_context(request, user))
     return render(request, 'account/base/profile.html', context)
 
 
@@ -1313,3 +1348,791 @@ def audit_logs(request):
     context = {'audit_logs': _page(request, qs), 'show_all': show_all,
                'status': status or '', 'q': q, 'qs': extra, 'can_see_all': _is_admin(user)}
     return render(request, 'account/audit/logs.html', context)
+
+
+# ====================== 2FA: CONSTANTS ======================
+SESSION_KEY = 'pending_2fa'            # {user_id, purpose, backend, next, ts, fails}
+PENDING_TTL = 10 * 60                  # 10 phút để hoàn tất bước 2
+MAX_PENDING_FAILS = 5                  # sai quá 5 lần trong 1 phiên -> hủy phiên, phải nhập lại mật khẩu
+EMAIL_CODE_TTL_MIN = 10
+EMAIL_CODE_COOLDOWN = 60               # giây giữa 2 lần gửi mã
+EMAIL_CODE_MAX_ATTEMPTS = 5
+BACKUP_CODE_COUNT = 8
+TOTP_ISSUER = 'Smart Lock'
+SETUP_TTL = 10 * 60
+WEBAUTHN_TTL = 5 * 60
+DEFAULT_BACKEND = 'django.contrib.auth.backends.ModelBackend'
+
+PURPOSE_TEXT = {
+    'login':   ('Xác thực 2 lớp', 'Nhập mã xác thực để hoàn tất đăng nhập.'),
+    'enable':  ('Xác nhận bật 2FA', 'Xác nhận bằng một phương thức bạn vừa thiết lập để bật 2FA.'),
+    'disable': ('Xác nhận tắt 2FA', 'Cần xác thực lần cuối trước khi tắt xác thực 2 lớp.'),
+}
+
+
+def _now_ts():
+    return int(timezone.now().timestamp())
+
+
+# ====================== HÀM PHỤ (mã hóa / mã dự phòng / TOTP / email) ======================
+def _pepper_hash(user, value: str) -> str:
+    """HMAC-SHA256 gắn với SECRET_KEY + user để lưu hash của mã OTP / mã dự phòng."""
+    msg = f'{user.pk}:{value}'.encode()
+    return hmac.new(dj_settings.SECRET_KEY.encode(), msg, hashlib.sha256).hexdigest()
+
+
+def _digits(value) -> str:
+    return re.sub(r'\D', '', value or '')
+
+
+def _get_cfg(user) -> TwoFactorConfig:
+    return TwoFactorConfig.objects.get_or_create(user=user)[0]
+
+
+def _qr_data_uri(text: str) -> str:
+    """QR dạng SVG (không cần Pillow -> chạy được trên Vercel)."""
+    img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return 'data:image/svg+xml;base64,' + base64.b64encode(buf.getvalue()).decode()
+
+
+def _verify_totp(cfg: TwoFactorConfig, code: str) -> bool:
+    """Kiểm tra mã TOTP (±1 bước 30s) và chặn dùng lại cùng một mã (replay)."""
+    code = _digits(code)
+    secret = cfg.get_totp_secret()
+    if len(code) != 6 or not secret:
+        return False
+    totp = pyotp.TOTP(secret)
+    step_now = int(timezone.now().timestamp() // totp.interval)
+    with transaction.atomic():
+        locked = TwoFactorConfig.objects.select_for_update().get(pk=cfg.pk)
+        for offset in (-1, 0, 1):
+            step = step_now + offset
+            if step <= locked.totp_last_step:
+                continue
+            if hmac.compare_digest(totp.at(step * totp.interval), code):
+                locked.totp_last_step = step
+                locked.save(update_fields=['totp_last_step', 'updated_at'])
+                return True
+    return False
+
+
+def _new_backup_codes(user):
+    """Xóa mã cũ, tạo BACKUP_CODE_COUNT mã mới (chỉ lưu hash). Trả về danh sách mã thô để hiển thị 1 lần."""
+    alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    codes = [
+        '-'.join(''.join(secrets.choice(alphabet) for _ in range(4)) for _ in range(2))
+        for _ in range(BACKUP_CODE_COUNT)
+    ]
+    with transaction.atomic():
+        TwoFactorBackupCode.objects.filter(user=user).delete()
+        TwoFactorBackupCode.objects.bulk_create([
+            TwoFactorBackupCode(user=user, code_hash=_pepper_hash(user, 'bk:' + _norm_backup(c)))
+            for c in codes
+        ])
+    return codes
+
+
+def _norm_backup(value) -> str:
+    return re.sub(r'[^A-Z0-9]', '', (value or '').upper())
+
+
+def _use_backup_code(user, raw) -> bool:
+    norm = _norm_backup(raw)
+    if len(norm) != 8:
+        return False
+    h = _pepper_hash(user, 'bk:' + norm)
+    with transaction.atomic():
+        obj = TwoFactorBackupCode.objects.select_for_update().filter(
+            user=user, code_hash=h, is_used=False).first()
+        if not obj:
+            return False
+        obj.is_used = True
+        obj.used_at = timezone.now()
+        obj.save(update_fields=['is_used', 'used_at'])
+    return True
+
+
+def _backup_left(user) -> int:
+    return TwoFactorBackupCode.objects.filter(user=user, is_used=False).count()
+
+
+def _send_email_code(user, purpose):
+    """purpose: 'SETUP' (thiết lập Email OTP) hoặc 'VERIFY' (login/enable/disable).
+    Trả về 'sent' | 'cooldown' | 'failed'."""
+    now = timezone.now()
+    if TwoFactorEmailCode.objects.filter(
+            user=user, created_at__gt=now - timedelta(seconds=EMAIL_CODE_COOLDOWN)).exists():
+        return 'cooldown'
+    code = f'{secrets.randbelow(10 ** 6):06d}'
+    TwoFactorEmailCode.objects.filter(user=user, is_used=False).update(is_used=True)
+    TwoFactorEmailCode.objects.create(
+        user=user, purpose=purpose, code_hash=_pepper_hash(user, 'em:' + code),
+        expires_at=now + timedelta(minutes=EMAIL_CODE_TTL_MIN),
+    )
+    subject, html, plain = render_email('two_factor_code.html', {
+        'full_name': user.full_name or user.username,
+        'otp_code': code,
+        'expiry_minutes': EMAIL_CODE_TTL_MIN,
+    })
+    return 'sent' if _send_mail(subject, plain, html, user.email, log_body=False) else 'failed'
+
+
+def _verify_email_code(user, code, purpose) -> bool:
+    code = _digits(code)
+    if len(code) != 6:
+        return False
+    with transaction.atomic():
+        rec = TwoFactorEmailCode.objects.select_for_update().filter(
+            user=user, purpose=purpose, is_used=False, expires_at__gt=timezone.now(),
+        ).order_by('-created_at').first()
+        if not rec:
+            return False
+        rec.attempts += 1
+        if rec.attempts > EMAIL_CODE_MAX_ATTEMPTS:
+            rec.is_used = True
+            rec.save(update_fields=['attempts', 'is_used'])
+            return False
+        ok = hmac.compare_digest(rec.code_hash, _pepper_hash(user, 'em:' + code))
+        if ok:
+            rec.is_used = True
+        rec.save(update_fields=['attempts', 'is_used'])
+        return ok
+
+
+def _mask_email(email: str) -> str:
+    name, _, dom = (email or '').partition('@')
+    return (name[:2] if len(name) > 2 else name[:1]) + '***@' + dom
+
+
+def _require_password(request) -> bool:
+    """Bắt nhập lại mật khẩu cho thao tác nhạy cảm (gỡ/tắt/tạo lại mã). Có giới hạn số lần sai."""
+    user = request.user
+    recent = AuditLog.objects.filter(
+        action='TWO_FACTOR_PASSWORD_FAILED', actor_user=user,
+        created_at__gte=timezone.now() - timedelta(minutes=15)).count()
+    if recent >= 5:
+        messages.error(request, 'Nhập sai mật khẩu quá nhiều lần. Thử lại sau 15 phút.')
+        return False
+    if not user.check_password(request.POST.get('password') or ''):
+        _audit(request, 'TWO_FACTOR_PASSWORD_FAILED', success=False, severity='warning', target_user=user)
+        messages.error(request, 'Mật khẩu không đúng.')
+        return False
+    return True
+
+
+# ====================== WEBAUTHN HELPERS ======================
+def _rp(request):
+    """(rp_id, origin, rp_name). Có thể ghi đè bằng settings.WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN / WEBAUTHN_RP_NAME."""
+    host = request.get_host()
+    rp_id = getattr(dj_settings, 'WEBAUTHN_RP_ID', None) or host.split(':')[0]
+    scheme = 'https' if request.is_secure() else 'http'
+    if getattr(dj_settings, 'TRUST_PROXY_HEADERS', False) and \
+            request.META.get('HTTP_X_FORWARDED_PROTO', '').split(',')[0].strip() == 'https':
+        scheme = 'https'
+    origin = getattr(dj_settings, 'WEBAUTHN_ORIGIN', None) or f'{scheme}://{host}'
+    return rp_id, origin, getattr(dj_settings, 'WEBAUTHN_RP_NAME', TOTP_ISSUER)
+
+
+def _json_body(request):
+    try:
+        return json.loads(request.body.decode() or '{}')
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def _cred_descriptors(user):
+    return [PublicKeyCredentialDescriptor(id=base64url_to_bytes(c.credential_id))
+            for c in Fido2Credential.objects.filter(user=user)]
+
+
+# ====================== PENDING SESSION (bước 2) ======================
+def _start_pending(request, user, purpose, backend='', next_url=''):
+    request.session[SESSION_KEY] = {
+        'user_id': str(user.pk), 'purpose': purpose, 'backend': backend or DEFAULT_BACKEND,
+        'next': next_url or '', 'ts': _now_ts(), 'fails': 0,
+    }
+
+
+def _clear_pending(request):
+    request.session.pop(SESSION_KEY, None)
+    request.session.pop('webauthn_auth', None)
+
+
+def _get_pending(request):
+    """Trả về (pending, user) hợp lệ hoặc (None, None)."""
+    p = request.session.get(SESSION_KEY)
+    if not isinstance(p, dict):
+        return None, None
+    if _now_ts() - int(p.get('ts', 0)) > PENDING_TTL:
+        _clear_pending(request)
+        return None, None
+    uid = _parse_uuid(p.get('user_id'))
+    user = User.objects.filter(pk=uid, is_active=True).first() if uid else None
+    if not user:
+        _clear_pending(request)
+        return None, None
+    if p.get('purpose') in ('enable', 'disable'):
+        if not request.user.is_authenticated or request.user.pk != user.pk:
+            _clear_pending(request)
+            return None, None
+    elif request.user.is_authenticated:
+        _clear_pending(request)
+        return None, None
+    return p, user
+
+
+def _pending_exit_url(p):
+    return reverse('smartlock:login') if (p or {}).get('purpose') == 'login' else reverse('smartlock:profile')
+
+
+def _lock_minutes(user) -> int:
+    lock = LoginLockout.objects.filter(user=user).first()
+    now = timezone.now()
+    if lock and lock.locked_until and lock.locked_until > now:
+        return math.ceil((lock.locked_until - now).total_seconds() / 60)
+    return 0
+
+
+def _fail(request, p, user, method, flash=True):
+    """Ghi nhận 1 lần sai bước 2. Trả về URL cần chuyển hướng nếu phiên bị hủy, ngược lại None."""
+    ip = _client_ip(request)
+    p['fails'] = int(p.get('fails', 0)) + 1
+    request.session[SESSION_KEY] = p
+    locked = _register_failure(user, ip)
+    _audit(request, 'TWO_FACTOR_FAILED', actor=None, target_user=user, success=False, severity='warning',
+           metadata={'method': method, 'purpose': p.get('purpose'), 'locked_minutes': locked})
+    exit_url = _pending_exit_url(p)
+    if locked:
+        _clear_pending(request)
+        _audit(request, 'ACCOUNT_LOCKED', success=False, severity='critical', actor=None,
+               target_user=user, metadata={'locked_minutes': locked, 'stage': '2fa'})
+        if flash:
+            messages.error(request, f'Sai quá nhiều lần. Tài khoản bị khóa {locked} phút.')
+        return reverse('smartlock:login')
+    if p['fails'] >= MAX_PENDING_FAILS:
+        _clear_pending(request)
+        if flash:
+            messages.error(request, 'Sai quá nhiều lần. Vui lòng thực hiện lại từ đầu.')
+        return exit_url
+    if flash:
+        messages.error(request, 'Mã xác thực không đúng hoặc đã hết hạn.')
+    return None
+
+
+def _complete(request, p, user, method):
+    """Bước 2 thành công. Trả về URL đích."""
+    purpose = p.get('purpose')
+    _clear_pending(request)
+
+    if purpose == 'login':
+        _reset_lockout(user)
+        login(request, user, backend=p.get('backend') or DEFAULT_BACKEND)
+        request.session.set_expiry(_settings().session_timeout_hours * 3600)
+        _audit(request, 'LOGIN', actor=user, metadata={'two_factor': method})
+        messages.success(request, 'Đăng nhập thành công!')
+        nxt = p.get('next') or ''
+        if nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}):
+            return nxt
+        return reverse('smartlock:dashboard')
+
+    cfg = _get_cfg(user)
+    if purpose == 'enable':
+        if not cfg.available_methods():
+            messages.error(request, 'Chưa có phương thức 2FA nào để bật.')
+            return reverse('smartlock:profile')
+        cfg.is_enabled = True
+        cfg.enabled_at = timezone.now()
+        cfg.save(update_fields=['is_enabled', 'enabled_at', 'updated_at'])
+        _audit(request, 'TWO_FACTOR_ENABLED', target_user=user, severity='warning', metadata={'method': method})
+        _notify(user, 'Đã bật xác thực 2 lớp', 'Tài khoản của bạn giờ được bảo vệ bằng 2FA.',
+                severity='info', type_='SECURITY')
+        messages.success(request, 'Đã bật xác thực 2 lớp.')
+    elif purpose == 'disable':
+        cfg.is_enabled = False
+        cfg.save(update_fields=['is_enabled', 'updated_at'])
+        _audit(request, 'TWO_FACTOR_DISABLED', target_user=user, severity='warning', metadata={'method': method})
+        _notify(user, 'Đã tắt xác thực 2 lớp', 'Xác thực 2 lớp của tài khoản vừa được tắt. '
+                'Nếu không phải bạn, hãy đổi mật khẩu ngay.', severity='warning', type_='SECURITY')
+        messages.success(request, 'Đã tắt xác thực 2 lớp.')
+    return reverse('smartlock:profile')
+
+
+# ====================== TRANG XÁC THỰC 2FA (login / bật / tắt) ======================
+@require_http_methods(['GET', 'POST'])
+def verify_2fa(request):
+    p, user = _get_pending(request)
+    if not p:
+        messages.error(request, 'Phiên xác thực 2FA đã hết hạn. Vui lòng thử lại.')
+        return redirect('smartlock:login' if not request.user.is_authenticated else 'smartlock:profile')
+
+    if p.get('purpose') == 'login':
+        mins = _lock_minutes(user)
+        if mins:
+            _clear_pending(request)
+            messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {mins} phút.')
+            return redirect('smartlock:login')
+
+    cfg = _get_cfg(user)
+    methods = cfg.available_methods()          # danh sách 'totp' / 'fido2' / 'email'
+    backup_left = _backup_left(user)
+    if not methods:
+        _clear_pending(request)
+        messages.error(request, 'Tài khoản chưa có phương thức 2FA khả dụng.')
+        return redirect(_pending_exit_url(p))
+
+    if request.method == 'POST':
+        method = request.POST.get('method')
+        code = request.POST.get('code') or ''
+        ok = False
+        if method == 'totp' and 'totp' in methods:
+            ok = _verify_totp(cfg, code)
+        elif method == 'email' and 'email' in methods:
+            ok = _verify_email_code(user, code, 'VERIFY')
+        elif method == 'backup' and backup_left:
+            ok = _use_backup_code(user, code)
+            if ok:
+                left = _backup_left(user)
+                _audit(request, 'TWO_FACTOR_BACKUP_USED', actor=user, target_user=user, severity='warning',
+                       metadata={'left': left})
+                _notify(user, 'Đã dùng mã dự phòng 2FA', f'Bạn còn {left} mã dự phòng.',
+                        severity='warning', type_='SECURITY')
+        else:
+            messages.error(request, 'Phương thức không hợp lệ.')
+            return redirect('smartlock:tf-verify')
+
+        if ok:
+            return redirect(_complete(request, p, user, method))
+        exit_url = _fail(request, p, user, method)
+        if exit_url:
+            return redirect(exit_url)
+        return redirect(f"{reverse('smartlock:tf-verify')}?tab={method}")
+
+    order = [m for m in ('totp', 'fido2', 'email') if m in methods]
+    default_tab = cfg.preferred_method if cfg.preferred_method in methods else order[0]
+    tab = request.GET.get('tab')
+    if tab not in methods + (['backup'] if backup_left else []):
+        tab = default_tab
+    title, subtitle = PURPOSE_TEXT.get(p['purpose'], PURPOSE_TEXT['login'])
+    return render(request, 'account/base/verify_2fa.html', {
+        'purpose': p['purpose'], 'title': title, 'subtitle': subtitle,
+        'has_totp': 'totp' in methods, 'has_fido2': 'fido2' in methods, 'has_email': 'email' in methods,
+        'has_backup': backup_left > 0, 'tab': tab,
+        'email_masked': _mask_email(user.email),
+        'cancel_url': reverse('smartlock:tf-cancel'),
+    })
+
+
+@require_POST
+def verify_email_send(request):
+    p, user = _get_pending(request)
+    if not p:
+        return redirect('smartlock:login')
+    if not _get_cfg(user).email_otp_enabled:
+        messages.error(request, 'Email OTP chưa được bật cho tài khoản này.')
+        return redirect('smartlock:tf-verify')
+    res = _send_email_code(user, 'VERIFY')
+    if res == 'sent':
+        messages.success(request, f'Đã gửi mã đến {_mask_email(user.email)}.')
+    elif res == 'cooldown':
+        messages.warning(request, f'Vui lòng đợi {EMAIL_CODE_COOLDOWN} giây trước khi gửi lại.')
+    else:
+        messages.error(request, 'Không gửi được email. Vui lòng thử lại sau.')
+    _audit(request, 'TWO_FACTOR_EMAIL_SENT', actor=None, target_user=user, success=(res == 'sent'),
+           metadata={'purpose': p.get('purpose')})
+    return redirect(f"{reverse('smartlock:tf-verify')}?tab=email")
+
+
+@require_POST
+def verify_passkey_options(request):
+    p, user = _get_pending(request)
+    if not p:
+        return JsonResponse({'ok': False, 'error': 'Phiên đã hết hạn.'}, status=400)
+    creds = _cred_descriptors(user)
+    if not creds:
+        return JsonResponse({'ok': False, 'error': 'Chưa có passkey.'}, status=400)
+    rp_id, _origin, _name = _rp(request)
+    options = generate_authentication_options(
+        rp_id=rp_id, allow_credentials=creds,
+        user_verification=UserVerificationRequirement.PREFERRED,
+    )
+    request.session['webauthn_auth'] = {'challenge': bytes_to_base64url(options.challenge), 'ts': _now_ts()}
+    return HttpResponse(options_to_json(options), content_type='application/json')
+
+
+@require_POST
+def verify_passkey_finish(request):
+    p, user = _get_pending(request)
+    if not p:
+        return JsonResponse({'ok': False, 'error': 'Phiên đã hết hạn.', 'redirect': reverse('smartlock:login')}, status=400)
+    state = request.session.pop('webauthn_auth', None)
+    body = _json_body(request)
+    if not state or _now_ts() - int(state.get('ts', 0)) > WEBAUTHN_TTL or not isinstance(body, dict):
+        return JsonResponse({'ok': False, 'error': 'Yêu cầu không hợp lệ hoặc đã hết hạn.'}, status=400)
+
+    credential = body.get('credential') or {}
+    cred = Fido2Credential.objects.filter(user=user, credential_id=credential.get('id') or '').first()
+    rp_id, origin, _name = _rp(request)
+    ok = False
+    if cred:
+        try:
+            v = verify_authentication_response(
+                credential=credential,
+                expected_challenge=base64url_to_bytes(state['challenge']),
+                expected_rp_id=rp_id, expected_origin=origin,
+                credential_public_key=bytes(cred.public_key),
+                credential_current_sign_count=cred.sign_count,
+                require_user_verification=False,
+            )
+            cred.sign_count = v.new_sign_count
+            cred.last_used_at = timezone.now()
+            cred.save(update_fields=['sign_count', 'last_used_at'])
+            ok = True
+        except Exception:
+            logger.exception('verify_passkey_finish: xác thực thất bại')
+    if ok:
+        return JsonResponse({'ok': True, 'redirect': _complete(request, p, user, 'fido2')})
+    exit_url = _fail(request, p, user, 'fido2', flash=False)
+    return JsonResponse({'ok': False, 'error': 'Passkey không hợp lệ.', 'redirect': exit_url}, status=400)
+
+
+def cancel_2fa(request):
+    p = request.session.get(SESSION_KEY)
+    _clear_pending(request)
+    if isinstance(p, dict) and p.get('purpose') in ('enable', 'disable') and request.user.is_authenticated:
+        return redirect('smartlock:profile')
+    return redirect('smartlock:login')
+
+
+# ====================== BẬT / TẮT 2FA (từ trang profile) ======================
+@auth_required
+@require_POST
+def enable_2fa(request):
+    cfg = _get_cfg(request.user)
+    if cfg.is_enabled:
+        messages.info(request, '2FA đã được bật.')
+        return redirect('smartlock:profile')
+    if not cfg.available_methods():
+        messages.error(request, 'Hãy thiết lập ít nhất một phương thức trước khi bật 2FA.')
+        return redirect('smartlock:profile')
+    _start_pending(request, request.user, 'enable')
+    return redirect('smartlock:tf-verify')
+
+
+@auth_required
+@require_POST
+def disable_2fa(request):
+    cfg = _get_cfg(request.user)
+    if not cfg.is_enabled:
+        return redirect('smartlock:profile')
+    if not _require_password(request):
+        return redirect('smartlock:profile')
+    _start_pending(request, request.user, 'disable')
+    return redirect('smartlock:tf-verify')
+
+
+# ====================== THIẾT LẬP GOOGLE AUTHENTICATOR (TOTP) ======================
+@auth_required
+@require_POST
+def totp_begin(request):
+    cfg = _get_cfg(request.user)
+    if cfg.totp_confirmed:
+        messages.error(request, 'Google Authenticator đã được thiết lập. Hãy gỡ trước nếu muốn cài lại.')
+        return redirect('smartlock:profile')
+    secret = pyotp.random_base32()
+    request.session['totp_setup'] = {
+        'secret': fernet.encrypt(secret.encode()).decode(),
+        'token': secrets.token_urlsafe(24),      # setup_token dùng 1 lần, chống race/CSRF chéo phiên
+        'ts': _now_ts(), 'tries': 0,
+    }
+    return redirect('smartlock:profile')
+
+
+@auth_required
+@require_POST
+def totp_cancel(request):
+    request.session.pop('totp_setup', None)
+    return redirect('smartlock:profile')
+
+
+def _read_totp_setup(request):
+    s = request.session.get('totp_setup')
+    if not isinstance(s, dict) or _now_ts() - int(s.get('ts', 0)) > SETUP_TTL:
+        request.session.pop('totp_setup', None)
+        return None
+    try:
+        return {**s, 'plain': fernet.decrypt(s['secret'].encode()).decode()}
+    except Exception:
+        request.session.pop('totp_setup', None)
+        return None
+
+
+@auth_required
+@require_POST
+def totp_confirm(request):
+    user = request.user
+    s = _read_totp_setup(request)
+    if not s:
+        messages.error(request, 'Phiên thiết lập đã hết hạn. Hãy bắt đầu lại.')
+        return redirect('smartlock:profile')
+    if not hmac.compare_digest(str(s['token']), request.POST.get('setup_token') or ''):
+        request.session.pop('totp_setup', None)
+        _audit(request, 'TWO_FACTOR_SETUP_TOKEN_BAD', success=False, severity='warning', target_user=user)
+        messages.error(request, 'Phiên thiết lập không hợp lệ. Hãy bắt đầu lại.')
+        return redirect('smartlock:profile')
+
+    code = _digits(request.POST.get('code'))
+    totp = pyotp.TOTP(s['plain'])
+    step_now = int(timezone.now().timestamp() // totp.interval)
+    matched = None
+    for offset in (-1, 0, 1):
+        if len(code) == 6 and hmac.compare_digest(totp.at((step_now + offset) * totp.interval), code):
+            matched = step_now + offset
+    if matched is None:
+        s['tries'] = int(s.get('tries', 0)) + 1
+        if s['tries'] >= 5:
+            request.session.pop('totp_setup', None)
+            messages.error(request, 'Sai quá nhiều lần. Hãy bắt đầu thiết lập lại.')
+        else:
+            request.session['totp_setup'] = {k: s[k] for k in ('secret', 'token', 'ts', 'tries')}
+            messages.error(request, 'Mã không đúng. Kiểm tra lại giờ trên điện thoại và thử lại.')
+        return redirect('smartlock:profile')
+
+    with transaction.atomic():
+        cfg = TwoFactorConfig.objects.select_for_update().get_or_create(user=user)[0]
+        cfg.set_totp_secret(s['plain'])
+        cfg.totp_confirmed = True
+        cfg.totp_last_step = matched
+        if not cfg.preferred_method:
+            cfg.preferred_method = TwoFactorConfig.METHOD_TOTP
+        cfg.save()
+    request.session.pop('totp_setup', None)
+    _after_method_added(request, user, 'totp')
+    return redirect('smartlock:profile')
+
+
+def _after_method_added(request, user, method):
+    """Ghi log, thông báo, và tạo mã dự phòng lần đầu (hiển thị 1 lần ở trang profile)."""
+    _audit(request, 'TWO_FACTOR_METHOD_ADDED', target_user=user, severity='warning', metadata={'method': method})
+    _notify(user, 'Đã thêm phương thức 2FA', f'Phương thức {method.upper()} vừa được thêm vào tài khoản.',
+            severity='info', type_='SECURITY')
+    if not TwoFactorBackupCode.objects.filter(user=user).exists():
+        request.session['new_backup_codes'] = _new_backup_codes(user)
+    # Phương thức ĐẦU TIÊN vừa xác nhận xong -> tự bật 2FA luôn (user đã chứng minh sở hữu phương thức).
+    cfg = _get_cfg(user)
+    auto = False
+    if not cfg.is_enabled and len(cfg.available_methods()) == 1:
+        cfg.is_enabled = True
+        cfg.enabled_at = timezone.now()
+        cfg.save(update_fields=['is_enabled', 'enabled_at', 'updated_at'])
+        _audit(request, 'TWO_FACTOR_ENABLED', target_user=user, severity='warning',
+               metadata={'method': method, 'auto': True})
+        auto = True
+    messages.success(request, 'Đã thêm phương thức xác thực và bật 2FA. Từ lần đăng nhập sau bạn sẽ được yêu cầu xác thực.'
+                     if auto else 'Đã thêm phương thức xác thực.')
+
+
+# ====================== EMAIL OTP ======================
+@auth_required
+@require_POST
+def email_send(request):
+    user = request.user
+    if not user.email_verified:
+        messages.error(request, 'Email chưa được xác thực.')
+        return redirect('smartlock:profile')
+    res = _send_email_code(user, 'SETUP')
+    if res == 'sent':
+        request.session['email_setup_pending'] = _now_ts()
+        messages.success(request, f'Đã gửi mã đến {_mask_email(user.email)}.')
+    elif res == 'cooldown':
+        request.session['email_setup_pending'] = _now_ts()
+        messages.warning(request, f'Vui lòng đợi {EMAIL_CODE_COOLDOWN} giây trước khi gửi lại.')
+    else:
+        messages.error(request, 'Không gửi được email. Vui lòng thử lại sau.')
+    return redirect('smartlock:profile')
+
+
+@auth_required
+@require_POST
+def email_confirm(request):
+    user = request.user
+    if _verify_email_code(user, request.POST.get('code'), 'SETUP'):
+        with transaction.atomic():
+            cfg = TwoFactorConfig.objects.select_for_update().get_or_create(user=user)[0]
+            cfg.email_otp_enabled = True
+            if not cfg.preferred_method:
+                cfg.preferred_method = TwoFactorConfig.METHOD_EMAIL
+            cfg.save()
+        request.session.pop('email_setup_pending', None)
+        _after_method_added(request, user, 'email')
+    else:
+        messages.error(request, 'Mã không đúng hoặc đã hết hạn.')
+    return redirect('smartlock:profile')
+
+
+# ====================== PASSKEY / FIDO2 ======================
+@auth_required
+@require_POST
+def passkey_register_options(request):
+    user = request.user
+    rp_id, _origin, rp_name = _rp(request)
+    options = generate_registration_options(
+        rp_id=rp_id, rp_name=rp_name,
+        user_id=user.pk.bytes, user_name=user.email,
+        user_display_name=user.full_name or user.username,
+        exclude_credentials=_cred_descriptors(user),
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            resident_key=ResidentKeyRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.PREFERRED,
+        ),
+    )
+    request.session['webauthn_reg'] = {'challenge': bytes_to_base64url(options.challenge), 'ts': _now_ts()}
+    return HttpResponse(options_to_json(options), content_type='application/json')
+
+
+@auth_required
+@require_POST
+def passkey_register(request):
+    user = request.user
+    state = request.session.pop('webauthn_reg', None)
+    body = _json_body(request)
+    if not state or _now_ts() - int(state.get('ts', 0)) > WEBAUTHN_TTL or not isinstance(body, dict):
+        return JsonResponse({'ok': False, 'error': 'Yêu cầu không hợp lệ hoặc đã hết hạn.'}, status=400)
+    credential = body.get('credential') or {}
+    rp_id, origin, _name = _rp(request)
+    try:
+        v = verify_registration_response(
+            credential=credential,
+            expected_challenge=base64url_to_bytes(state['challenge']),
+            expected_rp_id=rp_id, expected_origin=origin,
+            require_user_verification=False,
+        )
+    except Exception:
+        logger.exception('passkey_register: xác minh thất bại')
+        return JsonResponse({'ok': False, 'error': 'Không xác minh được passkey.'}, status=400)
+
+    cred_id = bytes_to_base64url(v.credential_id)
+    if len(cred_id) > 512 or Fido2Credential.objects.filter(credential_id=cred_id).exists():
+        return JsonResponse({'ok': False, 'error': 'Passkey này đã được đăng ký.'}, status=400)
+    transports = body.get('transports') if isinstance(body.get('transports'), list) else []
+    with transaction.atomic():
+        Fido2Credential.objects.create(
+            user=user, credential_id=cred_id, public_key=v.credential_public_key,
+            sign_count=v.sign_count, transports=[str(t)[:20] for t in transports][:8],
+            name=((body.get('name') or '').strip()[:100] or 'Passkey'),
+        )
+        cfg = _get_cfg(user)
+        if not cfg.preferred_method:
+            cfg.preferred_method = TwoFactorConfig.METHOD_FIDO2
+            cfg.save(update_fields=['preferred_method', 'updated_at'])
+    _after_method_added(request, user, 'fido2')
+    return JsonResponse({'ok': True})
+
+
+@auth_required
+@require_POST
+def passkey_delete(request, cred_id):
+    user = request.user
+    cfg = _get_cfg(user)
+    cred = Fido2Credential.objects.filter(pk=cred_id, user=user).first()
+    if not cred:
+        messages.error(request, 'Không tìm thấy passkey.')
+        return redirect('smartlock:profile')
+    if cfg.is_enabled and len(cfg.available_methods()) == 1 and user.fido2_credentials.count() == 1:
+        messages.error(request, 'Đây là phương thức cuối cùng. Hãy tắt 2FA trước khi gỡ.')
+        return redirect('smartlock:profile')
+    if not _require_password(request):
+        return redirect('smartlock:profile')
+    cred.delete()
+    _after_method_removed(request, user, 'fido2')
+    return redirect('smartlock:profile')
+
+
+# ====================== GỠ PHƯƠNG THỨC / MÃ DỰ PHÒNG ======================
+@auth_required
+@require_POST
+def remove_method(request, method):
+    user = request.user
+    cfg = _get_cfg(user)
+    if method not in ('totp', 'email'):
+        messages.error(request, 'Phương thức không hợp lệ.')
+        return redirect('smartlock:profile')
+    active = (cfg.totp_confirmed if method == 'totp' else cfg.email_otp_enabled)
+    if not active:
+        return redirect('smartlock:profile')
+    if cfg.is_enabled and cfg.available_methods() == [method]:
+        messages.error(request, 'Đây là phương thức cuối cùng. Hãy tắt 2FA trước khi gỡ.')
+        return redirect('smartlock:profile')
+    if not _require_password(request):
+        return redirect('smartlock:profile')
+    if method == 'totp':
+        cfg.totp_secret_encrypted = ''
+        cfg.totp_confirmed = False
+        cfg.totp_last_step = 0
+    else:
+        cfg.email_otp_enabled = False
+    cfg.save()
+    _after_method_removed(request, user, method)
+    return redirect('smartlock:profile')
+
+
+def _after_method_removed(request, user, method):
+    cfg = _get_cfg(user)
+    left = cfg.available_methods()
+    if cfg.preferred_method not in left:
+        cfg.preferred_method = left[0] if left else ''
+    if not left:
+        cfg.is_enabled = False
+        TwoFactorBackupCode.objects.filter(user=user).delete()
+    cfg.save()
+    _audit(request, 'TWO_FACTOR_METHOD_REMOVED', target_user=user, severity='warning', metadata={'method': method})
+    _notify(user, 'Đã gỡ phương thức 2FA', f'Phương thức {method.upper()} vừa được gỡ khỏi tài khoản.',
+            severity='warning', type_='SECURITY')
+    messages.success(request, 'Đã gỡ phương thức xác thực.')
+
+
+@auth_required
+@require_POST
+def backup_regenerate(request):
+    user = request.user
+    if not _get_cfg(user).available_methods():
+        messages.error(request, 'Cần thiết lập ít nhất một phương thức trước.')
+        return redirect('smartlock:profile')
+    if not _require_password(request):
+        return redirect('smartlock:profile')
+    request.session['new_backup_codes'] = _new_backup_codes(user)
+    _audit(request, 'TWO_FACTOR_BACKUP_REGEN', target_user=user, severity='warning')
+    messages.success(request, 'Đã tạo mã dự phòng mới. Mã cũ không còn dùng được.')
+    return redirect('smartlock:profile')
+
+
+# ====================== CONTEXT CHO TRANG PROFILE ======================
+def two_factor_context(request, user):
+    cfg = TwoFactorConfig.objects.filter(user=user).first()
+    passkeys = list(Fido2Credential.objects.filter(user=user).order_by('created_at'))
+    ctx = {
+        'tf_enabled': bool(cfg and cfg.is_enabled),
+        'tf_totp': bool(cfg and cfg.totp_confirmed),
+        'tf_email': bool(cfg and cfg.email_otp_enabled),
+        'tf_passkeys': passkeys,
+        'tf_has_method': bool(cfg and cfg.available_methods()),
+        'tf_backup_left': _backup_left(user),
+        'tf_email_pending': False,
+        'tf_totp_setup': None,
+        'tf_new_backup_codes': request.session.pop('new_backup_codes', None),
+        'tf_email_masked': _mask_email(user.email),
+        'tf_email_verified': user.email_verified,
+    }
+    ts = request.session.get('email_setup_pending')
+    if ts and _now_ts() - int(ts) <= EMAIL_CODE_TTL_MIN * 60 and not ctx['tf_email']:
+        ctx['tf_email_pending'] = True
+    setup = _read_totp_setup(request)
+    if setup and not ctx['tf_totp']:
+        uri = pyotp.TOTP(setup['plain']).provisioning_uri(name=user.email, issuer_name=TOTP_ISSUER)
+        ctx['tf_totp_setup'] = {
+            'qr': _qr_data_uri(uri),
+            'secret': ' '.join(setup['plain'][i:i + 4] for i in range(0, len(setup['plain']), 4)),
+            'token': setup['token'],
+        }
+    return ctx
