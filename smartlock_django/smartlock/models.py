@@ -64,8 +64,11 @@ class User(AbstractBaseUser, PermissionsMixin):
     updated_at = models.DateTimeField(auto_now=True)
     is_staff = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
-
-    
+    two_fa_enabled = models.BooleanField(
+        default=False,
+        help_text='True nếu user có ít nhất 1 phương thức 2FA đang hoạt động. '
+                   'Được đồng bộ tự động bởi sync_two_fa_flag(), KHÔNG set tay.'
+    )
 
     objects = UserManager()
 
@@ -460,7 +463,8 @@ class AuditLog(models.Model):
 
 # ==================== NHÓM F: XÁC THỰC 2 LỚP (2FA) ====================
 class TwoFactorConfig(models.Model):
-    """Cấu hình 2FA của 1 user. is_enabled = công tắc tổng; từng phương thức bật riêng bên dưới."""
+    """Cấu hình 2FA của 1 user (TOTP/Email). Trạng thái bật/tắt tổng thể không lưu ở đây
+    mà lấy từ User.two_fa_enabled, luôn được đồng bộ bởi sync_two_fa_flag()."""
     METHOD_TOTP = 'totp'
     METHOD_FIDO2 = 'fido2'
     METHOD_EMAIL = 'email'
@@ -472,7 +476,6 @@ class TwoFactorConfig(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='two_factor')
-    is_enabled = models.BooleanField(default=False)
     totp_secret_encrypted = models.CharField(max_length=255, blank=True, default='')
     totp_confirmed = models.BooleanField(default=False)
     totp_last_step = models.BigIntegerField(default=0)          # chống dùng lại mã TOTP (replay)
@@ -505,7 +508,23 @@ class TwoFactorConfig(models.Model):
         return methods
 
     def __str__(self):
-        return f'2FA({self.user_id}) enabled={self.is_enabled}'
+        return f'2FA({self.user_id}) enabled={bool(self.available_methods())}'
+
+
+def sync_two_fa_flag(user):
+    """
+    Nguồn sự thật DUY NHẤT cho 'user có đang bật 2FA hay không':
+    True nếu có >= 1 phương thức 2FA khả dụng (đã confirm), ngược lại False.
+    Gọi hàm này mỗi khi thêm/gỡ 1 phương thức (totp/email/passkey) để cột
+    User.two_fa_enabled luôn khớp thực tế, tránh lệch dữ liệu như trước đây
+    (khi is_enabled là 1 cờ set tay riêng, có thể quên set/reset).
+    """
+    cfg = TwoFactorConfig.objects.filter(user=user).first()
+    enabled = bool(cfg and cfg.available_methods())
+    if user.two_fa_enabled != enabled:
+        User.objects.filter(pk=user.pk).update(two_fa_enabled=enabled)
+        user.two_fa_enabled = enabled
+    return enabled
 
 
 class Fido2Credential(models.Model):
