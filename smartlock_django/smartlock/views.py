@@ -53,7 +53,6 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from .utils import SmartlockUtils
 from .email_templates import render_email
 from .models import (
     AccessCard, Announcement, AuditLog, CardDeviceAccess, Device, DeviceAccess,
@@ -67,14 +66,13 @@ from .mqtt_client import publish_command, MqttPublishError
 logger = logging.getLogger('smartlock.views')
 
 # ====================== CONSTANTS ======================
-# From lấy từ settings.DEFAULT_FROM_EMAIL 
-MAX_FAILED_ATTEMPTS = SmartlockUtils.MAX_FAILED_ATTEMPTS
-COMMAND_TTL_SECONDS = SmartlockUtils.COMMAND_TTL_SECONDS
-SHARED_ACCESS_HOURS = SmartlockUtils.SHARED_ACCESS_HOURS
-SUPPORT_TTL_HOURS = SmartlockUtils.SUPPORT_TTL_HOURS
-PAGE_SIZE = SmartlockUtils.PAGE_SIZE
-ALLOWED_COMMANDS = SmartlockUtils.ALLOWED_COMMANDS
-RECOVERY_ACTIONS = SmartlockUtils.RECOVERY_ACTIONS
+MAX_FAILED_ATTEMPTS = 5
+COMMAND_TTL_SECONDS = 120
+SHARED_ACCESS_HOURS = 24
+SUPPORT_TTL_HOURS = 24
+PAGE_SIZE = 20
+ALLOWED_COMMANDS = {'LOCK': 'LOCK', 'UNLOCK': 'UNLOCK', 'REBOOT': None}
+RECOVERY_ACTIONS = ('RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER')
 
 # ====================== AUTH REQUIRED DECORATOR (đưa lên đầu) ======================
 auth_required = login_required(login_url='smartlock:login')
@@ -117,6 +115,11 @@ def _settings():
 
 def _is_admin(user):
     return bool(user.is_staff or user.is_superuser or user.is_admin)
+
+def _admins():
+    """Danh sách tài khoản quản trị (đang active) để gửi email thông báo cho admin."""
+    return User.objects.filter(Q(is_staff=True) | Q(is_superuser=True) | Q(is_admin=True),
+                               is_active=True).exclude(email='')
 
 def _parse_uuid(value):
     try:
@@ -198,10 +201,7 @@ def _pick_device(queryset, raw_id, strict=False):
     return device or queryset.first()
 
 def _default_permissions():
-    # Ưu tiên danh sách khai báo trong utils; không có thì suy ra từ ALLOWED_COMMANDS.
-    preset = getattr(SmartlockUtils, 'DEFAULT_PERMISSIONS', None)
-    if preset:
-        return preset
+    # Suy ra danh sách quyền mặc định từ ALLOWED_COMMANDS.
     codes = sorted({c for c in ALLOWED_COMMANDS.values() if c})
     return [(c, c.replace('_', ' ').title(), None, False) for c in codes]
 
@@ -427,6 +427,40 @@ def register(request):
         messages.error(request, ' '.join(e.messages))
         return render(request, 'account/base/register.html', ctx)
 
+    # Kiểm tra trùng TRƯỚC khi tạo, để xử lý rõ ràng từng trường hợp thay vì chỉ báo lỗi
+    # chung chung "đã được sử dụng" rồi dừng lại (khiến người đăng ký thật sự bị bế tắc
+    # nếu lần gửi email xác thực trước đó thất bại - họ không có cách nào "đăng ký lại").
+    existing_email_user = User.objects.filter(email__iexact=email).first()
+    username_taken = User.objects.filter(username__iexact=username).exclude(
+        pk=existing_email_user.pk if existing_email_user else None).exists()
+
+    if username_taken:
+        messages.error(request, 'Tên đăng nhập đã được sử dụng.')
+        return render(request, 'account/base/register.html', ctx)
+
+    if existing_email_user:
+        if existing_email_user.is_active or existing_email_user.email_verified:
+            # Email đã có tài khoản đang hoạt động -> KHÔNG tạo trùng, báo rõ hướng xử lý
+            # (khác với trước đây chỉ ném lỗi "đã được sử dụng" chung chung).
+            _audit(request, 'REGISTER_DUPLICATE_ACTIVE', actor=None, target_user=existing_email_user,
+                   success=False, severity='warning', username_attempt=email[:150])
+            messages.error(request, 'Email này đã có tài khoản đang hoạt động. Vui lòng đăng nhập, '
+                                    'hoặc dùng "Quên mật khẩu" nếu bạn không nhớ mật khẩu.')
+        else:
+            # Email đã đăng ký nhưng CHƯA xác thực (có thể do lần trước gửi mail xác thực bị lỗi,
+            # hoặc người dùng bỏ dở) -> đừng để họ kẹt vĩnh viễn (không tạo được tài khoản mới,
+            # cũng không biết cách kích hoạt tài khoản cũ) -> tự động gửi lại email xác thực.
+            recent = EmailVerificationToken.objects.filter(
+                user=existing_email_user, purpose='EMAIL_VERIFY',
+                created_at__gt=timezone.now() - timedelta(seconds=60)).exists()
+            if not recent:
+                sent = _send_verification(request, existing_email_user)
+                _audit(request, 'VERIFY_MAIL_RESENT', actor=None, target_user=existing_email_user,
+                       success=sent, metadata={'reason': 'duplicate_register_unverified'})
+            messages.info(request, 'Email này đã được đăng ký nhưng chưa xác thực. Mình vừa gửi lại '
+                                   'email xác thực, vui lòng kiểm tra hộp thư (kể cả mục Spam).')
+        return render(request, 'account/base/verify_email.html', {'email': email})
+
     try:
         with transaction.atomic():
             user = User.objects.create_user(
@@ -509,32 +543,54 @@ def resend_verification(request):
 def password_reset_request(request):
     if request.method == 'POST':
         email = (request.POST.get('email') or '').strip()
-        user = User.objects.filter(email__iexact=email, is_active=True).first()
+        user = User.objects.filter(email__iexact=email).first()
+        ctx = {'mode': 'request', 'email': email}
+
         if not user:
             _audit(request, 'PASSWORD_RESET_UNKNOWN_EMAIL', actor=None, success=False,
                    severity='warning', username_attempt=email[:150])
-        elif AuditLog.objects.filter(action='PASSWORD_RESET_REQUEST', target_user=user,
-                                     created_at__gte=timezone.now() - timedelta(seconds=60)).exists():
+            messages.error(request, 'Email này chưa có tài khoản nào. Vui lòng đăng ký tài khoản mới.')
+            return render(request, 'account/base/reset_password.html', ctx)
+
+        if not user.is_active or not user.email_verified:
+            # Tài khoản tồn tại nhưng chưa xác thực -> chưa thể đặt lại mật khẩu (reset_password
+            # yêu cầu is_active=True), hướng dẫn xác thực email trước.
+            _audit(request, 'PASSWORD_RESET_UNVERIFIED', actor=None, success=False,
+                   severity='warning', target_user=user)
+            messages.warning(request, 'Tài khoản này chưa xác thực email. Vui lòng xác thực email '
+                                      'trước khi đặt lại mật khẩu.')
+            return render(request, 'account/base/verify_email.html', {'email': email})
+
+        if AuditLog.objects.filter(action='PASSWORD_RESET_REQUEST', target_user=user,
+                                   created_at__gte=timezone.now() - timedelta(seconds=60)).exists():
             _audit(request, 'PASSWORD_RESET_THROTTLED', actor=None, success=False, target_user=user)
+            messages.warning(request, 'Bạn vừa yêu cầu đặt lại mật khẩu. Vui lòng kiểm tra email, '
+                                      'hoặc đợi 1 phút trước khi gửi lại.')
+            return render(request, 'account/base/reset_password.html', ctx)
+
+        reset_link = request.build_absolute_uri(
+            reverse('smartlock:reset_password_confirm', args=[
+                force_str(urlsafe_base64_encode(force_bytes(str(user.pk)))),
+                default_token_generator.make_token(user),
+            ])
+        )
+        context = {
+            'full_name': user.full_name or user.username,
+            'password_reset_link': reset_link,
+            'reset_link': reset_link,
+            'expiry_minutes': dj_settings.PASSWORD_RESET_TIMEOUT // 60,
+        }
+        subject, html, plain = render_email('password_reset.html', context)
+        sent = _send_mail(subject, plain, html, user.email)
+        _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user, success=sent,
+               severity='info' if sent else 'warning',
+               metadata=None if sent else {'error': 'send_mail_failed'})
+        if sent:
+            messages.success(request, f'Đã gửi link đặt lại mật khẩu tới {email}. Vui lòng kiểm tra hộp thư '
+                                      '(kể cả mục Spam).')
         else:
-            reset_link = request.build_absolute_uri(
-                reverse('smartlock:reset_password_confirm', args=[
-                    force_str(urlsafe_base64_encode(force_bytes(str(user.pk)))),
-                    default_token_generator.make_token(user),
-                ])
-            )
-            context = {
-                'full_name': user.full_name or user.username,
-                'password_reset_link': reset_link,
-                'reset_link': reset_link,
-                'expiry_minutes': dj_settings.PASSWORD_RESET_TIMEOUT // 60,
-            }
-            subject, html, plain = render_email('password_reset.html', context)
-            sent = _send_mail(subject, plain, html, user.email)
-            _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user, success=sent,
-                   severity='info' if sent else 'warning',
-                   metadata=None if sent else {'error': 'send_mail_failed'})
-        messages.success(request, 'Nếu email tồn tại, link đặt lại mật khẩu đã được gửi.')
+            messages.error(request, 'Không gửi được email. Vui lòng thử lại sau ít phút.')
+        return render(request, 'account/base/reset_password.html', ctx)
     return render(request, 'account/base/reset_password.html', {'mode': 'request'})
 
 
@@ -711,6 +767,29 @@ def device_add(request):
         _notify(request.user, 'Thiết bị mới đã được tạo',
                 f'Dữ liệu thiết bị đã được khởi tạo. Vui lòng cấu hình device code: {device_code}',
                 device=device, type_='DEVICE')
+
+        device_url = request.build_absolute_uri(reverse('smartlock:device-detail', args=[device.id]))
+
+        # Email cho chủ thiết bị.
+        ctx = {
+            'full_name': request.user.full_name or request.user.username,
+            'device_name': device.name,
+            'device_code': device.device_code,
+            'action_url': device_url,
+        }
+        subject, html, plain_text = render_email('device_added.html', ctx)
+        _send_mail(subject, plain_text, html, request.user.email)
+
+        # Email báo cho quản trị viên biết có thiết bị mới cần theo dõi/kích hoạt.
+        admin_ctx = {
+            'user_email': request.user.email,
+            'device_code': device.device_code,
+            'action_url': request.build_absolute_uri(
+                reverse('smartlock:audit-logs')) + f'?all=1&q=DEVICE_ADDED',
+        }
+        admin_subject, admin_html, admin_plain = render_email('admin_device_approval.html', admin_ctx)
+        for admin in _admins():
+            _send_mail(admin_subject, admin_plain, admin_html, admin.email)
 
         messages.success(request, f'Đã thêm thiết bị "{name}". Device code: {device_code} — '
                                   f'Provisioning secret: {provisioning_secret} '
@@ -971,6 +1050,18 @@ def nfc_reader(request):
                                   user_agent=_user_agent(request))
             _audit(request, 'CARD_REGISTERED', device=device,
                    metadata={'card_id': str(card.id), 'name': name})
+
+            nfc_ctx = {
+                'user_email': request.user.email,
+                'card_name': name or 'Thẻ không tên',
+                'card_uid': uid,
+                'action_url': request.build_absolute_uri(
+                    reverse('smartlock:audit-logs')) + f'?all=1&q=CARD_REGISTERED',
+            }
+            subject, html, plain_text = render_email('admin_nfc_approval.html', nfc_ctx)
+            for admin in _admins():
+                _send_mail(subject, plain_text, html, admin.email)
+
             messages.success(request, 'Đã đăng ký thẻ NFC.')
             return back()
         return back()
@@ -1021,6 +1112,28 @@ def share_codes(request):
                    metadata={'code_id': str(code.id), 'minutes': minutes,
                              'permissions': sorted(p.code for p in perms)})
             messages.success(request, f'Đã tạo mã chia sẻ {plain} (hết hạn sau {minutes} phút).')
+
+            # Nếu chủ thiết bị điền sẵn email/username người nhận, gửi luôn mã qua email
+            # thay vì phải tự chép và gửi thủ công. Không nhập thì giữ hành vi cũ (chỉ hiện trên màn hình).
+            recipient_id = (request.POST.get('recipient') or '').strip()
+            if recipient_id:
+                recipient = _find_user(recipient_id)
+                if not recipient or not recipient.is_active:
+                    messages.warning(request, f'Không tìm thấy người dùng "{recipient_id}" — '
+                                              'hãy tự gửi mã cho họ.')
+                else:
+                    share_ctx = {
+                        'full_name': recipient.full_name or recipient.username,
+                        'device_name': device.name,
+                        'share_code': plain,
+                        'expiry_minutes': minutes,
+                        'action_url': request.build_absolute_uri(reverse('smartlock:share-request')),
+                    }
+                    subject, html, plain_text = render_email('share_code_notification.html', share_ctx)
+                    if _send_mail(subject, plain_text, html, recipient.email):
+                        messages.success(request, f'Đã gửi mã chia sẻ tới email của {recipient.username}.')
+                    else:
+                        messages.error(request, 'Không gửi được email cho người nhận.')
         elif action == 'delete':
             code = (ShareAccessCode.objects.select_related('device')
                     .filter(id=_parse_uuid(request.POST.get('code_id')), device__owner=user).first())
@@ -1157,6 +1270,20 @@ def support_requests(request):
         )
         _audit(request, 'SUPPORT_REQUEST_CREATED', device=device,
                metadata={'request_id': str(sr.id), 'action': action})
+
+        # Các hành động RECOVERY_ACTIONS (reset/khôi phục/chuyển chủ) ảnh hưởng nghiêm trọng
+        # tới quyền sở hữu thiết bị -> báo ngay cho quản trị viên qua email.
+        if recovery:
+            recovery_ctx = {
+                'device_name': device.name,
+                'action_url': request.build_absolute_uri(
+                    reverse('smartlock:support-request-detail', args=[sr.id])),
+            }
+            for admin in _admins():
+                recovery_ctx['full_name'] = admin.full_name or admin.username
+                subject, html, plain_text = render_email('recovery_notification.html', recovery_ctx)
+                _send_mail(subject, plain_text, html, admin.email)
+
         msg = f'Đã tạo yêu cầu. Mã ủy quyền: {auth_code}'
         if recovery:
             msg += f' — Mã khôi phục: {recovery}'
@@ -1174,10 +1301,16 @@ def support_requests(request):
 
 @auth_required
 def support_request_detail(request, request_id):
-    sr = get_object_or_404(SupportRequest.objects.select_related('device', 'processed_by'),
-                           id=request_id, requested_by=request.user)
+    # Admin được xem MỌI yêu cầu (để hỗ trợ/duyệt), người dùng thường chỉ xem yêu cầu của mình.
+    qs = SupportRequest.objects.select_related('device', 'processed_by')
+    if not _is_admin(request.user):
+        qs = qs.filter(requested_by=request.user)
+    sr = get_object_or_404(qs, id=request_id)
+
     if request.method == 'POST' and request.POST.get('action') == 'cancel':
-        if sr.status == 'pending' and sr.expires_at > timezone.now():
+        if sr.requested_by_id != request.user.id:
+            messages.error(request, 'Chỉ người tạo yêu cầu mới được hủy.')
+        elif sr.status == 'pending' and sr.expires_at > timezone.now():
             sr.status = 'cancelled'
             sr.completed_at = timezone.now()
             sr.save()
@@ -1187,7 +1320,12 @@ def support_request_detail(request, request_id):
         else:
             messages.error(request, 'Chỉ có thể hủy yêu cầu đang chờ xử lý.')
         return redirect('smartlock:support-request-detail', request_id=sr.id)
-    return render(request, 'account/support/request_detail.html', {'support_request': sr})
+
+    context = {
+        'support_request': sr,
+        'is_admin_view': _is_admin(request.user) and sr.requested_by_id != request.user.id,
+    }
+    return render(request, 'account/support/request_detail.html', context)
 
 
 # ====================== PERMISSIONS ======================
@@ -1352,6 +1490,77 @@ def settings_system(request):
         'stages_text': ', '.join(str(x) for x in (st.login_lockout_stage_minutes or [])),
     }
     return render(request, 'account/settings/system.html', context)
+
+
+@auth_required
+def announcements_manage(request):
+    """Quản lý thông báo hệ thống (banner trên dashboard) + tùy chọn gửi email broadcast.
+    Chỉ admin được truy cập."""
+    if not _is_admin(request.user):
+        _audit(request, 'ANNOUNCEMENTS_ACCESS_DENIED', success=False, severity='warning')
+        messages.error(request, 'Bạn không có quyền truy cập trang này.')
+        return redirect('smartlock:dashboard')
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+
+        if action == 'create':
+            title = (request.POST.get('title') or '').strip()[:200]
+            body = (request.POST.get('body') or '').strip()
+            level = request.POST.get('level') or 'info'
+            if level not in ('info', 'warning', 'danger'):
+                level = 'info'
+            if not title or not body:
+                messages.error(request, 'Vui lòng nhập đầy đủ tiêu đề và nội dung.')
+                return redirect('smartlock:announcements-manage')
+
+            ann = Announcement.objects.create(
+                title=title, body=body, level=level, created_by=request.user, is_active=True,
+            )
+            _audit(request, 'ANNOUNCEMENT_CREATED', metadata={'id': str(ann.id), 'title': title})
+
+            msg = f'Đã tạo thông báo "{title}".'
+            if 'send_email' in request.POST:
+                # Gửi đồng bộ trong request — chấp nhận được với vài trăm user. Nếu hệ thống có
+                # nhiều user và cần gửi hàng loạt, nên chuyển sang tác vụ nền (Celery/RQ...).
+                recipients = User.objects.filter(is_active=True).exclude(email='')
+                ctx = {'title': title, 'body': body}
+                subject, html, plain_text = render_email('system_announcement.html', ctx)
+                sent = failed = 0
+                for u in recipients:
+                    if _send_mail(subject, plain_text, html, u.email):
+                        sent += 1
+                    else:
+                        failed += 1
+                _audit(request, 'ANNOUNCEMENT_EMAIL_BROADCAST',
+                       metadata={'id': str(ann.id), 'sent': sent, 'failed': failed})
+                msg += f' Đã gửi email tới {sent} người dùng' + (f', {failed} thất bại.' if failed else '.')
+            messages.success(request, msg)
+
+        elif action == 'toggle':
+            ann = Announcement.objects.filter(id=_parse_uuid(request.POST.get('id'))).first()
+            if ann:
+                ann.is_active = not ann.is_active
+                ann.save(update_fields=['is_active'])
+                _audit(request, 'ANNOUNCEMENT_TOGGLED', metadata={'id': str(ann.id), 'is_active': ann.is_active})
+                messages.success(request, 'Đã cập nhật trạng thái thông báo.')
+            else:
+                messages.error(request, 'Không tìm thấy thông báo.')
+
+        elif action == 'delete':
+            ann = Announcement.objects.filter(id=_parse_uuid(request.POST.get('id'))).first()
+            if ann:
+                info = {'id': str(ann.id), 'title': ann.title}
+                ann.delete()
+                _audit(request, 'ANNOUNCEMENT_DELETED', metadata=info)
+                messages.success(request, 'Đã xóa thông báo.')
+            else:
+                messages.error(request, 'Không tìm thấy thông báo.')
+
+        return redirect('smartlock:announcements-manage')
+
+    context = {'announcements': Announcement.objects.select_related('created_by').order_by('-created_at')[:100]}
+    return render(request, 'account/settings/announcements.html', context)
 
 
 @auth_required

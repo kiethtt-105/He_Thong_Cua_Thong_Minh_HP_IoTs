@@ -36,6 +36,7 @@ urlpatterns = [
 
     path('permissions/manage/', views.permissions_manage, name='permissions-manage'),
     path('settings/system/', views.settings_system, name='settings-system'),
+    path('settings/announcements/', views.announcements_manage, name='announcements-manage'),
     path('notifications/', views.notifications_list, name='notifications'),
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),

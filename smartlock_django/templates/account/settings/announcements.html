@@ -1,0 +1,68 @@
+{% extends 'account/base/layout.html' %}
+{% block title %}Thông báo hệ thống{% endblock %}
+{% block page_title %}Thông báo hệ thống{% endblock %}
+{% block page_actions %}
+<button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createAnnouncement"><i class="fa-solid fa-plus me-2"></i>Tạo thông báo</button>
+{% endblock %}
+
+{% block content %}
+<div class="card"><div class="table-responsive">
+    <table class="table table-hover mb-0">
+        <thead><tr><th>Tiêu đề</th><th>Mức độ</th><th>Người tạo</th><th>Ngày tạo</th><th>Trạng thái</th><th class="text-end">Hành động</th></tr></thead>
+        <tbody>
+            {% for a in announcements %}
+            <tr class="{% if not a.is_active %}text-muted{% endif %}">
+                <td>
+                    <div class="fw-semibold">{{ a.title }}</div>
+                    <div class="text-muted small text-truncate" style="max-width:360px;">{{ a.body|truncatechars:120 }}</div>
+                </td>
+                <td>
+                    {% if a.level == 'danger' %}<span class="badge bg-danger">Danger</span>
+                    {% elif a.level == 'warning' %}<span class="badge bg-warning text-dark">Warning</span>
+                    {% else %}<span class="badge bg-info text-dark">Info</span>{% endif %}
+                </td>
+                <td>{{ a.created_by.username|default:"—" }}</td>
+                <td>{{ a.created_at|date:"d/m/Y H:i" }}</td>
+                <td>
+                    {% if a.is_active %}<span class="badge bg-success">Đang hiện</span>
+                    {% else %}<span class="badge bg-secondary">Đã ẩn</span>{% endif %}
+                </td>
+                <td class="text-end">
+                    <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="{{ a.id }}">
+                        <button class="btn btn-sm btn-outline-secondary">{% if a.is_active %}<i class="fa-regular fa-eye-slash"></i> Ẩn{% else %}<i class="fa-regular fa-eye"></i> Hiện{% endif %}</button></form>
+                    <form method="post" class="d-inline" onsubmit="return confirm('Xóa thông báo này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="{{ a.id }}">
+                        <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash"></i></button></form>
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-center text-muted py-5">Chưa có thông báo nào.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div></div>
+
+<div class="modal fade" id="createAnnouncement" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+    <form method="post">
+        {% csrf_token %}<input type="hidden" name="action" value="create">
+        <div class="modal-header"><h5 class="modal-title">Tạo thông báo hệ thống</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="mb-3"><label class="form-label">Tiêu đề</label>
+                <input type="text" name="title" class="form-control" maxlength="200" required></div>
+            <div class="mb-3"><label class="form-label">Nội dung</label>
+                <textarea name="body" class="form-control" rows="4" required></textarea></div>
+            <div class="mb-3"><label class="form-label">Mức độ</label>
+                <select name="level" class="form-select">
+                    <option value="info" selected>Info</option>
+                    <option value="warning">Warning</option>
+                    <option value="danger">Danger</option>
+                </select></div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="send_email" value="1" id="sendEmail">
+                <label class="form-check-label" for="sendEmail">Gửi email thông báo tới toàn bộ người dùng đang hoạt động</label>
+            </div>
+            <div class="form-text">Thông báo sẽ hiện trên trang chính (dashboard) ngay khi tạo, không phụ thuộc việc có gửi email hay không.</div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button><button class="btn btn-success">Tạo thông báo</button></div>
+    </form>
+</div></div></div>
+{% endblock %}
