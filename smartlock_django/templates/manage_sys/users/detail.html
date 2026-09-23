@@ -1,6 +1,6 @@
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
-{% block title %}{{ target.email }}{% endblock %}
+{% block title %}Người dùng{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h4 class="mb-0"><i class="bi bi-person"></i> {{ target.email }}
@@ -85,7 +85,8 @@
             <div class="table-responsive"><table class="table table-sm mb-0">
                 <thead><tr><th>Thiết bị</th><th>Nguồn</th><th>Hết hạn</th></tr></thead>
                 <tbody>
-                {% for a in accesses %}<tr><td>{{ a.device.name }}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
+                {% for a in accesses %}
+                <tr><td>{{ a.device.name }}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
                 {% empty %}<tr><td colspan="3" class="text-center text-muted py-3">Không có</td></tr>{% endfor %}
                 </tbody></table></div>
         </div>
@@ -97,7 +98,8 @@
                     <div class="table-responsive"><table class="table table-sm mb-0">
                         <thead><tr><th>Thời gian</th><th>IP</th><th>KQ</th></tr></thead>
                         <tbody>
-                        {% for a in login_attempts %}<tr><td>{{ a.created_at|date:"d/m H:i" }}</td><td class="mono">{{ a.ip_address }}</td><td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td></tr>
+                        {% for a in login_attempts %}
+                        <tr><td>{{ a.created_at|date:"d/m H:i" }}</td><td class="mono">{{ a.ip_address }}</td><td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td></tr>
                         {% empty %}<tr><td colspan="3" class="text-center text-muted py-3">Chưa có</td></tr>{% endfor %}
                         </tbody></table></div>
                 </div>
@@ -108,7 +110,8 @@
                     <div class="table-responsive"><table class="table table-sm mb-0">
                         <thead><tr><th>Thời gian</th><th>Hành động</th></tr></thead>
                         <tbody>
-                        {% for l in logs %}<tr><td>{{ l.created_at|date:"d/m H:i" }}</td><td class="mono">{{ l.action }}</td></tr>
+                        {% for l in logs %}
+                        <tr><td>{{ l.created_at|date:"d/m H:i" }}</td><td class="mono">{{ l.action }}</td></tr>
                         {% empty %}<tr><td colspan="2" class="text-center text-muted py-3">Chưa có</td></tr>{% endfor %}
                         </tbody></table></div>
                 </div>

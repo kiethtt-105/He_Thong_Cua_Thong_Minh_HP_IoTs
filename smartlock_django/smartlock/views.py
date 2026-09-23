@@ -67,7 +67,7 @@ from .mqtt_client import publish_command, MqttPublishError
 logger = logging.getLogger('smartlock.views')
 
 # ====================== CONSTANTS ======================
-# From lấy từ settings.DEFAULT_FROM_EMAIL (Bizfly/Gmail đều yêu cầu From trùng tài khoản gửi)
+# From lấy từ settings.DEFAULT_FROM_EMAIL 
 MAX_FAILED_ATTEMPTS = SmartlockUtils.MAX_FAILED_ATTEMPTS
 COMMAND_TTL_SECONDS = SmartlockUtils.COMMAND_TTL_SECONDS
 SHARED_ACCESS_HOURS = SmartlockUtils.SHARED_ACCESS_HOURS
