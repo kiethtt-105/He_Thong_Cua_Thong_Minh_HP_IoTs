@@ -1,9 +1,49 @@
-{% load static %}
-{% extends 'account/base/dashboard.html' %}
+{% extends 'account/base/layout.html' %}
+{% block title %}Mã chia sẻ{% endblock %}
+{% block page_title %}Mã chia sẻ khóa{% endblock %}
+{% block page_actions %}
+<button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createCode" {% if not device_list %}disabled{% endif %}><i class="fa-solid fa-plus me-2"></i>Tạo mã mới</button>
+{% endblock %}
+
 {% block content %}
-<div class="container">
-    <h4>Mã chia sẻ khóa</h4>
-    <button class="btn btn-success">Tạo mã mới</button>
-    <p class="text-muted">Bảng mã chia sẻ sẽ được thêm sau.</p>
-</div>
+<div class="card"><div class="table-responsive">
+    <table class="table table-hover mb-0">
+        <thead><tr><th>Mã</th><th>Thiết bị</th><th>Quyền hạn</th><th>Hết hạn</th><th class="text-end">Hành động</th></tr></thead>
+        <tbody>
+            {% for c in share_codes %}
+            <tr class="{% if c.is_expired %}text-muted{% endif %}">
+                <td><code class="fs-5 {% if c.is_expired %}text-muted text-decoration-line-through{% endif %}">{{ c.plain }}</code></td>
+                <td>{{ c.device.name }}</td>
+                <td>{% for p in c.permissions.all %}<span class="badge bg-primary me-1">{{ p.name }}</span>{% empty %}<span class="text-muted">—</span>{% endfor %}</td>
+                <td>{{ c.expires_at|date:"d/m/Y H:i" }} {% if c.is_expired %}<span class="badge bg-secondary">Hết hạn</span>{% else %}<span class="badge bg-success">Còn hiệu lực</span>{% endif %}</td>
+                <td class="text-end">
+                    {% if not c.is_expired %}<button class="btn btn-sm btn-outline-primary js-copy" data-text="{{ c.plain }}"><i class="fa-regular fa-copy"></i> Sao chép</button>{% endif %}
+                    <form method="post" class="d-inline" onsubmit="return confirm('Xóa mã này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="code_id" value="{{ c.id }}">
+                        <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash"></i></button></form>
+                </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-center text-muted py-5">Chưa có mã chia sẻ nào.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div></div>
+
+<div class="modal fade" id="createCode" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+    <form method="post">
+        {% csrf_token %}<input type="hidden" name="action" value="create">
+        <div class="modal-header"><h5 class="modal-title">Tạo mã chia sẻ</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="mb-3"><label class="form-label">Thiết bị</label>
+                <select name="device_id" class="form-select" required>{% for d in device_list %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
+            <div class="mb-3"><label class="form-label">Thời hạn (phút)</label><input type="number" name="minutes" class="form-control" min="1" max="1440" value="{{ default_minutes }}"></div>
+            <label class="form-label">Quyền hạn</label>
+            {% for p in permissions %}
+            <div class="form-check"><input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="sp-{{ p.code }}" {% if not p.is_sensitive %}checked{% endif %}>
+                <label class="form-check-label" for="sp-{{ p.code }}">{{ p.name }}{% if p.is_sensitive %} <span class="badge bg-danger">Nhạy cảm</span>{% endif %}</label></div>
+            {% endfor %}
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button><button class="btn btn-success">Tạo mã</button></div>
+    </form>
+</div></div></div>
 {% endblock %}

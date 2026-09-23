@@ -1,9 +1,74 @@
-{% load static %}
+{% extends 'account/base/layout.html' %}
+{% block title %}Quyền hạn{% endblock %}
+{% block page_title %}Quản lý quyền hạn thiết bị{% endblock %}
+{% block page_actions %}
+{% if device_list %}
+<form method="get"><select name="device" class="form-select" onchange="this.form.submit()">
+    {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
+</select></form>
+{% endif %}
+{% endblock %}
 
-{% extends 'account/base/dashboard.html' %}
 {% block content %}
-<div class="container">
-    <h4>Quản lý quyền hạn thiết bị</h4>
-    <!-- Form chọn thiết bị + người dùng + quyền -->
+{% if not device %}
+<div class="card"><div class="card-body text-center text-muted py-5">Bạn cần sở hữu ít nhất một thiết bị để cấp quyền.</div></div>
+{% else %}
+<div class="row g-3">
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">Cấp quyền mới</div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="grant">
+                    <div class="mb-3"><label class="form-label">Email hoặc username</label><input type="text" name="identifier" class="form-control" required></div>
+                    <div class="mb-3"><label class="form-label">Hết hạn (không bắt buộc)</label><input type="datetime-local" name="expires_at" class="form-control"></div>
+                    <label class="form-label">Quyền hạn</label>
+                    {% for p in permissions %}
+                    <div class="form-check form-switch mb-1">
+                        <input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="g-{{ p.code }}">
+                        <label class="form-check-label" for="g-{{ p.code }}"><strong>{{ p.name }}</strong>{% if p.is_sensitive %} <span class="badge bg-danger">Nhạy cảm</span>{% endif %}<br><small class="text-muted">{{ p.description|default:"" }}</small></label>
+                    </div>
+                    {% endfor %}
+                    <button class="btn btn-primary w-100 mt-3"><i class="fa-solid fa-user-plus me-2"></i>Cấp quyền</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">Người đang có quyền trên “{{ device.name }}”</div>
+            <ul class="list-group list-group-flush">
+                {% for a in accesses %}
+                <li class="list-group-item py-3">
+                    <div class="d-flex justify-content-between flex-wrap gap-2">
+                        <div>
+                            <div class="fw-semibold">{{ a.user.full_name|default:a.user.username }} <small class="text-muted">({{ a.user.email }})</small></div>
+                            <div class="my-1">{% for p in a.permissions.all %}<span class="badge {% if p.is_sensitive %}bg-danger{% else %}bg-primary{% endif %} me-1">{{ p.name }}</span>{% empty %}<span class="text-muted small">Chưa có quyền nào</span>{% endfor %}</div>
+                            <small class="text-muted">{{ a.get_source_display }} • {% if a.expires_at %}hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}không giới hạn{% endif %}</small>
+                        </div>
+                        <div class="d-flex gap-2 align-items-start">
+                            <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#edit-{{ a.id }}">Sửa</button>
+                            <form method="post" onsubmit="return confirm('Thu hồi quyền của người này?')">{% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="access_id" value="{{ a.id }}">
+                                <button class="btn btn-sm btn-outline-danger">Thu hồi</button></form>
+                        </div>
+                    </div>
+                    <div class="collapse mt-3" id="edit-{{ a.id }}">
+                        <form method="post" class="border rounded p-3 bg-light">
+                            {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="update"><input type="hidden" name="access_id" value="{{ a.id }}">
+                            <div class="row">
+                                {% for p in permissions %}
+                                <div class="col-md-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="e-{{ a.id }}-{{ p.code }}" {% if p.code in a.perm_codes %}checked{% endif %}>
+                                    <label class="form-check-label" for="e-{{ a.id }}-{{ p.code }}">{{ p.name }}</label></div></div>
+                                {% endfor %}
+                            </div>
+                            <button class="btn btn-sm btn-success mt-2">Lưu quyền</button>
+                        </form>
+                    </div>
+                </li>
+                {% empty %}<li class="list-group-item text-center text-muted py-5">Chưa cấp quyền cho ai. Dùng form bên trái hoặc <a href="{% url 'smartlock:share-codes' %}">tạo mã chia sẻ</a>.</li>{% endfor %}
+            </ul>
+        </div>
+    </div>
 </div>
+{% endif %}
 {% endblock %}

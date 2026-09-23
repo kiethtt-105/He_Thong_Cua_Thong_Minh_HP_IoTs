@@ -1,8 +1,73 @@
-{% load static %}
-{% extends 'account/base/dashboard.html' %}
+{% extends 'account/base/layout.html' %}
+{% block title %}Đầu đọc NFC{% endblock %}
+{% block page_title %}Đầu đọc & đăng ký thẻ NFC{% endblock %}
+{% block page_actions %}
+{% if device_list %}
+<form method="get"><select name="device" class="form-select" onchange="this.form.submit()">
+    {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
+</select></form>
+{% endif %}
+{% endblock %}
+
 {% block content %}
-<div class="container">
-    <h4>Quản lý quyền hạn thiết bị</h4>
-    <p class="text-muted">Form quản lý quyền hạn sẽ được thêm sau.</p>
+{% if not device %}
+<div class="card"><div class="card-body text-center text-muted py-5">Bạn cần sở hữu ít nhất một thiết bị để quản lý đầu đọc NFC.</div></div>
+{% else %}
+<div class="row g-3 mb-3">
+    <div class="col-lg-7">
+        <div class="card h-100">
+            <div class="card-header">Đầu đọc của “{{ device.name }}”</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Tên</th><th>Chế độ</th><th>Hoạt động</th><th>Tự đăng ký</th></tr></thead>
+                <tbody>
+                    {% for r in readers %}
+                    <tr>
+                        <td>{{ r.name|default:"Đầu đọc" }}<div class="small text-muted">{{ r.last_seen_at|date:"d/m H:i"|default:"Chưa kết nối" }}</div></td>
+                        <td><span class="badge bg-light text-dark border">{{ r.get_reader_mode_display }}</span></td>
+                        <td><form method="post">{% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="toggle_reader"><input type="hidden" name="reader_id" value="{{ r.id }}">
+                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" {% if r.is_active %}checked{% endif %} onchange="this.form.submit()"></div></form></td>
+                        <td><form method="post">{% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="toggle_auto"><input type="hidden" name="reader_id" value="{{ r.id }}">
+                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" {% if r.config.auto_register %}checked{% endif %} onchange="this.form.submit()"></div></form></td>
+                    </tr>
+                    {% empty %}<tr><td colspan="4" class="text-center text-muted py-4">Thiết bị chưa có đầu đọc.</td></tr>{% endfor %}
+                </tbody>
+            </table></div>
+            <div class="card-body border-top">
+                <form method="post" class="d-flex gap-2">
+                    {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="add_reader">
+                    <input type="text" name="name" class="form-control" placeholder="Tên đầu đọc mới (mô phỏng)" maxlength="100">
+                    <button class="btn btn-outline-primary text-nowrap"><i class="fa-solid fa-plus me-1"></i>Thêm</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card h-100">
+            <div class="card-header">Đăng ký thẻ mới</div>
+            <div class="card-body">
+                <p class="text-muted small">Nhập UID thẻ (ví dụ <code>04:A3:2B:1C</code>). UID được băm SHA-256 trước khi lưu.</p>
+                <form method="post">
+                    {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="register_card">
+                    <div class="mb-3"><label class="form-label">UID thẻ</label><input type="text" name="uid" class="form-control" required placeholder="04:A3:2B:1C"></div>
+                    <div class="mb-3"><label class="form-label">Tên thẻ</label><input type="text" name="name" class="form-control" maxlength="100" placeholder="Thẻ của tôi"></div>
+                    <button class="btn btn-primary w-100"><i class="fa-solid fa-id-card me-2"></i>Đăng ký thẻ</button>
+                </form>
+            </div>
+        </div>
+    </div>
 </div>
+
+<div class="card">
+    <div class="card-header">Sự kiện NFC gần đây</div>
+    <div class="table-responsive"><table class="table mb-0">
+        <thead><tr><th>Thời gian</th><th>Sự kiện</th><th>Thẻ</th><th>Kết quả</th></tr></thead>
+        <tbody>
+            {% for l in nfc_logs %}
+            <tr><td>{{ l.created_at|date:"d/m/Y H:i" }}</td><td>{{ l.get_event_type_display }}</td><td>{{ l.nfc_tag.name|default:"—" }}</td>
+                <td>{% if l.success %}<span class="badge bg-success">Thành công</span>{% else %}<span class="badge bg-danger">Thất bại</span>{% endif %}</td></tr>
+            {% empty %}<tr><td colspan="4" class="text-center text-muted py-4">Chưa có sự kiện.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+</div>
+{% endif %}
 {% endblock %}

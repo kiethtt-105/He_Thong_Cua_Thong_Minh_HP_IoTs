@@ -1,22 +1,288 @@
-{% extends 'account/base/dashboard.html' %}
-{% load static %}
+{% extends 'account/base/layout.html' %}
+{% block title %}Tài khoản{% endblock %}
+{% block page_title %}Thông tin cá nhân{% endblock %}
 {% block content %}
-<div class="container">
-    <h4 class="mb-4">Thông tin cá nhân</h4>
-    <div class="row justify-content-center">
-        <div class="col-md-8">
-            <div class="card shadow border-0">
-                <div class="card-body">
-                    <table class="table table-borderless">
-                        <tr><td><strong>Email</strong></td><td>{{ user.email }}</td></tr>
-                        <tr><td><strong>Tên đăng nhập</strong></td><td>{{ user.username }}</td></tr>
-                        <tr><td><strong>Họ tên</strong></td><td>{{ user.full_name|default:"Chưa cập nhật" }}</td></tr>
-                        <tr><td><strong>Số điện thoại</strong></td><td>{{ user.phone|default:"Chưa có" }}</td></tr>
-                    </table>
-                    <a href="{% url 'smartlock:password_reset' %}" class="btn btn-outline-primary">Đổi mật khẩu</a>
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">Thông tin tài khoản</div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}<input type="hidden" name="action" value="update_info">
+                    <div class="mb-3"><label class="form-label">Email</label>
+                        <input class="form-control" value="{{ user.email }}" disabled>
+                        <small class="{% if user.email_verified %}text-success{% else %}text-warning{% endif %}">
+                            <i class="fa-solid {% if user.email_verified %}fa-circle-check{% else %}fa-circle-exclamation{% endif %} me-1"></i>{% if user.email_verified %}Đã xác thực{% else %}Chưa xác thực{% endif %}</small></div>
+                    <div class="mb-3"><label class="form-label">Tên đăng nhập</label><input class="form-control" value="{{ user.username }}" disabled></div>
+                    <div class="mb-3"><label class="form-label">Họ và tên</label><input type="text" name="full_name" class="form-control" value="{{ user.full_name|default:'' }}" maxlength="100"></div>
+                    <div class="mb-3"><label class="form-label">Số điện thoại</label><input type="tel" name="phone" class="form-control" value="{{ user.phone|default:'' }}" maxlength="20"></div>
+                    <button class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card mb-3">
+            <div class="card-header">Đổi mật khẩu</div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}<input type="hidden" name="action" value="change_password">
+                    <div class="mb-3"><label class="form-label">Mật khẩu hiện tại</label><input type="password" name="old_password" class="form-control" required autocomplete="current-password"></div>
+                    <div class="mb-3"><label class="form-label">Mật khẩu mới</label><input type="password" name="new_password1" class="form-control" required autocomplete="new-password"></div>
+                    <div class="mb-3"><label class="form-label">Xác nhận mật khẩu mới</label><input type="password" name="new_password2" class="form-control" required autocomplete="new-password"></div>
+                    <button class="btn btn-outline-primary"><i class="fa-solid fa-key me-2"></i>Đổi mật khẩu</button>
+                </form>
+            </div>
+        </div>
+        <div class="card"><div class="card-body">
+            <div class="row text-center">
+                <div class="col"><div class="fs-4 fw-bold">{{ device_count }}</div><small class="text-muted">Thiết bị sở hữu</small></div>
+                <div class="col"><div class="fs-4 fw-bold">{{ card_count }}</div><small class="text-muted">Thẻ NFC</small></div>
+                <div class="col"><div class="fs-6 fw-bold pt-2">{{ user.created_at|date:"d/m/Y" }}</div><small class="text-muted">Ngày tham gia</small></div>
+            </div>
+        </div></div>
+    </div>
+    <!-- ===================== XÁC THỰC 2 LỚP (2FA) ===================== -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fa-solid fa-shield-halved me-2"></i>Xác thực 2 lớp (2FA)</span>
+                {% if tf_enabled %}<span class="badge bg-success">Đang bật</span>{% else %}<span class="badge bg-secondary">Đang tắt</span>{% endif %}
+            </div>
+            <div class="card-body">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                    <div class="text-muted small">
+                        Khi bật, mỗi lần đăng nhập bạn cần thêm một bước xác thực (Google Authenticator, Passkey hoặc mã qua email).
+                    </div>
+                    {% if tf_enabled %}
+                        <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#tfPwModal"
+                                data-url="{% url 'smartlock:tf-disable' %}" data-title="Tắt xác thực 2 lớp" data-label="Tiếp tục tắt 2FA">
+                            <i class="fa-solid fa-lock-open me-1"></i>Tắt 2FA</button>
+                    {% elif tf_has_method %}
+                        <form method="post" action="{% url 'smartlock:tf-enable' %}">{% csrf_token %}
+                            <button class="btn btn-success btn-sm"><i class="fa-solid fa-lock me-1"></i>Bật 2FA</button>
+                        </form>
+                    {% endif %}
                 </div>
+                {% if not tf_has_method %}
+                    <div class="alert alert-info py-2 small"><i class="fa-solid fa-circle-info me-1"></i>Thiết lập xong phương thức đầu tiên, 2FA sẽ được bật tự động.</div>
+                {% endif %}
+
+                <ul class="list-group list-group-flush">
+                    <!-- Google Authenticator -->
+                    <li class="list-group-item px-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <div>
+                            <div class="fw-semibold"><i class="fa-solid fa-mobile-screen-button me-2"></i>Google Authenticator</div>
+                            <small class="{% if tf_totp %}text-success{% else %}text-muted{% endif %}">{% if tf_totp %}Đã thiết lập{% else %}Chưa thiết lập - dùng app Google/Microsoft Authenticator, Authy...{% endif %}</small>
+                        </div>
+                        {% if tf_totp %}
+                            <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#tfPwModal"
+                                    data-url="{% url 'smartlock:tf-remove-method' 'totp' %}" data-title="Gỡ Google Authenticator" data-label="Gỡ">Gỡ</button>
+                        {% else %}
+                            <form method="post" action="{% url 'smartlock:tf-totp-begin' %}">{% csrf_token %}
+                                <button class="btn btn-outline-primary btn-sm">Thiết lập</button></form>
+                        {% endif %}
+                    </li>
+
+                    <!-- Passkey / FIDO2 -->
+                    <li class="list-group-item px-0">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <div>
+                                <div class="fw-semibold"><i class="fa-solid fa-fingerprint me-2"></i>Passkey / khóa bảo mật (FIDO2)</div>
+                                <small class="{% if tf_passkeys %}text-success{% else %}text-muted{% endif %}">{% if tf_passkeys %}{{ tf_passkeys|length }} passkey đã đăng ký{% else %}Vân tay, Face ID, Windows Hello hoặc khóa USB/NFC{% endif %}</small>
+                            </div>
+                            <div class="input-group input-group-sm" style="max-width:340px">
+                                <input type="text" id="tfPasskeyName" class="form-control" placeholder="Tên passkey (vd: Laptop)" maxlength="100">
+                                <button type="button" id="tfPasskeyAdd" class="btn btn-outline-primary"><i class="fa-solid fa-plus me-1"></i>Thêm</button>
+                            </div>
+                        </div>
+                        <div id="tfPasskeyMsg" class="small text-danger mt-1"></div>
+                        {% if tf_passkeys %}
+                        <ul class="list-unstyled mt-2 mb-0">
+                            {% for c in tf_passkeys %}
+                            <li class="d-flex justify-content-between align-items-center border rounded px-2 py-1 mb-1 small">
+                                <span><i class="fa-solid fa-key me-2 text-muted"></i>{{ c.name }}
+                                    <span class="text-muted ms-2">thêm {{ c.created_at|date:"d/m/Y" }}{% if c.last_used_at %} · dùng {{ c.last_used_at|date:"d/m/Y" }}{% endif %}</span></span>
+                                <button type="button" class="btn btn-link btn-sm text-danger p-0" data-bs-toggle="modal" data-bs-target="#tfPwModal"
+                                        data-url="{% url 'smartlock:tf-passkey-delete' c.id %}" data-title="Xóa passkey “{{ c.name }}”" data-label="Xóa">Xóa</button>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% endif %}
+                    </li>
+
+                    <!-- Email OTP -->
+                    <li class="list-group-item px-0">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                            <div>
+                                <div class="fw-semibold"><i class="fa-solid fa-envelope-open-text me-2"></i>Mã OTP qua email</div>
+                                <small class="{% if tf_email %}text-success{% else %}text-muted{% endif %}">{% if tf_email %}Đã bật - gửi đến {{ tf_email_masked }}{% else %}Nhận mã 6 số qua {{ tf_email_masked }}{% endif %}</small>
+                            </div>
+                            {% if tf_email %}
+                                <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#tfPwModal"
+                                        data-url="{% url 'smartlock:tf-remove-method' 'email' %}" data-title="Gỡ Email OTP" data-label="Gỡ">Gỡ</button>
+                            {% elif not tf_email_verified %}
+                                <small class="text-warning">Cần xác thực email trước</small>
+                            {% elif not tf_email_pending %}
+                                <form method="post" action="{% url 'smartlock:tf-email-send' %}">{% csrf_token %}
+                                    <button class="btn btn-outline-primary btn-sm">Gửi mã xác nhận</button></form>
+                            {% endif %}
+                        </div>
+                        {% if tf_email_pending %}
+                        <form method="post" action="{% url 'smartlock:tf-email-confirm' %}" class="row g-2 mt-1">{% csrf_token %}
+                            <div class="col-auto"><input type="text" name="code" class="form-control form-control-sm" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="Mã 6 số" autocomplete="one-time-code" required></div>
+                            <div class="col-auto"><button class="btn btn-primary btn-sm">Xác nhận</button></div>
+                            <div class="col-auto"><button class="btn btn-link btn-sm" formaction="{% url 'smartlock:tf-email-send' %}" formnovalidate>Gửi lại</button></div>
+                        </form>
+                        {% endif %}
+                    </li>
+
+                    <!-- Mã dự phòng -->
+                    {% if tf_has_method %}
+                    <li class="list-group-item px-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <div>
+                            <div class="fw-semibold"><i class="fa-solid fa-life-ring me-2"></i>Mã dự phòng</div>
+                            <small class="{% if tf_backup_left <= 2 %}text-warning{% else %}text-muted{% endif %}">Còn {{ tf_backup_left }} mã dùng được - dùng khi mất điện thoại/khóa</small>
+                        </div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#tfPwModal"
+                                data-url="{% url 'smartlock:tf-backup-regenerate' %}" data-title="Tạo lại mã dự phòng" data-label="Tạo mã mới">Tạo mã mới</button>
+                    </li>
+                    {% endif %}
+                </ul>
             </div>
         </div>
     </div>
 </div>
+
+<!-- Modal nhập lại mật khẩu (dùng chung cho gỡ / tắt / tạo lại mã) -->
+<div class="modal fade" id="tfPwModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form method="post" class="modal-content" id="tfPwForm">
+            {% csrf_token %}
+            <div class="modal-header"><h6 class="modal-title" id="tfPwTitle">Xác nhận</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button></div>
+            <div class="modal-body">
+                <label class="form-label">Nhập lại mật khẩu để tiếp tục</label>
+                <input type="password" name="password" class="form-control" required autocomplete="current-password">
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
+                <button class="btn btn-danger" id="tfPwSubmit">Xác nhận</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if tf_totp_setup %}
+<!-- Modal thiết lập Google Authenticator -->
+<div class="modal fade" id="tfTotpModal" tabindex="-1" data-bs-backdrop="static" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header"><h6 class="modal-title">Thiết lập Google Authenticator</h6></div>
+            <div class="modal-body text-center">
+                <p class="small text-muted mb-2">1. Mở app Authenticator → thêm tài khoản → quét mã QR.</p>
+                <img src="{{ tf_totp_setup.qr }}" alt="QR" width="200" height="200" class="bg-white p-2 border rounded mb-2">
+                <p class="small text-muted mb-1">Không quét được? Nhập khóa thủ công:</p>
+                <code class="user-select-all d-block mb-3">{{ tf_totp_setup.secret }}</code>
+                <p class="small text-muted mb-2">2. Nhập mã 6 số app đang hiển thị để xác nhận.</p>
+                <form method="post" action="{% url 'smartlock:tf-totp-confirm' %}" class="d-flex gap-2 justify-content-center">{% csrf_token %}
+                    <input type="hidden" name="setup_token" value="{{ tf_totp_setup.token }}">
+                    <input type="text" name="code" class="form-control text-center" style="max-width:160px" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" autocomplete="one-time-code" required autofocus>
+                    <button class="btn btn-primary">Xác nhận</button>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <form method="post" action="{% url 'smartlock:tf-totp-cancel' %}">{% csrf_token %}<button class="btn btn-link text-muted">Hủy thiết lập</button></form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if tf_new_backup_codes %}
+<!-- Modal mã dự phòng (chỉ hiện 1 lần) -->
+<div class="modal fade" id="tfBackupModal" tabindex="-1" data-bs-backdrop="static" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header"><h6 class="modal-title"><i class="fa-solid fa-life-ring me-2"></i>Mã dự phòng của bạn</h6></div>
+            <div class="modal-body">
+                <div class="alert alert-warning py-2 small">Lưu các mã này ở nơi an toàn. Mỗi mã chỉ dùng <b>một lần</b> và <b>sẽ không hiển thị lại</b>.</div>
+                <pre id="tfBackupList" class="border rounded p-3 text-center fs-6 mb-0">{% for c in tf_new_backup_codes %}{{ c }}
+{% endfor %}</pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" id="tfBackupCopy"><i class="fa-regular fa-copy me-1"></i>Sao chép</button>
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Tôi đã lưu</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var csrf = (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
+
+    // --- modal nhập lại mật khẩu ---
+    var pw = document.getElementById('tfPwModal');
+    if (pw) pw.addEventListener('show.bs.modal', function (ev) {
+        var b = ev.relatedTarget; if (!b) return;
+        document.getElementById('tfPwForm').action = b.dataset.url;
+        document.getElementById('tfPwTitle').textContent = b.dataset.title || 'Xác nhận';
+        document.getElementById('tfPwSubmit').textContent = b.dataset.label || 'Xác nhận';
+        pw.querySelector('[name=password]').value = '';
+    });
+
+    // --- tự mở modal TOTP / mã dự phòng ---
+    ['tfTotpModal', 'tfBackupModal'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el && window.bootstrap) new bootstrap.Modal(el).show();
+    });
+    var cp = document.getElementById('tfBackupCopy');
+    if (cp) cp.addEventListener('click', function () {
+        navigator.clipboard.writeText(document.getElementById('tfBackupList').textContent.trim())
+            .then(function () { cp.textContent = 'Đã sao chép'; });
+    });
+
+    // --- đăng ký passkey (WebAuthn) ---
+    function b64uToBuf(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); s += '='.repeat((4 - s.length % 4) % 4);
+        var bin = atob(s), b = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return b.buffer; }
+    function bufToB64u(buf) { var b = new Uint8Array(buf), s = ''; for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+        return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+
+    var add = document.getElementById('tfPasskeyAdd'), msg = document.getElementById('tfPasskeyMsg');
+    if (add) add.addEventListener('click', async function () {
+        msg.textContent = '';
+        if (!window.PublicKeyCredential) { msg.textContent = 'Trình duyệt không hỗ trợ passkey/WebAuthn.'; return; }
+        add.disabled = true;
+        try {
+            var r = await fetch("{% url 'smartlock:tf-passkey-options' %}", { method: 'POST', headers: { 'X-CSRFToken': csrf }, credentials: 'same-origin' });
+            if (!r.ok) throw new Error('Không lấy được tùy chọn đăng ký.');
+            var o = await r.json();
+            o.challenge = b64uToBuf(o.challenge);
+            o.user.id = b64uToBuf(o.user.id);
+            (o.excludeCredentials || []).forEach(function (c) { c.id = b64uToBuf(c.id); });
+            var cred = await navigator.credentials.create({ publicKey: o });
+            var payload = {
+                name: document.getElementById('tfPasskeyName').value,
+                transports: cred.response.getTransports ? cred.response.getTransports() : [],
+                credential: {
+                    id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+                    authenticatorAttachment: cred.authenticatorAttachment || null,
+                    response: { clientDataJSON: bufToB64u(cred.response.clientDataJSON), attestationObject: bufToB64u(cred.response.attestationObject) },
+                    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {}
+                }
+            };
+            var r2 = await fetch("{% url 'smartlock:tf-passkey-register' %}", { method: 'POST', credentials: 'same-origin',
+                headers: { 'X-CSRFToken': csrf, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            var d = await r2.json();
+            if (!d.ok) throw new Error(d.error || 'Đăng ký passkey thất bại.');
+            location.reload();
+        } catch (e) {
+            msg.textContent = (e && e.name === 'NotAllowedError') ? 'Đã hủy hoặc hết thời gian chờ.' : (e.message || 'Đăng ký passkey thất bại.');
+            add.disabled = false;
+        }
+    });
+});
+</script>
 {% endblock %}

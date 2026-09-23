@@ -1,0 +1,48 @@
+{% extends 'manage_sys/base.html' %}
+{% block title %}Lượt đăng nhập{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h4 class="mb-0"><i class="bi bi-journal-text"></i> Lượt đăng nhập</h4>
+    <ul class="nav nav-pills">
+        <li class="nav-item"><a class="nav-link" href="{% url 'manage_sys:logs' %}">Audit log</a></li>
+        <li class="nav-item"><a class="nav-link active" href="{% url 'manage_sys:login-attempts' %}">Lượt đăng nhập</a></li>
+    </ul>
+</div>
+
+<form method="get" class="row g-2 mb-3">
+    <div class="col-md-5"><input type="search" name="q" value="{{ q }}" class="form-control" placeholder="Email/username thử đăng nhập hoặc IP..."></div>
+    <div class="col-md-2">
+        <select name="status" class="form-select">
+            <option value="">Mọi kết quả</option>
+            <option value="ok" {% if status == 'ok' %}selected{% endif %}>Thành công</option>
+            <option value="fail" {% if status == 'fail' %}selected{% endif %}>Thất bại</option>
+        </select>
+    </div>
+    <div class="col-auto"><button class="btn btn-primary"><i class="bi bi-search"></i> Lọc</button> <a href="{% url 'manage_sys:login-attempts' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+</form>
+
+<p class="small text-muted">Lượt đăng nhập qua trang quản trị có tiền tố <span class="mono">[manage]</span>.</p>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover table-sm mb-0">
+            <thead><tr><th>Thời gian</th><th>Định danh thử</th><th>Tài khoản khớp</th><th>IP</th><th>Trình duyệt</th><th>KQ</th></tr></thead>
+            <tbody>
+            {% for a in page_obj %}
+                <tr>
+                    <td class="text-nowrap">{{ a.created_at|date:"d/m/Y H:i:s" }}</td>
+                    <td>{{ a.identifier }}</td>
+                    <td>{% if a.user %}<a href="{% url 'manage_sys:user-detail' a.user.id %}">{{ a.user.email }}</a>{% else %}—{% endif %}</td>
+                    <td class="mono">{{ a.ip_address }}</td>
+                    <td class="small text-muted">{{ a.user_agent|default:"—"|truncatechars:50 }}</td>
+                    <td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="6" class="text-center py-4 text-muted">Không có dữ liệu</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% include 'manage_sys/_pagination.html' %}
+{% endblock %}

@@ -9,6 +9,8 @@ from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
 import uuid
 import os
+import hmac
+import hashlib
 from cryptography.fernet import Fernet
 
 
@@ -21,6 +23,18 @@ if not FERNET_KEY:
     )
 
 fernet = Fernet(FERNET_KEY.encode())
+
+# Pepper riêng cho hash mã chia sẻ 6 số. Nếu chưa khai báo, tạm dùng FERNET_KEY để không
+# crash, nhưng nên set SHARE_CODE_PEPPER riêng trong .env để tách biệt 2 loại secret.
+SHARE_CODE_PEPPER = os.environ.get('SHARE_CODE_PEPPER')
+if not SHARE_CODE_PEPPER:
+    import warnings
+    warnings.warn(
+        "SHARE_CODE_PEPPER chưa được khai báo trong .env, đang tạm dùng chung FERNET_KEY làm pepper. "
+        "Nên set SHARE_CODE_PEPPER riêng cho production.",
+        RuntimeWarning,
+    )
+    SHARE_CODE_PEPPER = FERNET_KEY
 
 
 def default_lockout_stage_minutes():
@@ -187,7 +201,14 @@ class Device(models.Model):
     name = models.CharField(max_length=100)
     mac_address = models.CharField(max_length=17, blank=True, null=True)
     firmware_version = models.CharField(max_length=30, blank=True, null=True)
-    status = models.CharField(max_length=20, default='provisioning', choices=[('online', 'Online'), ('offline', 'Offline'), ('maintenance', 'Maintenance'), ('provisioning', 'Provisioning')])
+    status = models.CharField(
+        max_length=20, default='provisioning',
+        choices=[
+            ('online', 'Online'), ('offline', 'Offline'), ('maintenance', 'Maintenance'),
+            ('provisioning', 'Provisioning'),
+            ('revoked', 'Revoked (đã factory reset, chờ gán chủ mới)'),
+        ]
+    )
     battery_level = models.IntegerField(default=100, validators=[MinValueValidator(0), MaxValueValidator(100)])
     location = models.CharField(max_length=255, blank=True, null=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
@@ -197,16 +218,30 @@ class Device(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Các trạng thái hợp lệ để KHÔNG có owner (thiết bị chưa/không còn gán cho ai).
+    NO_OWNER_STATUSES = ('provisioning', 'revoked')
+
     class Meta:
         constraints = [
             models.CheckConstraint(
                 check=(
-                    models.Q(status='provisioning', owner__isnull=True) |
-                    (~models.Q(status='provisioning') & models.Q(owner__isnull=False))
+                    models.Q(status__in=('provisioning', 'revoked'), owner__isnull=True) |
+                    (~models.Q(status__in=('provisioning', 'revoked')) & models.Q(owner__isnull=False))
                 ),
                 name='chk_devices_owner_vs_status'
             )
         ]
+
+    def factory_reset(self, save=True):
+        """
+        Đưa thiết bị về trạng thái xuất xưởng: status='revoked' + owner=None CÙNG LÚC.
+        Dùng hàm này thay vì set tay 2 field riêng lẻ ở view, để không còn xảy ra
+        trường hợp quên set owner=None khi đổi status -> vi phạm chk_devices_owner_vs_status.
+        """
+        self.status = 'revoked'
+        self.owner = None
+        if save:
+            self.save(update_fields=['status', 'owner', 'updated_at'])
 
 
 class DeviceStatusLog(models.Model):
@@ -282,26 +317,52 @@ class DeviceAccess(models.Model):
         ]
 
 
+def _hash_share_code(plain_6_digit_code: str) -> str:
+    """
+    SHA-256(pepper + mã 6 số) dạng hex. Dùng để tra cứu trực tiếp bằng SQL Index
+    (ShareAccessCode.objects.filter(code_hash=...)) thay vì phải load toàn bộ mã
+    đang hoạt động vào Python rồi giải mã đối xứng (Fernet) từng bản ghi trong vòng lặp -
+    cách cũ vừa lộ logic dò vét cạn, vừa tăng tải CPU khi số mã chia sẻ tăng lên.
+    Một chiều nên không cần lo lộ mã gốc nếu lộ DB, giống cách xử lý mật khẩu/OTP.
+    """
+    return hashlib.sha256(f'{SHARE_CODE_PEPPER}:{plain_6_digit_code}'.encode()).hexdigest()
+
+
 class ShareAccessCode(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name='share_codes')
     created_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='created_sharecodes')
     permissions = models.ManyToManyField(Permission, blank=True, related_name='share_codes')
-    code_encrypted = models.CharField(max_length=255)
+    code_hash = models.CharField(max_length=64, db_index=True)
     expires_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=['device', 'expires_at'], name='idx_sharecode_dev_exp')]
+        indexes = [
+            models.Index(fields=['device', 'expires_at'], name='idx_sharecode_dev_exp'),
+            models.Index(fields=['code_hash', 'expires_at'], name='idx_sharecode_hash_exp'),
+        ]
 
     def set_code(self, plain_6_digit_code: str):
-        self.code_encrypted = fernet.encrypt(plain_6_digit_code.encode()).decode()
+        self.code_hash = _hash_share_code(plain_6_digit_code)
 
     def check_code(self, plain_6_digit_code: str) -> bool:
-        try:
-            return fernet.decrypt(self.code_encrypted.encode()).decode() == plain_6_digit_code
-        except Exception:
-            return False
+        return hmac.compare_digest(self.code_hash, _hash_share_code(plain_6_digit_code))
+
+    @classmethod
+    def is_code_taken(cls, plain_6_digit_code: str) -> bool:
+        """Dùng khi sinh mã mới: có mã nào đang còn hạn trùng giá trị này không."""
+        return cls.objects.filter(
+            code_hash=_hash_share_code(plain_6_digit_code), expires_at__gt=timezone.now()
+        ).exists()
+
+    @classmethod
+    def find_active_by_code(cls, plain_6_digit_code: str):
+        """Tra cứu O(1) qua SQL Index trên code_hash - thay cho vòng lặp giải mã Fernet cũ."""
+        return (cls.objects
+                .filter(code_hash=_hash_share_code(plain_6_digit_code), expires_at__gt=timezone.now())
+                .select_related('device')
+                .first())
 
 
 # ==================== NHÓM D: NFC READER & THẺ TỪ ====================
@@ -316,7 +377,6 @@ class NfcReader(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         indexes = [models.Index(fields=['device', 'created_at'], name='idx_nfcreader_dev_time')]
-        #indexes = [models.Index(fields=['user', 'is_active'], name='idx_accesscard_user_active')]
 
 
 class NfcReaderConfig(models.Model):

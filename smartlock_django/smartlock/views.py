@@ -37,6 +37,7 @@ from django.utils.http import (
     url_has_allowed_host_and_scheme, urlsafe_base64_decode, urlsafe_base64_encode,
 )
 from django.views.decorators.http import require_http_methods, require_POST
+from django.views.decorators.csrf import csrf_exempt
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -61,6 +62,7 @@ from .models import (
     ShareAccessCode, SupportRequest, SystemSettings, TwoFactorBackupCode, TwoFactorConfig,
     TwoFactorEmailCode, User, fernet, sync_two_fa_flag,
 )
+from .mqtt_client import publish_command, MqttPublishError
 
 logger = logging.getLogger('smartlock.views')
 
@@ -213,10 +215,9 @@ def _ensure_default_permissions():
 
 def _unique_share_plain():
     """Mã 6 số không trùng với mã đang còn hạn nào khác (tránh cấp nhầm thiết bị)."""
-    active = list(ShareAccessCode.objects.filter(expires_at__gt=timezone.now()))
     for _ in range(20):
         plain = f'{secrets.randbelow(10 ** 6):06d}'
-        if not any(c.check_code(plain) for c in active):
+        if not ShareAccessCode.is_code_taken(plain):
             return plain
     return None
 
@@ -263,6 +264,13 @@ def _reset_lockout(user):
     LoginLockout.objects.filter(user=user).update(
         failed_attempts=0, stage=0, locked_until=None,
     )
+
+def _ensure_sync_key(request):
+    """Cấp (mỗi lần login mới) một khoá ngẫu nhiên gắn với session hiện tại. Client dùng khoá
+    này để suy ra (HKDF) AES key mã hoá cache dashboard lưu trong IndexedDB của trình duyệt.
+    Vì khoá đổi mỗi khi có session mới và bị xoá khi logout (Django logout() flush session),
+    cache cũ mã hoá bằng khoá cũ vĩnh viễn không đọc được nữa dù còn sót lại trong IndexedDB."""
+    request.session['sync_key'] = secrets.token_urlsafe(32)
 
 def _send_verification(request, user):
     st = _settings()
@@ -357,6 +365,7 @@ def login_view(request):
 
         _reset_lockout(auth_user)
         login(request, auth_user)
+        _ensure_sync_key(request)
         request.session.set_expiry(_settings().session_timeout_hours * 3600)
         _audit(request, 'LOGIN', actor=auth_user)
         messages.success(request, 'Đăng nhập thành công!')
@@ -611,6 +620,64 @@ def dashboard(request):
     return render(request, 'account/base/dashboard.html', context)
 
 
+# ====================== SYNC: bootstrap toàn bộ dữ liệu dashboard cho client cache ======================
+@auth_required
+def sync_bootstrap(request):
+    """Trả JSON gộp mọi thứ user thấy trên dashboard - client mã hoá (AES-GCM, khoá suy ra từ
+    session hiện tại, xem _ensure_sync_key) rồi lưu vào IndexedDB để tải nhanh + auto refresh
+    nền. KHÔNG cấp thêm quyền xem dữ liệu nào ngoài những gì các view khác đã cho phép."""
+    user = request.user
+    devices = list(_accessible_devices(user).order_by('name'))
+    device_ids = [d.id for d in devices]
+
+    # Lấy log trạng thái mới nhất mỗi thiết bị mà không phụ thuộc tính năng riêng của DB
+    # (DISTINCT ON chỉ có ở Postgres): quét 500 log gần nhất toàn bộ rồi giữ bản đầu tiên
+    # gặp cho mỗi device - đủ dùng ở quy mô thiết bị cá nhân/hộ gia đình của app này.
+    last_logs = {}
+    for log in DeviceStatusLog.objects.filter(device_id__in=device_ids).order_by('-recorded_at')[:500]:
+        last_logs.setdefault(log.device_id, log)
+
+    devices_json = [{
+        'id': str(d.id), 'name': d.name, 'device_code': d.device_code,
+        'status': d.status, 'status_display': d.get_status_display(),
+        'battery_level': d.battery_level,
+        'lock_state': (last_logs[d.id].lock_state if d.id in last_logs else 'unknown'),
+        'location': d.location or '', 'is_owner': d.owner_id == user.id,
+        'updated_at': d.updated_at.isoformat(),
+    } for d in devices]
+
+    notifications_json = [{
+        'id': str(n.id), 'title': n.title, 'message': n.message, 'severity': n.severity,
+        'is_read': n.is_read, 'created_at': n.created_at.isoformat(),
+        'device_id': str(n.device_id) if n.device_id else None,
+    } for n in Notification.objects.filter(user=user).order_by('-created_at')[:20]]
+
+    logs_json = [{
+        'id': str(l.id), 'action': l.action, 'device': l.device.name if l.device_id else None,
+        'success': l.success, 'severity': l.severity, 'created_at': l.created_at.isoformat(),
+    } for l in _visible_logs(user).select_related('device').order_by('-created_at')[:20]]
+
+    owned_ids = {d.id for d in devices if d.owner_id == user.id}
+    accesses_json = [{
+        'id': str(a.id), 'device_id': str(a.device_id), 'user': a.user.username,
+        'permissions': [p.code for p in a.permissions.all()],
+        'expires_at': a.expires_at.isoformat() if a.expires_at else None,
+    } for a in (DeviceAccess.objects.filter(device_id__in=owned_ids, is_active=True)
+                .select_related('user').prefetch_related('permissions'))] if owned_ids else []
+
+    data = {
+        'generated_at': timezone.now().isoformat(),
+        'unread_count': Notification.objects.filter(user=user, is_read=False).count(),
+        'devices': devices_json,
+        'notifications': notifications_json,
+        'recent_logs': logs_json,
+        'accesses': accesses_json,
+    }
+    response = JsonResponse(data)
+    response['Cache-Control'] = 'no-store'  # dữ liệu nhạy cảm, không cho trình duyệt/proxy cache thô ngoài IndexedDB đã mã hoá
+    return response
+
+
 # ====================== DEVICES ======================
 @auth_required
 def device_add(request):
@@ -736,10 +803,58 @@ def device_command(request, device_id):
         command_token_hash=_hash_token(secrets.token_urlsafe(32)),
         expires_at=now + timedelta(seconds=COMMAND_TTL_SECONDS),
     )
+
+    # Bắn lệnh xuống thiết bị thật qua MQTT. Trước đây bước này KHÔNG tồn tại - lệnh chỉ
+    # nằm trong DB ở trạng thái 'pending' mãi mãi trong khi UI vẫn báo "đã gửi lệnh".
+    try:
+        publish_command(device.device_code, {
+            'command_id': str(cmd.id),
+            'command': command,
+            'token': cmd.command_token_hash,   # thiết bị gửi lại đúng hash này khi ack để đối chiếu
+        })
+        cmd.status = 'sent'
+        cmd.save(update_fields=['status'])
+    except MqttPublishError as e:
+        cmd.status = 'failed'
+        cmd.save(update_fields=['status'])
+        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
+               metadata={'reason': 'mqtt_publish_failed', 'error': str(e)[:200]})
+        return JsonResponse({'ok': False, 'message': 'Không kết nối được tới thiết bị. Vui lòng thử lại.'}, status=502)
+
     _audit(request, f'CMD_{command}', device=device, metadata={'command_id': str(cmd.id)})
     labels = {'LOCK': 'Khóa', 'UNLOCK': 'Mở khóa', 'REBOOT': 'Khởi động lại'}
     return JsonResponse({'ok': True, 'command_id': str(cmd.id),
                          'message': f'Đã gửi lệnh {labels.get(command, command)} tới "{device.name}".'})
+
+
+# ====================== MQTT: WEBHOOK XÁC THỰC THIẾT BỊ (gọi bởi plugin auth của broker) ======================
+@csrf_exempt
+@require_POST
+def mqtt_auth_webhook(request):
+    """
+    Endpoint cho plugin HTTP-auth của broker (vd. mosquitto-go-auth) gọi vào để kiểm
+    tra 1 thiết bị có được phép kết nối/publish/subscribe hay không.
+
+    Thiết bị connect vào broker với username=device_code, password=provisioning_secret
+    (secret gốc thiết bị đã lưu lúc provisioning - KHÔNG lưu thêm secret riêng cho MQTT,
+    tái dùng đúng Device.provisioning_secret_hash đã có).
+
+    Trả 200 = cho phép, 401/403 = từ chối. KHÔNG dùng @auth_required (đây không phải
+    người dùng đăng nhập) và bỏ qua CSRF (broker gọi server-to-server, không có session).
+    Cần chặn endpoint này ở tầng mạng/tường lửa chỉ cho phép broker gọi vào, không public.
+    """
+    username = (request.POST.get('username') or '').strip()
+    password = request.POST.get('password') or ''
+    if not username or not password:
+        return JsonResponse({'ok': False}, status=401)
+
+    device = Device.objects.filter(device_code=username).first()
+    if not device or not hmac.compare_digest(device.provisioning_secret_hash, _hash_token(password)):
+        _audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
+               username_attempt=username[:150])
+        return JsonResponse({'ok': False}, status=401)
+
+    return JsonResponse({'ok': True})
 
 
 # ====================== NFC ======================
@@ -920,10 +1035,9 @@ def share_codes(request):
     codes = list(ShareAccessCode.objects.filter(device__owner=user)
                  .select_related('device').prefetch_related('permissions').order_by('-created_at'))
     for c in codes:
-        try:
-            c.plain = fernet.decrypt(c.code_encrypted.encode()).decode()
-        except Exception:
-            c.plain = '------'
+        # Mã lưu dạng hash 1 chiều nên không thể "giải mã" lại để hiển thị.
+        # Mã gốc chỉ hiện đúng 1 lần trong thông báo ngay lúc tạo (xem nhánh action == 'create' ở trên).
+        c.plain = '••••••'
         c.is_expired = c.expires_at <= now
 
     context = {
@@ -954,10 +1068,7 @@ def share_request(request):
 
         match = None
         if len(plain) == 6:
-            for c in ShareAccessCode.objects.filter(expires_at__gt=now).select_related('device'):
-                if c.check_code(plain):
-                    match = c
-                    break
+            match = ShareAccessCode.find_active_by_code(plain)
 
         if not match:
             _audit(request, 'SHARE_CODE_REDEEM_FAILED', success=False, severity='warning')
@@ -1628,6 +1739,7 @@ def _complete(request, p, user, method):
     if purpose == 'login':
         _reset_lockout(user)
         login(request, user, backend=p.get('backend') or DEFAULT_BACKEND)
+        _ensure_sync_key(request)
         request.session.set_expiry(_settings().session_timeout_hours * 3600)
         _audit(request, 'LOGIN', actor=user, metadata={'two_factor': method})
         messages.success(request, 'Đăng nhập thành công!')
@@ -1637,20 +1749,7 @@ def _complete(request, p, user, method):
         return reverse('smartlock:dashboard')
 
     cfg = _get_cfg(user)
-    if purpose == 'enable':
-        if not cfg.available_methods():
-            messages.error(request, 'Chưa có phương thức 2FA nào để bật.')
-            return reverse('smartlock:profile')
-        was_enabled = user.two_fa_enabled
-        sync_two_fa_flag(user)
-        if not was_enabled:
-            cfg.enabled_at = timezone.now()
-            cfg.save(update_fields=['enabled_at', 'updated_at'])
-            _audit(request, 'TWO_FACTOR_ENABLED', target_user=user, severity='warning', metadata={'method': method})
-            _notify(user, 'Đã bật xác thực 2 lớp', 'Tài khoản của bạn giờ được bảo vệ bằng 2FA.',
-                    severity='info', type_='SECURITY')
-        messages.success(request, 'Đã bật xác thực 2 lớp.')
-    elif purpose == 'disable':
+    if purpose == 'disable':
         # 2FA giờ luôn = "còn phương thức nào đang hoạt động không", không set tay được nữa.
         # Muốn tắt hẳn, user phải gỡ hết TOTP/Passkey/Email OTP (mỗi lần gỡ sẽ tự đồng bộ lại cờ này).
         messages.info(request, 'Xác thực 2 lớp được bật/tắt tự động theo phương thức bạn đang có. '
@@ -1809,15 +1908,27 @@ def cancel_2fa(request):
 @auth_required
 @require_POST
 def enable_2fa(request):
-    cfg = _get_cfg(request.user)
-    if request.user.two_fa_enabled:
+    user = request.user
+    cfg = _get_cfg(user)
+    if user.two_fa_enabled:
         messages.info(request, '2FA đã được bật.')
         return redirect('smartlock:profile')
     if not cfg.available_methods():
         messages.error(request, 'Hãy thiết lập ít nhất một phương thức trước khi bật 2FA.')
         return redirect('smartlock:profile')
-    _start_pending(request, request.user, 'enable')
-    return redirect('smartlock:tf-verify')
+    # Bật thẳng, không tạo phiên pending 'enable': user đã chứng minh sở hữu phương thức
+    # ngay lúc xác nhận nó (totp_confirm / email_confirm / passkey_register), và
+    # _after_method_added() đã tự sync cờ two_fa_enabled=True ngay sau đó rồi - nghĩa là
+    # nhánh "if user.two_fa_enabled" phía trên luôn đúng trước khi tới được đây, nên phiên
+    # pending 'enable' cũ không bao giờ thực sự chạy tới.
+    sync_two_fa_flag(user)
+    cfg.enabled_at = timezone.now()
+    cfg.save(update_fields=['enabled_at', 'updated_at'])
+    _audit(request, 'TWO_FACTOR_ENABLED', target_user=user, severity='warning')
+    _notify(user, 'Đã bật xác thực 2 lớp', 'Tài khoản của bạn giờ được bảo vệ bằng 2FA.',
+            severity='info', type_='SECURITY')
+    messages.success(request, 'Đã bật xác thực 2 lớp.')
+    return redirect('smartlock:profile')
 
 
 @auth_required

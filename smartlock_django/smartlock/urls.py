@@ -19,6 +19,12 @@ urlpatterns = [
     path('devices/add/', views.device_add, name='device-add'),
     path('devices/<uuid:device_id>/command/', views.device_command, name='device-command'),
 
+    # ====================== SYNC: cache mã hoá về máy sau login ======================
+    path('api/sync/', views.sync_bootstrap, name='sync-bootstrap'),
+
+    # ====================== MQTT (server-to-server, không phải route cho người dùng) ======================
+    path('api/mqtt/auth/', views.mqtt_auth_webhook, name='mqtt-auth'),
+
     path('nfc/tags/', views.nfc_tags, name='nfc-tags'),
     path('nfc/reader/', views.nfc_reader, name='nfc-reader'),
 

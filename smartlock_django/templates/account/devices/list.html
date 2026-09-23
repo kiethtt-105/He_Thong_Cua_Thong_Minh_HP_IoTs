@@ -31,10 +31,8 @@
         {% csrf_token %}
         <div class="modal-header"><h5 class="modal-title">Thêm thiết bị mới</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body">
-            <p class="text-muted small">Nhập mã thiết bị và mã bí mật in trên hộp/thiết bị.</p>
-            <div class="mb-3"><label class="form-label">Mã thiết bị</label><input type="text" name="device_code" class="form-control" required></div>
-            <div class="mb-3"><label class="form-label">Mã bí mật</label><input type="password" name="secret" class="form-control" required autocomplete="off"></div>
-            <div class="mb-1"><label class="form-label">Tên hiển thị (không bắt buộc)</label><input type="text" name="name" class="form-control" maxlength="100"></div>
+            <p class="text-muted small">Hệ thống sẽ tự sinh mã thiết bị và mã bí mật (provisioning secret) — hiển thị đúng một lần ngay sau khi tạo, hãy lưu lại để cấu hình thiết bị thật.</p>
+            <div class="mb-1"><label class="form-label">Tên hiển thị</label><input type="text" name="name" class="form-control" required maxlength="100"></div>
         </div>
         <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button><button class="btn btn-primary">Thêm thiết bị</button></div>
     </form>

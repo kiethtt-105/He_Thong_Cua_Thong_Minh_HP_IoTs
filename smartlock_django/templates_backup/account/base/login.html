@@ -1,57 +1,35 @@
-{% load static %}
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Đăng nhập Smart Lock</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
-    <style>
-        body { background: linear-gradient(135deg, #0d6efd, #6610f2); }
-        .card { border: none; box-shadow: 0 20px 40px rgba(0,0,0,0.15); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-        .card:hover { transform: translateY(-8px); box-shadow: 0 25px 50px rgba(0,0,0,0.25); }
-        .input-group { transition: all 0.3s ease; }
-        .input-group:focus-within { transform: scale(1.02); box-shadow: 0 0 0 4px rgba(13, 110, 253, 0.2); }
-        .btn-primary { transition: all 0.3s ease; }
-        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(13, 110, 253, 0.3); }
-        .icon-lock { animation: pulse 2s infinite; }
-        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
-    </style>
-</head>
-<body>
-    <div class="container py-5">
-        <div class="row justify-content-center">
-            <div class="col-md-5">
-                <div class="card text-center">
-                    <div class="card-body p-5">
-                        <i class="fa-solid fa-lock fa-5x text-primary mb-4 icon-lock"></i>
-                        <h2 class="fw-bold mb-2">Smart Lock</h2>
-                        <p class="text-muted">Đăng nhập để tiếp tục</p>
-                        {% if messages %}
-                            {% for message in messages %}<div class="alert alert-{{ message.tags }}">{{ message }}</div>{% endfor %}
-                        {% endif %}
-                        <form method="post">
-                            {% csrf_token %}
-                            <div class="input-group mb-3">
-                                <span class="input-group-text"><i class="fa-solid fa-envelope"></i></span>
-                                <input type="email" name="email" class="form-control" placeholder="Email" required>
-                            </div>
-                            <div class="input-group mb-4">
-                                <span class="input-group-text"><i class="fa-solid fa-lock"></i></span>
-                                <input type="password" name="password" class="form-control" placeholder="Mật khẩu" required>
-                            </div>
-                            <button type="submit" class="btn btn-primary w-100 py-3">Đăng nhập</button>
-                        </form>
-                        <div class="mt-4">
-                            <a href="{% url 'smartlock:register' %}" class="text-decoration-none">Chưa có tài khoản? Đăng ký ngay</a><br>
-                            <a href="{% url 'smartlock:password_reset' %}" class="text-decoration-none">Quên mật khẩu?</a>
-                        </div>
-                    </div>
-                </div>
-            </div>
+{% extends 'account/base/layout.html' %}
+{% block title %}Đăng nhập{% endblock %}
+{% block shell %}
+<div class="auth-bg"><div class="container py-4">
+    <div class="card auth-card mx-auto"><div class="card-body p-4 p-md-5">
+        <div class="text-center mb-4">
+            <div class="brand-icon mx-auto mb-3"><i class="fa-solid fa-lock"></i></div>
+            <h3 class="fw-bold mb-1">Smart Lock</h3>
+            <p class="text-muted mb-0">Bảo vệ khóa thông minh của bạn</p>
         </div>
-    </div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
+        {% for m in messages %}<div class="alert alert-{% if m.tags == 'error' %}danger{% else %}{{ m.tags }}{% endif %}">{{ m }}</div>{% endfor %}
+
+        <form id="login-form" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ next }}">
+            <div class="input-group mb-3">
+                <span class="input-group-text"><i class="fa-solid fa-user"></i></span>
+                <input type="text" name="identifier" class="form-control" placeholder="Email hoặc tên đăng nhập"
+                       required autofocus autocomplete="username">
+            </div>
+            <div class="input-group mb-4">
+                <span class="input-group-text"><i class="fa-solid fa-key"></i></span>
+                <input type="password" name="password" class="form-control" placeholder="Mật khẩu"
+                       required autocomplete="current-password">
+            </div>
+            <button type="submit" class="btn btn-primary w-100 py-2">Đăng nhập</button>
+        </form>
+
+        <div class="d-flex justify-content-between mt-4 small">
+            <a href="{% url 'smartlock:password_reset' %}" class="text-decoration-none">Quên mật khẩu?</a>
+            <a href="{% url 'smartlock:register' %}" class="text-decoration-none">Đăng ký</a>
+        </div>
+    </div></div>
+</div></div>
+{% endblock %}

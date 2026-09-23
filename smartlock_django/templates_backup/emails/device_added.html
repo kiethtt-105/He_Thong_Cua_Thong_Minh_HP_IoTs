@@ -1,0 +1,30 @@
+{% extends "emails/base_email.html" %}
+{% block title %}Thiết bị mới{% endblock %}
+{% block preheader %}Thiết bị {{ device_name }} đã được thêm vào tài khoản của bạn.{% endblock %}
+{% block heading %}Thiết bị mới đã được thêm{% endblock %}
+{% block content %}
+<p class="t" style="margin:0 0 14px 0;font-size:16px;line-height:26px;color:#1e293b;">Xin chào <strong>{{ full_name }}</strong>,</p>
+<p class="t" style="margin:0 0 22px 0;font-size:16px;line-height:26px;color:#1e293b;">Quản trị viên vừa thêm một thiết bị vào tài khoản của bạn. Bạn có thể truy cập ngay để điều khiển.</p>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="box" style="margin:0 0 26px 0;background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
+  <tr>
+    <td class="m" style="padding:14px 18px;width:38%;font-size:14px;color:#64748b;border-bottom:1px solid #e2e8f0;">Tên thiết bị</td>
+    <td class="t" style="padding:14px 18px;font-size:15px;font-weight:600;color:#0f172a;border-bottom:1px solid #e2e8f0;">{{ device_name }}</td>
+  </tr>
+  <tr>
+    <td class="m" style="padding:14px 18px;font-size:14px;color:#64748b;">Mã thiết bị</td>
+    <td class="t" style="padding:14px 18px;font-size:15px;font-weight:600;color:#0f172a;font-family:Consolas,'Courier New',monospace;">{{ device_code }}</td>
+  </tr>
+</table>
+
+{% if action_url %}
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px 0;"><tr>
+  <td align="center" bgcolor="#2563eb" style="border-radius:10px;background-color:#2563eb;">
+    <a href="{{ action_url }}" target="_blank" style="display:inline-block;padding:15px 34px;font-size:16px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:10px;">Mở bảng điều khiển</a>
+  </td>
+</tr></table>
+{% endif %}
+
+<hr class="hr" style="border:0;border-top:1px solid #e2e8f0;margin:0 0 20px 0;">
+<p class="m" style="margin:0;font-size:13px;line-height:20px;color:#64748b;">Nếu bạn không nhận ra thiết bị này, hãy liên hệ quản trị viên.</p>
+{% endblock %}
