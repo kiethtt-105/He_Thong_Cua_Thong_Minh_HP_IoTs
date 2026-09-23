@@ -59,7 +59,7 @@ from .models import (
     DeviceCommand, DeviceStatusLog, EmailVerificationToken, Fido2Credential, LoginAttemptLog,
     LoginLockout, NfcLog, NfcReader, NfcReaderConfig, Notification, Permission,
     ShareAccessCode, SupportRequest, SystemSettings, TwoFactorBackupCode, TwoFactorConfig,
-    TwoFactorEmailCode, User, fernet,
+    TwoFactorEmailCode, User, fernet, sync_two_fa_flag,
 )
 
 logger = logging.getLogger('smartlock.views')
@@ -348,8 +348,7 @@ def login_view(request):
         # ---- 2FA: mật khẩu đúng nhưng chưa đăng nhập, chuyển sang bước xác thực 2 lớp ----
         # Chưa reset lockout ở đây (chỉ reset sau khi qua bước 2) để không thể
         # "đăng nhập lại bằng mật khẩu" nhằm xóa bộ đếm rồi dò tiếp mã 2FA.
-        tf = TwoFactorConfig.objects.filter(user=auth_user, is_enabled=True).first()
-        if tf and tf.available_methods():
+        if auth_user.two_fa_enabled:
             request.session.cycle_key()
             _start_pending(request, auth_user, 'login',
                            backend=getattr(auth_user, 'backend', ''), next_url=next_url)
@@ -1642,20 +1641,21 @@ def _complete(request, p, user, method):
         if not cfg.available_methods():
             messages.error(request, 'Chưa có phương thức 2FA nào để bật.')
             return reverse('smartlock:profile')
-        cfg.is_enabled = True
-        cfg.enabled_at = timezone.now()
-        cfg.save(update_fields=['is_enabled', 'enabled_at', 'updated_at'])
-        _audit(request, 'TWO_FACTOR_ENABLED', target_user=user, severity='warning', metadata={'method': method})
-        _notify(user, 'Đã bật xác thực 2 lớp', 'Tài khoản của bạn giờ được bảo vệ bằng 2FA.',
-                severity='info', type_='SECURITY')
+        was_enabled = user.two_fa_enabled
+        sync_two_fa_flag(user)
+        if not was_enabled:
+            cfg.enabled_at = timezone.now()
+            cfg.save(update_fields=['enabled_at', 'updated_at'])
+            _audit(request, 'TWO_FACTOR_ENABLED', target_user=user, severity='warning', metadata={'method': method})
+            _notify(user, 'Đã bật xác thực 2 lớp', 'Tài khoản của bạn giờ được bảo vệ bằng 2FA.',
+                    severity='info', type_='SECURITY')
         messages.success(request, 'Đã bật xác thực 2 lớp.')
     elif purpose == 'disable':
-        cfg.is_enabled = False
-        cfg.save(update_fields=['is_enabled', 'updated_at'])
-        _audit(request, 'TWO_FACTOR_DISABLED', target_user=user, severity='warning', metadata={'method': method})
-        _notify(user, 'Đã tắt xác thực 2 lớp', 'Xác thực 2 lớp của tài khoản vừa được tắt. '
-                'Nếu không phải bạn, hãy đổi mật khẩu ngay.', severity='warning', type_='SECURITY')
-        messages.success(request, 'Đã tắt xác thực 2 lớp.')
+        # 2FA giờ luôn = "còn phương thức nào đang hoạt động không", không set tay được nữa.
+        # Muốn tắt hẳn, user phải gỡ hết TOTP/Passkey/Email OTP (mỗi lần gỡ sẽ tự đồng bộ lại cờ này).
+        messages.info(request, 'Xác thực 2 lớp được bật/tắt tự động theo phương thức bạn đang có. '
+                                'Hãy gỡ hết các phương thức (Google Authenticator, Passkey, Email OTP) '
+                                'ở mục bên dưới nếu muốn tắt hoàn toàn 2FA.')
     return reverse('smartlock:profile')
 
 
@@ -1810,7 +1810,7 @@ def cancel_2fa(request):
 @require_POST
 def enable_2fa(request):
     cfg = _get_cfg(request.user)
-    if cfg.is_enabled:
+    if request.user.two_fa_enabled:
         messages.info(request, '2FA đã được bật.')
         return redirect('smartlock:profile')
     if not cfg.available_methods():
@@ -1823,8 +1823,7 @@ def enable_2fa(request):
 @auth_required
 @require_POST
 def disable_2fa(request):
-    cfg = _get_cfg(request.user)
-    if not cfg.is_enabled:
+    if not request.user.two_fa_enabled:
         return redirect('smartlock:profile')
     if not _require_password(request):
         return redirect('smartlock:profile')
@@ -1921,14 +1920,14 @@ def _after_method_added(request, user, method):
         request.session['new_backup_codes'] = _new_backup_codes(user)
     # Phương thức ĐẦU TIÊN vừa xác nhận xong -> tự bật 2FA luôn (user đã chứng minh sở hữu phương thức).
     cfg = _get_cfg(user)
-    auto = False
-    if not cfg.is_enabled and len(cfg.available_methods()) == 1:
-        cfg.is_enabled = True
+    was_enabled = user.two_fa_enabled
+    now_enabled = sync_two_fa_flag(user)
+    auto = now_enabled and not was_enabled
+    if auto:
         cfg.enabled_at = timezone.now()
-        cfg.save(update_fields=['is_enabled', 'enabled_at', 'updated_at'])
+        cfg.save(update_fields=['enabled_at', 'updated_at'])
         _audit(request, 'TWO_FACTOR_ENABLED', target_user=user, severity='warning',
                metadata={'method': method, 'auto': True})
-        auto = True
     messages.success(request, 'Đã thêm phương thức xác thực và bật 2FA. Từ lần đăng nhập sau bạn sẽ được yêu cầu xác thực.'
                      if auto else 'Đã thêm phương thức xác thực.')
 
@@ -2039,7 +2038,7 @@ def passkey_delete(request, cred_id):
     if not cred:
         messages.error(request, 'Không tìm thấy passkey.')
         return redirect('smartlock:profile')
-    if cfg.is_enabled and len(cfg.available_methods()) == 1 and user.fido2_credentials.count() == 1:
+    if user.two_fa_enabled and len(cfg.available_methods()) == 1 and user.fido2_credentials.count() == 1:
         messages.error(request, 'Đây là phương thức cuối cùng. Hãy tắt 2FA trước khi gỡ.')
         return redirect('smartlock:profile')
     if not _require_password(request):
@@ -2061,7 +2060,7 @@ def remove_method(request, method):
     active = (cfg.totp_confirmed if method == 'totp' else cfg.email_otp_enabled)
     if not active:
         return redirect('smartlock:profile')
-    if cfg.is_enabled and cfg.available_methods() == [method]:
+    if user.two_fa_enabled and cfg.available_methods() == [method]:
         messages.error(request, 'Đây là phương thức cuối cùng. Hãy tắt 2FA trước khi gỡ.')
         return redirect('smartlock:profile')
     if not _require_password(request):
@@ -2082,10 +2081,9 @@ def _after_method_removed(request, user, method):
     left = cfg.available_methods()
     if cfg.preferred_method not in left:
         cfg.preferred_method = left[0] if left else ''
-    if not left:
-        cfg.is_enabled = False
-        TwoFactorBackupCode.objects.filter(user=user).delete()
     cfg.save()
+    if not sync_two_fa_flag(user):
+        TwoFactorBackupCode.objects.filter(user=user).delete()
     _audit(request, 'TWO_FACTOR_METHOD_REMOVED', target_user=user, severity='warning', metadata={'method': method})
     _notify(user, 'Đã gỡ phương thức 2FA', f'Phương thức {method.upper()} vừa được gỡ khỏi tài khoản.',
             severity='warning', type_='SECURITY')
@@ -2112,7 +2110,7 @@ def two_factor_context(request, user):
     cfg = TwoFactorConfig.objects.filter(user=user).first()
     passkeys = list(Fido2Credential.objects.filter(user=user).order_by('created_at'))
     ctx = {
-        'tf_enabled': bool(cfg and cfg.is_enabled),
+        'tf_enabled': user.two_fa_enabled,
         'tf_totp': bool(cfg and cfg.totp_confirmed),
         'tf_email': bool(cfg and cfg.email_otp_enabled),
         'tf_passkeys': passkeys,
