@@ -16,8 +16,6 @@ from .mqtt_client import publish_command, MqttPublishError
 
 logger = logging.getLogger('smartlock.rules_engine')
 
-# Thời hạn lệnh LOCK phát ra tự động từ rule engine, giống COMMAND_TTL_SECONDS trong
-# views.py (không import trực tiếp từ views để tránh vòng lặp import views<->rules_engine).
 AUTO_LOCK_COMMAND_TTL_SECONDS = 120
 
 
@@ -53,13 +51,10 @@ def _apply_action(rule, device):
             cmd.save(update_fields=['status'])
             return AutomationRule.ACTION_AUTO_LOCK
         except MqttPublishError as e:
-            # MQTT lỗi thì không coi là thất bại toàn bộ - vẫn có Notification cảnh báo,
-            # chỉ là không tự khoá được.
+            
             logger.warning('automation_rule %s: AUTO_LOCK thất bại (mqtt): %s', rule.id, e)
             return AutomationRule.ACTION_NOTIFY_ONLY
     if rule.action_type == AutomationRule.ACTION_TEMP_BLOCK_ACCESS:
-        # Tạm khoá NFC của thiết bị (field Device.nfc_enabled đã có sẵn) - chủ thiết bị
-        # tự bật lại thủ công ở trang chi tiết thiết bị.
         Device.objects.filter(pk=device.pk).update(nfc_enabled=False, updated_at=timezone.now())
         return AutomationRule.ACTION_TEMP_BLOCK_ACCESS
     return AutomationRule.ACTION_NOTIFY_ONLY
@@ -139,8 +134,6 @@ def evaluate_failed_access_burst(device):
 
 
 def evaluate_offline_devices():
-    """Chạy luật OFFLINE_TOO_LONG cho mọi thiết bị đang có luật active - gọi định kỳ,
-    KHÔNG cần status_log vì dựa vào Device.last_seen_at."""
     now = timezone.now()
     rules = (
         AutomationRule.objects

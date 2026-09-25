@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System Logs (Demo) - Smart Lock</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;
+        --accent:#3b82f6;--ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+  .wrap{max-width:1300px;margin:0 auto;padding:24px 16px 80px;}
+  .banner{background:#450a0a;border:1px solid #7f1d1d;color:#fecaca;padding:10px 14px;
+          border-radius:8px;font-size:12.5px;margin-bottom:18px;}
+  h1{font-size:22px;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:18px;}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;}
+  .stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;}
+  .stat .num{font-size:22px;font-weight:700;}
+  .stat .label{color:var(--muted);font-size:12px;margin-top:2px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
+  form.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:end;}
+  form.filters div{display:flex;flex-direction:column;gap:4px;}
+  label{font-size:11px;color:var(--muted);}
+  input,select{padding:7px 10px;border-radius:6px;border:1px solid var(--border);
+               background:#0f172a;color:var(--text);font-size:13px;}
+  .btn{padding:7px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;
+       font-size:13px;font-weight:600;cursor:pointer;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;}
+  .badge.info{background:#1e3a8a;color:#bfdbfe;}
+  .badge.warning{background:#78350f;color:#fde68a;}
+  .badge.critical{background:#450a0a;color:#fecaca;}
+  .ok{color:var(--ok);font-weight:600;}
+  .fail{color:var(--danger);font-weight:600;}
+  .meta{max-width:280px;overflow-x:auto;white-space:pre-wrap;color:var(--muted);font-size:11px;}
+  .pager{display:flex;gap:8px;justify-content:center;margin-top:16px;font-size:13px;}
+  .pager a{color:var(--accent);text-decoration:none;}
+  .empty{text-align:center;color:var(--muted);padding:24px 0;}
+  .refresh{color:var(--muted);font-size:12px;margin-top:10px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="banner">
+    ⚠ Trang demo - hiển thị toàn bộ log của hệ thống, không yêu cầu đăng nhập. Chỉ dùng cho mục đích
+    trình bày/bảo vệ đồ án, không triển khai công khai với dữ liệu thật.
+  </div>
+
+  <h1>Nhật ký hoạt động toàn hệ thống</h1>
+  <p class="sub">Chế độ chỉ xem (read-only) - không có thao tác chỉnh sửa nào ở trang này.</p>
+
+  <div class="stats">
+    <div class="stat"><div class="num">{{ stats.total_logs }}</div><div class="label">Tổng số log</div></div>
+    <div class="stat"><div class="num">{{ stats.total_users }}</div><div class="label">Người dùng</div></div>
+    <div class="stat"><div class="num">{{ stats.total_devices }}</div><div class="label">Thiết bị</div></div>
+    <div class="stat"><div class="num">{{ stats.failed_last_24h }}</div><div class="label">Thất bại (24h qua)</div></div>
+  </div>
+
+  <div class="card">
+    <form class="filters" method="get">
+      <div>
+        <label>Tìm kiếm</label>
+        <input type="text" name="q" value="{{ q }}" placeholder="action, user, thiết bị...">
+      </div>
+      <div>
+        <label>Trạng thái</label>
+        <select name="status">
+          <option value="" {% if not status %}selected{% endif %}>Tất cả</option>
+          <option value="ok" {% if status == "ok" %}selected{% endif %}>Thành công</option>
+          <option value="fail" {% if status == "fail" %}selected{% endif %}>Thất bại</option>
+        </select>
+      </div>
+      <div>
+        <label>Mức độ</label>
+        <select name="severity">
+          <option value="" {% if not severity %}selected{% endif %}>Tất cả</option>
+          <option value="info" {% if severity == "info" %}selected{% endif %}>Info</option>
+          <option value="warning" {% if severity == "warning" %}selected{% endif %}>Warning</option>
+          <option value="critical" {% if severity == "critical" %}selected{% endif %}>Critical</option>
+        </select>
+      </div>
+      <div><button type="submit" class="btn">Lọc</button></div>
+    </form>
+
+    {% if audit_logs %}
+    <table>
+      <thead>
+        <tr>
+          <th>Thời gian</th><th>Hành động</th><th>Người thực hiện</th><th>Đối tượng</th>
+          <th>Thiết bị</th><th>Mức độ</th><th>Kết quả</th><th>IP</th><th>Chi tiết</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for log in audit_logs %}
+        <tr>
+          <td>{{ log.created_at|date:"d/m/Y H:i:s" }}</td>
+          <td>{{ log.action }}</td>
+          <td>{% if log.actor_user %}{{ log.actor_user.username }}{% elif log.username_attempt %}{{ log.username_attempt }} <em>(chưa xác thực)</em>{% else %}—{% endif %}</td>
+          <td>{% if log.target_user %}{{ log.target_user.username }}{% else %}—{% endif %}</td>
+          <td>{% if log.device %}{{ log.device.name }}{% else %}—{% endif %}</td>
+          <td><span class="badge {{ log.severity }}">{{ log.severity }}</span></td>
+          <td>{% if log.success %}<span class="ok">OK</span>{% else %}<span class="fail">FAIL</span>{% endif %}</td>
+          <td>{{ log.ip_address|default:"—" }}</td>
+          <td class="meta">{{ log.metadata|default:"" }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="pager">
+      {% if audit_logs.has_previous %}
+        <a href="?page={{ audit_logs.previous_page_number }}{{ qs }}">&laquo; Trước</a>
+      {% endif %}
+      <span>Trang {{ audit_logs.number }} / {{ audit_logs.paginator.num_pages }}</span>
+      {% if audit_logs.has_next %}
+        <a href="?page={{ audit_logs.next_page_number }}{{ qs }}">Sau &raquo;</a>
+      {% endif %}
+    </div>
+    {% else %}
+      <p class="empty">Chưa có log nào.</p>
+    {% endif %}
+
+    <p class="refresh">Tải lại trang để xem log mới nhất.</p>
+  </div>
+</div>
+</body>
+</html>

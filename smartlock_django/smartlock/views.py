@@ -11,6 +11,7 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
 import pyotp
@@ -55,7 +56,7 @@ from webauthn.helpers.structs import (
 
 from .email_templates import render_email
 from .models import (
-    AccessCard, Announcement, AuditLog, CardDeviceAccess, Device, DeviceAccess,
+    AccessCard, Announcement, AuditLog, AutomationRule, CardDeviceAccess, Device, DeviceAccess,
     DeviceCommand, DeviceStatusLog, EmailVerificationToken, Fido2Credential, LoginAttemptLog,
     LoginLockout, NfcLog, NfcReader, NfcReaderConfig, Notification, Permission,
     ShareAccessCode, SupportRequest, SystemSettings, TwoFactorBackupCode, TwoFactorConfig,
@@ -230,6 +231,21 @@ def _clean_ip_lines(text):
         ip = _valid_ip(line)
         (good if ip else bad).append(ip or line)
     return good, bad
+
+def _parse_decimal(value):
+    value = (value or '').strip().replace(',', '.')
+    if not value:
+        return None
+    try:
+        return Decimal(value)
+    except InvalidOperation:
+        return None
+
+def _parse_int(value):
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
 
 def _redirect_with(url_name, **params):
     url = reverse(url_name)
@@ -1434,6 +1450,134 @@ def permissions_manage(request):
     return render(request, 'account/permissions/manage.html', context)
 
 
+# ====================== AUTOMATION RULES ======================
+@auth_required
+def automation_rules_manage(request):
+    """Trang quản lý AutomationRule của owner hiện tại: tạo / sửa / bật-tắt / xoá.
+    device=None nghĩa là luật áp dụng cho mọi thiết bị của owner (xem rules_engine.py)."""
+    user = request.user
+    is_post = request.method == 'POST'
+    devices = Device.objects.filter(owner=user).order_by('name')
+
+    valid_triggers = {c for c, _ in AutomationRule.TRIGGER_CHOICES}
+    valid_actions = {c for c, _ in AutomationRule.ACTION_CHOICES}
+    valid_severities = {'info', 'warning', 'critical'}
+
+    def back():
+        return redirect('smartlock:automation-rules')
+
+    def resolve_device(raw_id):
+        """Trả về (device, ok). raw_id rỗng => (None, True) = áp dụng mọi thiết bị.
+        raw_id không khớp thiết bị nào của user => (None, False) = lỗi."""
+        raw_id = (raw_id or '').strip()
+        if not raw_id:
+            return None, True
+        dev = devices.filter(id=_parse_uuid(raw_id)).first()
+        return (dev, True) if dev else (None, False)
+
+    def read_form():
+        return {
+            'name': (request.POST.get('name') or '').strip()[:150],
+            'trigger_type': request.POST.get('trigger_type'),
+            'action_type': request.POST.get('action_type') or AutomationRule.ACTION_NOTIFY_ONLY,
+            'notify_severity': request.POST.get('notify_severity') or 'warning',
+            'threshold_value': _parse_decimal(request.POST.get('threshold_value')),
+            'threshold_window_seconds': _parse_int(request.POST.get('threshold_window_seconds')),
+            'cooldown_seconds': _parse_int(request.POST.get('cooldown_seconds')) or 300,
+        }
+
+    def form_errors(data):
+        if not data['name']:
+            return 'Vui lòng nhập tên luật.'
+        if data['trigger_type'] not in valid_triggers:
+            return 'Loại điều kiện kích hoạt không hợp lệ.'
+        if data['action_type'] not in valid_actions:
+            return 'Hành động không hợp lệ.'
+        if data['notify_severity'] not in valid_severities:
+            return 'Mức độ thông báo không hợp lệ.'
+        if data['cooldown_seconds'] is None or data['cooldown_seconds'] < 0:
+            return 'Thời gian cooldown không hợp lệ.'
+        return None
+
+    if is_post:
+        action = request.POST.get('action')
+
+        if action == 'create':
+            device, dev_ok = resolve_device(request.POST.get('device'))
+            if not dev_ok:
+                messages.error(request, 'Không tìm thấy thiết bị của bạn.')
+                return back()
+            data = read_form()
+            err = form_errors(data)
+            if err:
+                messages.error(request, err)
+                return back()
+            rule = AutomationRule.objects.create(owner=user, device=device, **data)
+            _audit(request, 'AUTOMATION_RULE_CREATED', device=device,
+                   metadata={'rule_id': str(rule.id), 'trigger_type': rule.trigger_type,
+                             'action_type': rule.action_type})
+            messages.success(request, f'Đã tạo luật "{rule.name}".')
+            return back()
+
+        # update / toggle / delete: phải đúng luật thuộc về user hiện tại
+        rule = AutomationRule.objects.filter(
+            id=_parse_uuid(request.POST.get('rule_id')), owner=user
+        ).first()
+        if not rule:
+            _audit(request, 'AUTOMATION_RULE_NOT_FOUND', success=False, severity='warning',
+                   metadata={'action': str(action)})
+            messages.error(request, 'Không tìm thấy luật.')
+            return back()
+
+        if action == 'toggle':
+            rule.is_active = not rule.is_active
+            rule.save(update_fields=['is_active'])
+            _audit(request, 'AUTOMATION_RULE_TOGGLED', device=rule.device,
+                   metadata={'rule_id': str(rule.id), 'is_active': rule.is_active})
+            messages.success(request, f'Đã {"bật" if rule.is_active else "tắt"} luật "{rule.name}".')
+
+        elif action == 'update':
+            device, dev_ok = resolve_device(request.POST.get('device'))
+            if not dev_ok:
+                messages.error(request, 'Không tìm thấy thiết bị của bạn.')
+                return back()
+            data = read_form()
+            err = form_errors(data)
+            if err:
+                messages.error(request, err)
+                return back()
+            for field, value in data.items():
+                setattr(rule, field, value)
+            rule.device = device
+            rule.save()
+            _audit(request, 'AUTOMATION_RULE_UPDATED', device=device,
+                   metadata={'rule_id': str(rule.id)})
+            messages.success(request, f'Đã cập nhật luật "{rule.name}".')
+
+        elif action == 'delete':
+            rule_name, rule_device, rule_id = rule.name, rule.device, str(rule.id)
+            rule.delete()
+            _audit(request, 'AUTOMATION_RULE_DELETED', device=rule_device, severity='warning',
+                   metadata={'rule_id': rule_id})
+            messages.success(request, f'Đã xoá luật "{rule_name}".')
+
+        else:
+            messages.error(request, 'Hành động không hợp lệ.')
+
+        return back()
+
+    rules = (AutomationRule.objects.filter(owner=user)
+             .select_related('device').order_by('-created_at'))
+
+    context = {
+        'device_list': devices,
+        'rules': rules,
+        'trigger_choices': AutomationRule.TRIGGER_CHOICES,
+        'action_choices': AutomationRule.ACTION_CHOICES,
+    }
+    return render(request, 'account/automation_rules/manage.html', context)
+
+
 # ====================== SETTINGS / PROFILE / LOGS ======================
 @auth_required
 def settings_system(request):
@@ -1667,6 +1811,54 @@ def audit_logs(request):
     context = {'audit_logs': _page(request, qs), 'show_all': show_all,
                'status': status or '', 'q': q, 'qs': extra, 'can_see_all': _is_admin(user)}
     return render(request, 'account/audit/logs.html', context)
+
+
+# ====================== PUBLIC DEMO: SYSTEM LOGS (KHÔNG YÊU CẦU ĐĂNG NHẬP) ======================
+# CẢNH BÁO BẢO MẬT: view này show TOÀN BỘ AuditLog của TOÀN HỆ THỐNG (mọi user, mọi
+# thiết bị), cho bất kỳ ai có URL - KHÔNG cần đăng nhập, KHÔNG lọc theo owner.
+# Chỉ nên bật khi demo/bảo vệ đồ án trên máy local. Trước khi deploy thật, PHẢI
+# xoá route này hoặc chặn lại (VD: if not settings.DEMO_MODE: raise Http404).
+def public_system_logs(request):
+    """Chỉ xem (read-only) - trang này không xử lý bất kỳ POST/action nào."""
+    qs = (AuditLog.objects.all()
+          .select_related('device', 'actor_user', 'target_user')
+          .order_by('-created_at'))
+
+    status = request.GET.get('status')
+    if status == 'ok':
+        qs = qs.filter(success=True)
+    elif status == 'fail':
+        qs = qs.filter(success=False)
+
+    severity = request.GET.get('severity')
+    if severity in ('info', 'warning', 'critical'):
+        qs = qs.filter(severity=severity)
+
+    q = (request.GET.get('q') or '').strip()
+    if q:
+        qs = qs.filter(
+            Q(action__icontains=q) | Q(username_attempt__icontains=q)
+            | Q(actor_user__username__icontains=q) | Q(target_user__username__icontains=q)
+            | Q(device__name__icontains=q)
+        )
+
+    extra = ''.join('&' + urlencode({k: v}) for k, v in
+                    (('status', status), ('severity', severity), ('q', q)) if v)
+
+    since_24h = timezone.now() - timedelta(hours=24)
+    stats = {
+        'total_logs': AuditLog.objects.count(),
+        'total_users': User.objects.count(),
+        'total_devices': Device.objects.count(),
+        'failed_last_24h': AuditLog.objects.filter(success=False, created_at__gte=since_24h).count(),
+    }
+
+    context = {
+        'audit_logs': _page(request, qs),
+        'status': status or '', 'severity': severity or '', 'q': q, 'qs': extra,
+        'stats': stats,
+    }
+    return render(request, 'public/system_logs.html', context)
 
 
 # ====================== 2FA: CONSTANTS ======================

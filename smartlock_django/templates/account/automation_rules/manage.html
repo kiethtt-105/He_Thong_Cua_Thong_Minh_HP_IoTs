@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Luật cảnh báo / tự động hoá</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;
+        --accent:#3b82f6;--ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
+  .wrap{max-width:1100px;margin:0 auto;padding:24px 16px 80px;}
+  h1{font-size:22px;margin:0 0 4px;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px;}
+  .msgs{margin-bottom:16px;}
+  .msg{padding:10px 14px;border-radius:8px;margin-bottom:8px;font-size:14px;}
+  .msg.success{background:#14532d;color:#bbf7d0;}
+  .msg.error{background:#450a0a;color:#fecaca;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:20px;}
+  .card h2{font-size:15px;margin:0 0 14px;color:var(--text);}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px;}
+  input,select{width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);
+               background:#0f172a;color:var(--text);font-size:13px;}
+  input:focus,select:focus{outline:2px solid var(--accent);}
+  .btn{display:inline-block;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;
+       font-size:13px;font-weight:600;}
+  .btn-primary{background:var(--accent);color:#fff;}
+  .btn-danger{background:var(--danger);color:#fff;}
+  .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text);}
+  .btn-sm{padding:5px 10px;font-size:12px;}
+  form.inline{display:inline;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{padding:9px 8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;}
+  .badge.on{background:#14532d;color:#bbf7d0;}
+  .badge.off{background:#3f3f46;color:#d4d4d8;}
+  .badge.info{background:#1e3a8a;color:#bfdbfe;}
+  .badge.warning{background:#78350f;color:#fde68a;}
+  .badge.critical{background:#450a0a;color:#fecaca;}
+  .actions{display:flex;gap:6px;flex-wrap:wrap;}
+  details summary{cursor:pointer;color:var(--accent);font-size:12px;list-style:none;}
+  details summary::-webkit-details-marker{display:none;}
+  .empty{color:var(--muted);font-size:13px;padding:20px 0;text-align:center;}
+  .top-actions{margin-bottom:14px;}
+  .top-actions a{color:var(--accent);font-size:13px;text-decoration:none;}
+  .stat-row{color:var(--muted);font-size:12px;margin-top:2px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top-actions"><a href="{% url 'smartlock:devices-list' %}">&larr; Về danh sách thiết bị</a></div>
+  <h1>Luật cảnh báo / tự động hoá</h1>
+  <p class="sub">Tự cấu hình ngưỡng cảnh báo và hành động tự động (không cần sửa mã nguồn). Để trống "Thiết bị"
+    nghĩa là luật áp dụng cho mọi thiết bị của bạn.</p>
+
+  {% if messages %}
+  <div class="msgs">
+    {% for m in messages %}
+      <div class="msg {{ m.tags }}">{{ m }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <h2>+ Tạo luật mới</h2>
+    <form method="post" action="{% url 'smartlock:automation-rules' %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="create">
+      <div class="grid">
+        <div>
+          <label>Tên luật</label>
+          <input type="text" name="name" maxlength="150" required placeholder="VD: Cảnh báo pin yếu">
+        </div>
+        <div>
+          <label>Thiết bị (để trống = mọi thiết bị)</label>
+          <select name="device">
+            <option value="">-- Mọi thiết bị --</option>
+            {% for d in device_list %}
+              <option value="{{ d.id }}">{{ d.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Điều kiện kích hoạt</label>
+          <select name="trigger_type" required>
+            {% for value, display in trigger_choices %}
+              <option value="{{ value }}">{{ display }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Ngưỡng (số)</label>
+          <input type="number" step="0.01" name="threshold_value" placeholder="VD: 20">
+        </div>
+        <div>
+          <label>Khoảng thời gian (giây)</label>
+          <input type="number" name="threshold_window_seconds" placeholder="VD: 300">
+        </div>
+        <div>
+          <label>Hành động khi kích hoạt</label>
+          <select name="action_type" required>
+            {% for value, display in action_choices %}
+              <option value="{{ value }}">{{ display }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Mức độ thông báo</label>
+          <select name="notify_severity">
+            <option value="info">Info</option>
+            <option value="warning" selected>Warning</option>
+            <option value="critical">Critical</option>
+          </select>
+        </div>
+        <div>
+          <label>Cooldown (giây)</label>
+          <input type="number" name="cooldown_seconds" value="300">
+        </div>
+      </div>
+      <div style="margin-top:14px;">
+        <button type="submit" class="btn btn-primary">Tạo luật</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Danh sách luật của bạn ({{ rules|length }})</h2>
+    {% if rules %}
+    <table>
+      <thead>
+        <tr>
+          <th>Tên</th><th>Thiết bị</th><th>Điều kiện</th><th>Ngưỡng</th>
+          <th>Hành động</th><th>Mức độ</th><th>Cooldown</th><th>Trạng thái</th>
+          <th>Lần cuối kích hoạt</th><th>Thao tác</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for rule in rules %}
+        <tr>
+          <td>{{ rule.name }}</td>
+          <td>{% if rule.device %}{{ rule.device.name }}{% else %}<em>Mọi thiết bị</em>{% endif %}</td>
+          <td>{{ rule.get_trigger_type_display }}</td>
+          <td>
+            {% if rule.threshold_value is not None %}{{ rule.threshold_value }}{% endif %}
+            {% if rule.threshold_window_seconds %} / {{ rule.threshold_window_seconds }}s{% endif %}
+          </td>
+          <td>{{ rule.get_action_type_display }}</td>
+          <td><span class="badge {{ rule.notify_severity }}">{{ rule.notify_severity }}</span></td>
+          <td>{{ rule.cooldown_seconds }}s</td>
+          <td>
+            {% if rule.is_active %}<span class="badge on">Đang bật</span>
+            {% else %}<span class="badge off">Đã tắt</span>{% endif %}
+          </td>
+          <td>{{ rule.last_triggered_at|default:"—" }}</td>
+          <td>
+            <div class="actions">
+              <form class="inline" method="post" action="{% url 'smartlock:automation-rules' %}">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="toggle">
+                <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                <button type="submit" class="btn btn-ghost btn-sm">
+                  {% if rule.is_active %}Tắt{% else %}Bật{% endif %}
+                </button>
+              </form>
+              <form class="inline" method="post" action="{% url 'smartlock:automation-rules' %}"
+                    onsubmit="return confirm('Xoá luật {{ rule.name }}?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                <button type="submit" class="btn btn-danger btn-sm">Xoá</button>
+              </form>
+              <details>
+                <summary>Sửa</summary>
+                <form method="post" action="{% url 'smartlock:automation-rules' %}" style="margin-top:10px;">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="update">
+                  <input type="hidden" name="rule_id" value="{{ rule.id }}">
+                  <div class="grid">
+                    <div>
+                      <label>Tên</label>
+                      <input type="text" name="name" maxlength="150" value="{{ rule.name }}" required>
+                    </div>
+                    <div>
+                      <label>Thiết bị</label>
+                      <select name="device">
+                        <option value="">-- Mọi thiết bị --</option>
+                        {% for d in device_list %}
+                          <option value="{{ d.id }}" {% if rule.device_id == d.id %}selected{% endif %}>{{ d.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                    <div>
+                      <label>Điều kiện</label>
+                      <select name="trigger_type" required>
+                        {% for value, display in trigger_choices %}
+                          <option value="{{ value }}" {% if rule.trigger_type == value %}selected{% endif %}>{{ display }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                    <div>
+                      <label>Ngưỡng</label>
+                      <input type="number" step="0.01" name="threshold_value" value="{{ rule.threshold_value|default_if_none:'' }}">
+                    </div>
+                    <div>
+                      <label>Khoảng thời gian (giây)</label>
+                      <input type="number" name="threshold_window_seconds" value="{{ rule.threshold_window_seconds|default_if_none:'' }}">
+                    </div>
+                    <div>
+                      <label>Hành động</label>
+                      <select name="action_type" required>
+                        {% for value, display in action_choices %}
+                          <option value="{{ value }}" {% if rule.action_type == value %}selected{% endif %}>{{ display }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                    <div>
+                      <label>Mức độ</label>
+                      <select name="notify_severity">
+                        <option value="info" {% if rule.notify_severity == "info" %}selected{% endif %}>info</option>
+                        <option value="warning" {% if rule.notify_severity == "warning" %}selected{% endif %}>warning</option>
+                        <option value="critical" {% if rule.notify_severity == "critical" %}selected{% endif %}>critical</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label>Cooldown (giây)</label>
+                      <input type="number" name="cooldown_seconds" value="{{ rule.cooldown_seconds }}">
+                    </div>
+                  </div>
+                  <div style="margin-top:10px;">
+                    <button type="submit" class="btn btn-primary btn-sm">Lưu thay đổi</button>
+                  </div>
+                </form>
+              </details>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p class="empty">Bạn chưa tạo luật nào.</p>
+    {% endif %}
+  </div>
+</div>
+</body>
+</html>
