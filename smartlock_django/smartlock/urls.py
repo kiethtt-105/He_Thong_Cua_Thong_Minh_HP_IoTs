@@ -43,9 +43,10 @@ urlpatterns = [
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
 
-    # ====================== DEMO: xem toàn bộ log hệ thống, KHÔNG cần đăng nhập ======================
+    # ====================== DEMO: xem toàn bộ log hệ thống real-time, KHÔNG cần đăng nhập ======================
     # Chỉ dùng khi demo/bảo vệ đồ án - nhớ gỡ hoặc chặn route này trước khi deploy thật.
     path('demo/system-logs/', views.public_system_logs, name='public-system-logs'),
+    path('demo/system-logs/data/', views.public_system_logs_api, name='public-system-logs-data'),
 
     # ====================== 2FA ======================
     # Trang xác thực (login / bật / tắt) - chỉ vào được khi có phiên pending_2fa

@@ -3,128 +3,791 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>System Logs (Demo) - Smart Lock</title>
+<title>Nhật ký hệ thống real-time - Smart Lock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
-  :root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;
-        --accent:#3b82f6;--ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;}
+  :root{
+    --bg:#141210; --bg-elev:#1c1a17; --bg-elev2:#242019; --border:#332d24; --border-soft:#26221b;
+    --text:#efe8db; --muted:#9a8f7c; --muted-dim:#6f6656;
+    --brass:#c9924f; --brass-bright:#e6ac6a; --brass-dim:rgba(201,146,79,.14); --brass-border:rgba(201,146,79,.35);
+    --ok:#5cb586; --ok-bg:rgba(92,181,134,.14); --ok-border:rgba(92,181,134,.4);
+    --warn:#dba14a; --warn-bg:rgba(219,161,74,.14); --warn-border:rgba(219,161,74,.4);
+    --danger:#d5695c; --danger-bg:rgba(213,105,92,.16); --danger-border:rgba(213,105,92,.42);
+    --info:#6f9fce; --info-bg:rgba(111,159,206,.14);
+    --neutral:#8b8272; --neutral-bg:rgba(139,130,114,.16);
+    --font-sans:'IBM Plex Sans',-apple-system,'Segoe UI',Roboto,sans-serif;
+    --font-mono:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+    --radius:10px;
+  }
+  @media (prefers-reduced-motion: reduce){ *{animation-duration:.001ms !important; transition-duration:.001ms !important;} }
   *{box-sizing:border-box;}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;}
-  .wrap{max-width:1300px;margin:0 auto;padding:24px 16px 80px;}
-  .banner{background:#450a0a;border:1px solid #7f1d1d;color:#fecaca;padding:10px 14px;
-          border-radius:8px;font-size:12.5px;margin-bottom:18px;}
-  h1{font-size:22px;margin:0 0 4px;}
-  .sub{color:var(--muted);font-size:13px;margin-bottom:18px;}
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;}
-  .stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;}
-  .stat .num{font-size:22px;font-weight:700;}
-  .stat .label{color:var(--muted);font-size:12px;margin-top:2px;}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
-  form.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:end;}
-  form.filters div{display:flex;flex-direction:column;gap:4px;}
-  label{font-size:11px;color:var(--muted);}
-  input,select{padding:7px 10px;border-radius:6px;border:1px solid var(--border);
-               background:#0f172a;color:var(--text);font-size:13px;}
-  .btn{padding:7px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;
-       font-size:13px;font-weight:600;cursor:pointer;}
-  table{width:100%;border-collapse:collapse;font-size:12.5px;}
-  th,td{padding:8px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top;}
-  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;}
-  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;}
-  .badge.info{background:#1e3a8a;color:#bfdbfe;}
-  .badge.warning{background:#78350f;color:#fde68a;}
-  .badge.critical{background:#450a0a;color:#fecaca;}
-  .ok{color:var(--ok);font-weight:600;}
-  .fail{color:var(--danger);font-weight:600;}
-  .meta{max-width:280px;overflow-x:auto;white-space:pre-wrap;color:var(--muted);font-size:11px;}
-  .pager{display:flex;gap:8px;justify-content:center;margin-top:16px;font-size:13px;}
-  .pager a{color:var(--accent);text-decoration:none;}
-  .empty{text-align:center;color:var(--muted);padding:24px 0;}
-  .refresh{color:var(--muted);font-size:12px;margin-top:10px;}
+  html{scroll-padding-top:110px;}
+  body{margin:0;background:
+      radial-gradient(1200px 500px at 12% -10%, rgba(201,146,79,.06), transparent 60%),
+      var(--bg);
+    color:var(--text);font-family:var(--font-sans);}
+  ::selection{background:var(--brass-dim);color:var(--brass-bright);}
+  a{color:var(--brass);}
+  :focus-visible{outline:2px solid var(--brass-bright);outline-offset:2px;border-radius:4px;}
+
+  .wrap{max-width:1440px;margin:0 auto;padding:0 20px 64px;}
+
+  /* ---------- header ---------- */
+  header{position:sticky;top:0;z-index:20;background:rgba(20,18,16,.92);backdrop-filter:blur(10px);
+         border-bottom:1px solid var(--border-soft);}
+  .banner{background:rgba(213,105,92,.1);border-bottom:1px solid var(--danger-border);color:#e8b6ae;
+          padding:7px 20px;font-size:12px;text-align:center;letter-spacing:.01em;}
+  .banner b{color:#f0cfc9;}
+  .topbar{max-width:1440px;margin:0 auto;padding:16px 20px 12px;display:flex;justify-content:space-between;
+          align-items:flex-end;flex-wrap:wrap;gap:12px;}
+  .brandline{display:flex;align-items:center;gap:10px;}
+  .keyglyph{width:30px;height:30px;border-radius:8px;background:var(--brass-dim);border:1px solid var(--brass-border);
+            display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;}
+  h1{font-size:19px;margin:0;font-weight:600;letter-spacing:-.01em;}
+  .sub{color:var(--muted);font-size:12.5px;margin:2px 0 0;}
+  .live{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);font-family:var(--font-mono);
+        background:var(--bg-elev);border:1px solid var(--border);padding:6px 12px 6px 10px;border-radius:999px;}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex-shrink:0;
+       box-shadow:0 0 0 0 rgba(92,181,134,.6);animation:pulse 1.8s infinite;}
+  .dot.bad{background:var(--danger);animation:none;}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(92,181,134,.5);}70%{box-shadow:0 0 0 7px rgba(92,181,134,0);}100%{box-shadow:0 0 0 0 rgba(92,181,134,0);}}
+
+  /* ---------- tabs ---------- */
+  .tabbar{max-width:1440px;margin:0 auto;padding:0 20px;display:flex;gap:2px;overflow-x:auto;
+          scrollbar-width:thin;}
+  .tabbar::-webkit-scrollbar{height:5px;}
+  .tabbar::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
+  .tab{appearance:none;border:none;background:transparent;color:var(--muted);font-family:var(--font-sans);
+       font-size:13px;font-weight:500;padding:10px 14px;cursor:pointer;white-space:nowrap;
+       border-bottom:2px solid transparent;display:flex;align-items:center;gap:7px;transition:color .15s;}
+  .tab:hover{color:var(--text);}
+  .tab.active{color:var(--brass-bright);border-bottom-color:var(--brass);}
+  .tab .chip{font-family:var(--font-mono);font-size:10.5px;background:var(--bg-elev2);color:var(--muted);
+             padding:1px 6px;border-radius:999px;border:1px solid var(--border);}
+  .tab.active .chip{color:var(--brass-bright);border-color:var(--brass-border);background:var(--brass-dim);}
+
+  main{padding-top:22px;}
+  .panel{display:none;}
+  .panel.active{display:block;animation:fadein .25s ease;}
+  @keyframes fadein{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:translateY(0);}}
+
+  /* ---------- stat cards ---------- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-bottom:20px;}
+  .stat{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);padding:13px 15px;}
+  .stat .num{font-family:var(--font-mono);font-size:22px;font-weight:600;color:var(--text);}
+  .stat .num.danger{color:var(--danger);} .stat .num.warn{color:var(--warn);} .stat .num.ok{color:var(--ok);}
+  .stat .label{color:var(--muted);font-size:11px;margin-top:3px;}
+
+  /* ---------- alerts (overview) ---------- */
+  .alertbox{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);
+            padding:14px 16px;margin-bottom:20px;}
+  .alertbox h2{margin:0 0 10px;font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px;}
+  .alertlist{display:flex;flex-direction:column;gap:6px;}
+  .alertitem{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12.5px;
+             padding:8px 10px;border-radius:7px;background:var(--danger-bg);border:1px solid var(--danger-border);}
+  .alertitem.warnish{background:var(--warn-bg);border-color:var(--warn-border);}
+  .alertitem .name{font-weight:600;}
+  .alertitem .meta{color:var(--muted);font-family:var(--font-mono);font-size:11px;}
+  .allclear{color:var(--ok);font-size:12.5px;display:flex;align-items:center;gap:8px;padding:4px 2px;}
+
+  /* ---------- device grid ---------- */
+  .devgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;}
+  .devcard{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);padding:13px 15px;
+           transition:border-color .15s;}
+  .devcard:hover{border-color:var(--brass-border);}
+  .devcard .name{font-weight:600;font-size:14px;margin-bottom:1px;}
+  .devcard .code{color:var(--muted-dim);font-size:11px;margin-bottom:9px;font-family:var(--font-mono);}
+  .devcard .rows{display:flex;flex-direction:column;gap:5px;font-size:12px;}
+  .devcard .rows span.k{color:var(--muted);}
+  .devcard .rows .v{font-family:var(--font-mono);}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:10.5px;font-weight:600;
+        font-family:var(--font-mono);border:1px solid transparent;}
+  .pill.locked{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-border);}
+  .pill.unlocked{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-border);}
+  .pill.jammed,.pill.unknown{background:var(--neutral-bg);color:var(--neutral);}
+  .pill.online{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-border);}
+  .pill.offline{background:var(--neutral-bg);color:var(--neutral);}
+  .pill.maintenance{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-border);}
+  .pill.provisioning,.pill.revoked{background:var(--info-bg);color:var(--info);}
+  .pill.info{background:var(--info-bg);color:var(--info);}
+  .pill.warning{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-border);}
+  .pill.critical{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-border);}
+  .pill.pending{background:var(--neutral-bg);color:var(--neutral);}
+  .pill.sent{background:var(--info-bg);color:var(--info);}
+  .pill.acknowledged{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-border);}
+  .pill.failed,.pill.expired{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-border);}
+  .tamper{color:var(--danger);font-weight:700;}
+  .ok-txt{color:var(--ok);font-weight:600;} .fail-txt{color:var(--danger);font-weight:600;}
+
+  /* ---------- charts ---------- */
+  .charts{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px;}
+  .chartcard{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);padding:15px;}
+  .chartcard h3{margin:0 0 10px;font-size:12px;color:var(--muted);font-weight:600;}
+  canvas{max-height:190px;}
+  @media (max-width: 1080px){.charts{grid-template-columns:1fr;}}
+  .charts-2{grid-template-columns:repeat(2,1fr);margin-bottom:16px;}
+  .charts-2 canvas{max-height:160px;}
+  @media (max-width: 700px){.charts-2{grid-template-columns:1fr;}}
+
+  /* ---------- section / tables ---------- */
+  .section{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);padding:16px;}
+  .section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;}
+  .section-head h2{margin:0;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;}
+  .count{background:var(--bg-elev2);color:var(--muted);font-size:11px;padding:2px 9px;border-radius:999px;
+         font-family:var(--font-mono);}
+  .searchbox{position:relative;}
+  .searchbox input{background:var(--bg-elev2);border:1px solid var(--border);color:var(--text);
+                    border-radius:8px;padding:7px 12px 7px 30px;font-size:12.5px;font-family:var(--font-sans);
+                    width:220px;max-width:60vw;}
+  .searchbox input::placeholder{color:var(--muted-dim);}
+  .searchbox svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);opacity:.5;pointer-events:none;}
+  .hint{color:var(--muted-dim);font-size:11px;margin-top:9px;}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px;font-family:var(--font-mono);}
+  th,td{padding:8px 9px;border-bottom:1px solid var(--border-soft);text-align:left;white-space:nowrap;}
+  th{color:var(--muted);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;
+     font-family:var(--font-sans);background:var(--bg-elev);position:sticky;top:0;}
+  tbody tr:hover{background:var(--bg-elev2);}
+  .empty-row td{color:var(--muted-dim);text-align:center;padding:22px;font-family:var(--font-sans);}
+  .tablewrap{overflow:auto;max-height:560px;border:1px solid var(--border-soft);border-radius:8px;}
+  @keyframes rowflash{0%{background:var(--brass-dim);}100%{background:transparent;}}
+  tbody tr.row-new{animation:rowflash 1.8s ease-out;}
+
+  .grid2{display:grid;grid-template-columns:1fr;gap:16px;}
+  .panel-devices .devgrid{margin-top:2px;}
 </style>
 </head>
 <body>
-<div class="wrap">
+
+<header>
   <div class="banner">
-    ⚠ Trang demo - hiển thị toàn bộ log của hệ thống, không yêu cầu đăng nhập. Chỉ dùng cho mục đích
-    trình bày/bảo vệ đồ án, không triển khai công khai với dữ liệu thật.
+    ⚠ <b>Trang demo</b> - hiển thị dữ liệu/log thật của hệ thống, không yêu cầu đăng nhập, chỉ đọc (read-only). Chỉ chạy trên máy local để trình bày đồ án.
   </div>
-
-  <h1>Nhật ký hoạt động toàn hệ thống</h1>
-  <p class="sub">Chế độ chỉ xem (read-only) - không có thao tác chỉnh sửa nào ở trang này.</p>
-
-  <div class="stats">
-    <div class="stat"><div class="num">{{ stats.total_logs }}</div><div class="label">Tổng số log</div></div>
-    <div class="stat"><div class="num">{{ stats.total_users }}</div><div class="label">Người dùng</div></div>
-    <div class="stat"><div class="num">{{ stats.total_devices }}</div><div class="label">Thiết bị</div></div>
-    <div class="stat"><div class="num">{{ stats.failed_last_24h }}</div><div class="label">Thất bại (24h qua)</div></div>
-  </div>
-
-  <div class="card">
-    <form class="filters" method="get">
+  <div class="topbar">
+    <div class="brandline">
+      <div class="keyglyph">🔑</div>
       <div>
-        <label>Tìm kiếm</label>
-        <input type="text" name="q" value="{{ q }}" placeholder="action, user, thiết bị...">
+        <h1>Nhật ký hệ thống real-time</h1>
+        <p class="sub">Tự động cập nhật mỗi 2 giây, không cần tải lại trang.</p>
       </div>
-      <div>
-        <label>Trạng thái</label>
-        <select name="status">
-          <option value="" {% if not status %}selected{% endif %}>Tất cả</option>
-          <option value="ok" {% if status == "ok" %}selected{% endif %}>Thành công</option>
-          <option value="fail" {% if status == "fail" %}selected{% endif %}>Thất bại</option>
-        </select>
-      </div>
-      <div>
-        <label>Mức độ</label>
-        <select name="severity">
-          <option value="" {% if not severity %}selected{% endif %}>Tất cả</option>
-          <option value="info" {% if severity == "info" %}selected{% endif %}>Info</option>
-          <option value="warning" {% if severity == "warning" %}selected{% endif %}>Warning</option>
-          <option value="critical" {% if severity == "critical" %}selected{% endif %}>Critical</option>
-        </select>
-      </div>
-      <div><button type="submit" class="btn">Lọc</button></div>
-    </form>
-
-    {% if audit_logs %}
-    <table>
-      <thead>
-        <tr>
-          <th>Thời gian</th><th>Hành động</th><th>Người thực hiện</th><th>Đối tượng</th>
-          <th>Thiết bị</th><th>Mức độ</th><th>Kết quả</th><th>IP</th><th>Chi tiết</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for log in audit_logs %}
-        <tr>
-          <td>{{ log.created_at|date:"d/m/Y H:i:s" }}</td>
-          <td>{{ log.action }}</td>
-          <td>{% if log.actor_user %}{{ log.actor_user.username }}{% elif log.username_attempt %}{{ log.username_attempt }} <em>(chưa xác thực)</em>{% else %}—{% endif %}</td>
-          <td>{% if log.target_user %}{{ log.target_user.username }}{% else %}—{% endif %}</td>
-          <td>{% if log.device %}{{ log.device.name }}{% else %}—{% endif %}</td>
-          <td><span class="badge {{ log.severity }}">{{ log.severity }}</span></td>
-          <td>{% if log.success %}<span class="ok">OK</span>{% else %}<span class="fail">FAIL</span>{% endif %}</td>
-          <td>{{ log.ip_address|default:"—" }}</td>
-          <td class="meta">{{ log.metadata|default:"" }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-
-    <div class="pager">
-      {% if audit_logs.has_previous %}
-        <a href="?page={{ audit_logs.previous_page_number }}{{ qs }}">&laquo; Trước</a>
-      {% endif %}
-      <span>Trang {{ audit_logs.number }} / {{ audit_logs.paginator.num_pages }}</span>
-      {% if audit_logs.has_next %}
-        <a href="?page={{ audit_logs.next_page_number }}{{ qs }}">Sau &raquo;</a>
-      {% endif %}
     </div>
-    {% else %}
-      <p class="empty">Chưa có log nào.</p>
-    {% endif %}
-
-    <p class="refresh">Tải lại trang để xem log mới nhất.</p>
+    <div class="live">
+      <span class="dot" id="liveDot"></span>
+      <span id="liveText">Đang kết nối…</span>
+    </div>
   </div>
+  <nav class="tabbar" id="tabbar" role="tablist">
+    <button class="tab" data-tab="overview" role="tab"><span>📊 Tổng quan</span></button>
+    <button class="tab" data-tab="devices" role="tab"><span>🔌 Thiết bị</span><span class="chip" id="chipDevices">0</span></button>
+    <button class="tab" data-tab="commands" role="tab"><span>🔒 Lệnh khoá/mở</span><span class="chip" id="chipCommands">0</span></button>
+    <button class="tab" data-tab="status" role="tab"><span>📡 Trạng thái</span><span class="chip" id="chipStatus">0</span></button>
+    <button class="tab" data-tab="nfc" role="tab"><span>💳 NFC</span><span class="chip" id="chipNfc">0</span></button>
+    <button class="tab" data-tab="rules" role="tab"><span>⚙ Tự động hoá</span><span class="chip" id="chipRules">0</span></button>
+    <button class="tab" data-tab="logins" role="tab"><span>🔑 Đăng nhập</span><span class="chip" id="chipLogins">0</span></button>
+    <button class="tab" data-tab="audit" role="tab"><span>📋 Audit</span><span class="chip" id="chipAudit">0</span></button>
+  </nav>
+</header>
+
+<div class="wrap">
+<main>
+
+  <!-- ================= OVERVIEW ================= -->
+  <section class="panel" id="panel-overview">
+    <div class="stats" id="statsRow"></div>
+
+    <div class="alertbox">
+      <h2>🚨 Cần chú ý</h2>
+      <div class="alertlist" id="alertList"></div>
+    </div>
+
+    <div class="charts">
+      <div class="chartcard">
+        <h3>Lệnh khoá / mở khoá theo phút</h3>
+        <canvas id="chartLock"></canvas>
+      </div>
+      <div class="chartcard">
+        <h3>Quẹt thẻ NFC: thành công / thất bại theo phút</h3>
+        <canvas id="chartNfc"></canvas>
+      </div>
+      <div class="chartcard">
+        <h3>Audit log: tổng / lỗi theo phút</h3>
+        <canvas id="chartAudit"></canvas>
+      </div>
+      <div class="chartcard">
+        <h3>Đăng nhập: thành công / thất bại theo phút</h3>
+        <canvas id="chartLogin"></canvas>
+      </div>
+      <div class="chartcard">
+        <h3>Luật tự động hoá kích hoạt theo phút</h3>
+        <canvas id="chartRules"></canvas>
+      </div>
+      <div class="chartcard">
+        <h3>Thiết bị báo trạng thái (heartbeat) theo phút</h3>
+        <canvas id="chartHeartbeat"></canvas>
+      </div>
+      <div class="chartcard">
+        <h3>Sự kiện tamper theo phút</h3>
+        <canvas id="chartTamper"></canvas>
+      </div>
+      <div class="chartcard">
+        <h3>Pin trung bình các thiết bị (%)</h3>
+        <canvas id="chartBattery"></canvas>
+      </div>
+      <div class="chartcard">
+        <h3>Nhiệt độ trung bình các thiết bị (°C)</h3>
+        <canvas id="chartTemp"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= DEVICES ================= -->
+  <section class="panel panel-devices" id="panel-devices">
+    <div class="section">
+      <div class="section-head">
+        <h2>🔌 Trạng thái thiết bị (live) <span class="count" id="devCount">0</span></h2>
+        <div class="searchbox">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="searchDevices" type="text" placeholder="Tìm thiết bị…">
+        </div>
+      </div>
+      <div class="charts charts-2">
+        <div class="chartcard"><h3>Phân bố trạng thái thiết bị</h3><canvas id="chartDevStatus"></canvas></div>
+        <div class="chartcard"><h3>Phân bố trạng thái khoá</h3><canvas id="chartDevLock"></canvas></div>
+      </div>
+      <div class="devgrid" id="deviceGrid"></div>
+    </div>
+  </section>
+
+  <!-- ================= COMMANDS ================= -->
+  <section class="panel" id="panel-commands">
+    <div class="section">
+      <div class="section-head">
+        <h2>🔒 Lệnh khoá / mở khoá thiết bị <span class="count" id="cmdCount">0</span></h2>
+        <div class="searchbox">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="searchCommands" type="text" placeholder="Tìm theo thiết bị, trạng thái…">
+        </div>
+      </div>
+      <div class="charts charts-2">
+        <div class="chartcard"><h3>Phân bố loại lệnh</h3><canvas id="chartCmdType"></canvas></div>
+        <div class="chartcard"><h3>Phân bố trạng thái lệnh</h3><canvas id="chartCmdStatus"></canvas></div>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Thời gian</th><th>Thiết bị</th><th>Lệnh</th><th>Trạng thái</th><th>Người gửi</th><th>Xác nhận lúc</th></tr></thead>
+        <tbody id="cmdBody"></tbody>
+      </table></div>
+      <p class="hint">Danh sách gần nhất được server trả về (không phải toàn bộ lịch sử) - dùng ô tìm kiếm để lọc nhanh.</p>
+    </div>
+  </section>
+
+  <!-- ================= STATUS LOGS ================= -->
+  <section class="panel" id="panel-status">
+    <div class="section">
+      <div class="section-head">
+        <h2>📡 Trạng thái thiết bị báo về <span class="count" id="statusCount">0</span></h2>
+        <div class="searchbox">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="searchStatus" type="text" placeholder="Tìm theo thiết bị…">
+        </div>
+      </div>
+      <div class="charts charts-2">
+        <div class="chartcard"><h3>Phân bố trạng thái khoá</h3><canvas id="chartStatusLock"></canvas></div>
+        <div class="chartcard"><h3>Tamper: có / không</h3><canvas id="chartStatusTamper"></canvas></div>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Thời gian</th><th>Thiết bị</th><th>Khoá</th><th>Pin</th><th>Nhiệt độ</th><th>Sóng</th><th>Tamper</th></tr></thead>
+        <tbody id="statusBody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ================= NFC ================= -->
+  <section class="panel" id="panel-nfc">
+    <div class="section">
+      <div class="section-head">
+        <h2>💳 NFC / quẹt thẻ <span class="count" id="nfcCount">0</span></h2>
+        <div class="searchbox">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="searchNfc" type="text" placeholder="Tìm theo user, thiết bị…">
+        </div>
+      </div>
+      <div class="charts charts-2">
+        <div class="chartcard"><h3>Thành công / thất bại</h3><canvas id="chartNfcResult"></canvas></div>
+        <div class="chartcard"><h3>Loại sự kiện (phổ biến nhất)</h3><canvas id="chartNfcEvent"></canvas></div>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Thời gian</th><th>Thiết bị</th><th>User</th><th>Đầu đọc</th><th>Sự kiện</th><th>Kết quả</th><th>IP</th></tr></thead>
+        <tbody id="nfcBody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ================= RULES ================= -->
+  <section class="panel" id="panel-rules">
+    <div class="section">
+      <div class="section-head">
+        <h2>⚙ Luật tự động hoá đã kích hoạt <span class="count" id="ruleCount">0</span></h2>
+        <div class="searchbox">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="searchRules" type="text" placeholder="Tìm theo luật, thiết bị…">
+        </div>
+      </div>
+      <div class="charts charts-2">
+        <div class="chartcard"><h3>Hành động đã thực hiện</h3><canvas id="chartRuleAction"></canvas></div>
+        <div class="chartcard"><h3>Luật kích hoạt nhiều nhất</h3><canvas id="chartRuleName"></canvas></div>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Thời gian</th><th>Luật</th><th>Thiết bị</th><th>Hành động</th><th>Giá trị đo</th></tr></thead>
+        <tbody id="ruleBody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ================= LOGINS ================= -->
+  <section class="panel" id="panel-logins">
+    <div class="section">
+      <div class="section-head">
+        <h2>🔑 Lượt đăng nhập <span class="count" id="loginCount">0</span></h2>
+        <div class="searchbox">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="searchLogins" type="text" placeholder="Tìm theo định danh, IP…">
+        </div>
+      </div>
+      <div class="charts charts-2">
+        <div class="chartcard"><h3>Thành công / thất bại</h3><canvas id="chartLoginResult"></canvas></div>
+        <div class="chartcard"><h3>Định danh đăng nhập sai nhiều nhất</h3><canvas id="chartLoginTop"></canvas></div>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Thời gian</th><th>Định danh</th><th>User</th><th>Kết quả</th><th>IP</th></tr></thead>
+        <tbody id="loginBody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ================= AUDIT ================= -->
+  <section class="panel" id="panel-audit">
+    <div class="section">
+      <div class="section-head">
+        <h2>📋 Audit log (toàn hệ thống) <span class="count" id="auditCount">0</span></h2>
+        <div class="searchbox">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="searchAudit" type="text" placeholder="Tìm theo hành động, actor, IP…">
+        </div>
+      </div>
+      <div class="charts charts-2">
+        <div class="chartcard"><h3>Mức độ nghiêm trọng</h3><canvas id="chartAuditSeverity"></canvas></div>
+        <div class="chartcard"><h3>Thành công / thất bại</h3><canvas id="chartAuditResult"></canvas></div>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Thời gian</th><th>Hành động</th><th>Người thực hiện</th><th>Đối tượng</th><th>Thiết bị</th><th>Mức độ</th><th>Kết quả</th><th>IP</th></tr></thead>
+        <tbody id="auditBody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+</main>
 </div>
+
+<script>
+const API_URL = "{% url 'smartlock:public-system-logs-data' %}";
+const POLL_MS = 2000;
+
+/* ---------- helpers ---------- */
+function esc(s){ return (s ?? '—').toString().replace(/[&<>"']/g, c => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function fmtTime(iso){
+  if(!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('vi-VN', {hour12:false});
+}
+
+function emptyRow(colspan){ return `<tr class="empty-row"><td colspan="${colspan}">Chưa có dữ liệu</td></tr>`; }
+
+/* ---------- tabs (state persists across polls; deep-linkable via #hash) ---------- */
+const TABS = ['overview','devices','commands','status','nfc','rules','logins','audit'];
+function activateTab(name, pushHash=true){
+  if(!TABS.includes(name)) name = 'overview';
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+  if(pushHash) history.replaceState(null, '', '#' + name);
+}
+document.getElementById('tabbar').addEventListener('click', e => {
+  const btn = e.target.closest('.tab');
+  if(btn) activateTab(btn.dataset.tab);
+});
+window.addEventListener('hashchange', () => activateTab(location.hash.slice(1), false));
+activateTab(location.hash.slice(1) || 'overview', false);
+
+/* ---------- generic filtered/highlighted table renderer ---------- */
+const seenKeys = {};
+function renderTable({bodyId, countId, searchId, rows, columns, keyFn, colspan}){
+  const q = (document.getElementById(searchId)?.value || '').trim().toLowerCase();
+  const filtered = q
+    ? rows.filter(r => columns.some(c => String(c.get(r) ?? '').toLowerCase().includes(q)))
+    : rows;
+
+  const countEl = document.getElementById(countId);
+  countEl.textContent = q ? `${filtered.length}/${rows.length}` : rows.length;
+
+  const prevKeys = seenKeys[bodyId];
+  const nextKeys = new Set();
+  const isFirstPaint = prevKeys === undefined;
+
+  const html = filtered.length ? filtered.map(r => {
+    const key = keyFn(r);
+    nextKeys.add(key);
+    const isNew = !isFirstPaint && !prevKeys.has(key);
+    const tds = columns.map(c => {
+      const val = c.html ? c.html(r) : esc(c.get(r));
+      return `<td class="${c.cls ? c.cls(r) : ''}">${val}</td>`;
+    }).join('');
+    return `<tr class="${isNew ? 'row-new' : ''}">${tds}</tr>`;
+  }).join('') : emptyRow(colspan);
+
+  document.getElementById(bodyId).innerHTML = html;
+  seenKeys[bodyId] = nextKeys;
+}
+
+/* ---------- charts ---------- */
+/* palette for known category labels, used by both distribution charts and legends */
+const CAT_COLOR = {
+  online:'#5cb586', offline:'#8b8272', maintenance:'#dba14a', provisioning:'#6f9fce', revoked:'#6f9fce',
+  locked:'#5cb586', unlocked:'#dba14a', jammed:'#8b8272', unknown:'#8b8272',
+  pending:'#8b8272', sent:'#6f9fce', acknowledged:'#5cb586', failed:'#d5695c', expired:'#d5695c',
+  info:'#6f9fce', warning:'#dba14a', critical:'#d5695c',
+  'Có':'#d5695c', 'Không':'#5cb586', 'Thành công':'#5cb586', 'Thất bại':'#d5695c',
+  LOCK:'#c9924f', UNLOCK:'#dba14a', REBOOT:'#6f9fce',
+};
+const FALLBACK_COLORS = ['#c9924f','#6f9fce','#5cb586','#dba14a','#d5695c','#8b8272','#e6ac6a','#9a8f7c'];
+function colorFor(label, idx){ return CAT_COLOR[label] || FALLBACK_COLORS[idx % FALLBACK_COLORS.length]; }
+
+const lineOpts = {
+  responsive:true, maintainAspectRatio:false, animation:false,
+  interaction:{mode:'index', intersect:false}, spanGaps:true,
+  scales:{
+    x:{ticks:{color:'#9a8f7c', maxTicksLimit:6, font:{family:'IBM Plex Mono', size:10}}, grid:{color:'#26221b'}},
+    y:{beginAtZero:true, ticks:{color:'#9a8f7c', precision:0, font:{family:'IBM Plex Mono', size:10}}, grid:{color:'#26221b'}}
+  },
+  plugins:{legend:{labels:{color:'#efe8db', boxWidth:10, font:{size:10.5, family:'IBM Plex Sans'}}}}
+};
+function lineDataset(label, color, fillAlpha){
+  return {label, data:[], borderColor:color, backgroundColor:color.length===7?`${color}${fillAlpha}`:color,
+           tension:.3, fill:true, pointRadius:0, borderWidth:2};
+}
+function makeLineChart(canvasId, datasets){
+  return new Chart(document.getElementById(canvasId), {type:'line', data:{labels:[], datasets}, options: lineOpts});
+}
+function makeDoughnut(canvasId){
+  return new Chart(document.getElementById(canvasId), {
+    type:'doughnut',
+    data:{labels:[], datasets:[{data:[], backgroundColor:[], borderColor:'#1c1a17', borderWidth:2}]},
+    options:{responsive:true, maintainAspectRatio:false, animation:false,
+      plugins:{legend:{position:'right', labels:{color:'#efe8db', boxWidth:9, font:{size:10, family:'IBM Plex Sans'}}}}},
+  });
+}
+function makeBarChart(canvasId){
+  return new Chart(document.getElementById(canvasId), {
+    type:'bar',
+    data:{labels:[], datasets:[{data:[], backgroundColor:[]}]},
+    options:{responsive:true, maintainAspectRatio:false, animation:false,
+      scales:{x:{ticks:{color:'#9a8f7c', font:{family:'IBM Plex Sans', size:9.5}}, grid:{display:false}},
+              y:{beginAtZero:true, ticks:{color:'#9a8f7c', precision:0, font:{family:'IBM Plex Mono', size:10}}, grid:{color:'#26221b'}}},
+      plugins:{legend:{display:false}}},
+  });
+}
+function updateDistChart(chart, counts, order){
+  const labels = order || Object.keys(counts);
+  const data = labels.map(l => counts[l] || 0);
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = data;
+  chart.data.datasets[0].backgroundColor = labels.map((l,i) => colorFor(l,i));
+  chart.update('none');
+}
+function countBy(rows, getter){
+  const counts = {};
+  rows.forEach(r => { const v = getter(r) ?? '—'; counts[v] = (counts[v]||0) + 1; });
+  return counts;
+}
+function topN(counts, n){
+  return Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, n).reduce((o,[k,v]) => (o[k]=v, o), {});
+}
+
+let charts = {};
+function initCharts(){
+  charts.lock      = makeLineChart('chartLock',      [lineDataset('LOCK','#c9924f','29'), lineDataset('UNLOCK','#dba14a','1f')]);
+  charts.nfc       = makeLineChart('chartNfc',       [lineDataset('Thành công','#5cb586','24'), lineDataset('Thất bại','#d5695c','24')]);
+  charts.audit     = makeLineChart('chartAudit',     [lineDataset('Tổng','#6f9fce','24'), lineDataset('Lỗi','#d5695c','24')]);
+  charts.login     = makeLineChart('chartLogin',     [lineDataset('Thành công','#5cb586','24'), lineDataset('Thất bại','#d5695c','24')]);
+  charts.rules     = makeLineChart('chartRules',     [lineDataset('Luật kích hoạt','#c9924f','29')]);
+  charts.heartbeat = makeLineChart('chartHeartbeat', [lineDataset('Báo cáo trạng thái','#6f9fce','24')]);
+  charts.tamper    = makeLineChart('chartTamper',    [lineDataset('Tamper','#d5695c','29')]);
+  charts.battery   = makeLineChart('chartBattery',   [lineDataset('Pin TB (%)','#5cb586','24')]);
+  charts.temp      = makeLineChart('chartTemp',      [lineDataset('Nhiệt độ TB (°C)','#dba14a','24')]);
+
+  charts.devStatus   = makeDoughnut('chartDevStatus');
+  charts.devLock     = makeBarChart('chartDevLock');
+  charts.cmdType     = makeBarChart('chartCmdType');
+  charts.cmdStatus   = makeBarChart('chartCmdStatus');
+  charts.statusLock  = makeBarChart('chartStatusLock');
+  charts.statusTamper= makeDoughnut('chartStatusTamper');
+  charts.nfcResult   = makeDoughnut('chartNfcResult');
+  charts.nfcEvent    = makeBarChart('chartNfcEvent');
+  charts.ruleAction  = makeBarChart('chartRuleAction');
+  charts.ruleName    = makeBarChart('chartRuleName');
+  charts.loginResult = makeDoughnut('chartLoginResult');
+  charts.loginTop    = makeBarChart('chartLoginTop');
+  charts.auditSeverity = makeDoughnut('chartAuditSeverity');
+  charts.auditResult   = makeDoughnut('chartAuditResult');
+}
+
+function setLine(chart, labels, ...series){
+  chart.data.labels = labels;
+  series.forEach((s,i) => chart.data.datasets[i].data = s || []);
+  chart.update('none');
+}
+function updateCharts(c){
+  setLine(charts.lock, c.labels, c.lock, c.unlock);
+  setLine(charts.nfc, c.labels, c.nfc_ok, c.nfc_fail);
+  setLine(charts.audit, c.labels, c.audit_total, c.audit_fail);
+  setLine(charts.login, c.labels, c.login_ok, c.login_fail);
+  setLine(charts.rules, c.labels, c.rule_fires);
+  setLine(charts.heartbeat, c.labels, c.status_reports);
+  setLine(charts.tamper, c.labels, c.tamper_events);
+  setLine(charts.battery, c.labels, c.avg_battery);
+  setLine(charts.temp, c.labels, c.avg_temp);
+}
+
+/* ---------- overview: stats + alerts ---------- */
+function renderStats(s){
+  const items = [
+    [s.total_devices, 'Thiết bị', ''], [s.devices_online, 'Đang online', 'ok'], [s.total_users, 'Người dùng', ''],
+    [s.total_commands, 'Lệnh khoá/mở', ''], [s.total_status_logs, 'Log trạng thái', ''],
+    [s.total_nfc_logs, 'Log NFC', ''], [s.total_rule_logs, 'Log luật tự động', ''],
+    [s.total_audit_logs, 'Audit log', ''],
+    [s.failed_login_24h, 'Đăng nhập lỗi (24h)', s.failed_login_24h > 0 ? 'danger' : ''],
+    [s.failed_nfc_24h, 'NFC lỗi (24h)', s.failed_nfc_24h > 0 ? 'danger' : ''],
+    [s.failed_audit_24h, 'Audit lỗi (24h)', s.failed_audit_24h > 0 ? 'danger' : ''],
+    [s.total_login_attempts, 'Lượt đăng nhập', ''],
+  ];
+  document.getElementById('statsRow').innerHTML = items.map(([n,l,cls]) =>
+    `<div class="stat"><div class="num ${cls}">${n}</div><div class="label">${l}</div></div>`).join('');
+}
+
+function renderAlerts(devices){
+  const abnormal = devices.filter(d => d.status !== 'online');
+  const tampered = devices.filter(d => d.tamper_detected);
+  const items = [
+    ...tampered.map(d => ({name:d.name, meta:`${d.code} · phát hiện tác động vật lý`, cls:''})),
+    ...abnormal.map(d => ({name:d.name, meta:`${d.code} · trạng thái: ${d.status}`, cls:'warnish'})),
+  ];
+  const box = document.getElementById('alertList');
+  if(!items.length){
+    box.innerHTML = '<div class="allclear">✓ Tất cả thiết bị đang online và ổn định.</div>';
+    return;
+  }
+  box.innerHTML = items.map(it => `
+    <div class="alertitem ${it.cls}">
+      <span class="name">${esc(it.name)}</span>
+      <span class="meta">${esc(it.meta)}</span>
+    </div>`).join('');
+}
+
+/* ---------- devices ---------- */
+function renderDevices(devices){
+  const q = (document.getElementById('searchDevices').value || '').trim().toLowerCase();
+  const filtered = q ? devices.filter(d =>
+    [d.name, d.code, d.owner, d.status].some(v => String(v ?? '').toLowerCase().includes(q))) : devices;
+
+  document.getElementById('devCount').textContent = q ? `${filtered.length}/${devices.length}` : devices.length;
+  document.getElementById('chipDevices').textContent = devices.length;
+
+  if(!filtered.length){
+    document.getElementById('deviceGrid').innerHTML = '<div style="color:var(--muted);font-size:13px;">Không có thiết bị phù hợp.</div>';
+    return;
+  }
+  document.getElementById('deviceGrid').innerHTML = filtered.map(d => `
+    <div class="devcard">
+      <div class="name">${esc(d.name)}</div>
+      <div class="code">${esc(d.code)} · chủ: ${esc(d.owner)}</div>
+      <div class="rows">
+        <div><span class="k">Trạng thái </span><span class="pill ${esc(d.status)}">${esc(d.status)}</span></div>
+        <div><span class="k">Khoá </span>${d.lock_state ? `<span class="pill ${esc(d.lock_state)}">${esc(d.lock_state)}</span>` : '<span class="v">—</span>'}</div>
+        <div><span class="k">Pin </span><span class="v">${d.battery_level}%</span> ${d.tamper_detected ? '<span class="tamper">⚠ TAMPER</span>' : ''}</div>
+        <div><span class="k">Nhiệt độ </span><span class="v">${d.temperature ?? '—'}°C</span> · <span class="k">Sóng </span><span class="v">${d.signal_strength ?? '—'}</span></div>
+        <div><span class="k">Last seen </span><span class="v">${fmtTime(d.last_seen_at)}</span></div>
+      </div>
+    </div>`).join('');
+
+  updateDistChart(charts.devStatus, countBy(devices, d=>d.status), ['online','offline','maintenance','provisioning','revoked']);
+  updateDistChart(charts.devLock, countBy(devices, d=>d.lock_state || 'unknown'), ['locked','unlocked','jammed','unknown']);
+}
+
+/* ---------- table configs ---------- */
+function renderCommands(rows){
+  document.getElementById('chipCommands').textContent = rows.length;
+  renderTable({
+    bodyId:'cmdBody', countId:'cmdCount', searchId:'searchCommands', rows, colspan:6,
+    keyFn:r => `${r.time}|${r.device}|${r.command_type}`,
+    columns:[
+      {get:r=>fmtTime(r.time)},
+      {get:r=>r.device},
+      {get:r=>r.command_type, html:r=>`<b>${esc(r.command_type)}</b>`},
+      {get:r=>r.status, html:r=>`<span class="pill ${esc(r.status)}">${esc(r.status)}</span>`},
+      {get:r=>r.issued_by},
+      {get:r=>fmtTime(r.acknowledged_at)},
+    ],
+  });
+  updateDistChart(charts.cmdType, countBy(rows, r=>r.command_type));
+  updateDistChart(charts.cmdStatus, countBy(rows, r=>r.status), ['pending','sent','acknowledged','failed','expired']);
+}
+
+function renderStatusLogs(rows){
+  document.getElementById('chipStatus').textContent = rows.length;
+  renderTable({
+    bodyId:'statusBody', countId:'statusCount', searchId:'searchStatus', rows, colspan:7,
+    keyFn:r => `${r.time}|${r.device}`,
+    columns:[
+      {get:r=>fmtTime(r.time)},
+      {get:r=>r.device},
+      {get:r=>r.lock_state, html:r=>`<span class="pill ${esc(r.lock_state)}">${esc(r.lock_state)}</span>`},
+      {get:r=>r.battery_level, html:r=>`${r.battery_level}%`},
+      {get:r=>r.temperature, html:r=>`${r.temperature ?? '—'}°C`},
+      {get:r=>r.signal_strength, html:r=>`${r.signal_strength ?? '—'}`},
+      {get:r=>r.tamper_detected?'có':'', html:r=>r.tamper_detected ? '<span class="tamper">⚠ CÓ</span>' : '—'},
+    ],
+  });
+  updateDistChart(charts.statusLock, countBy(rows, r=>r.lock_state || 'unknown'), ['locked','unlocked','jammed','unknown']);
+  updateDistChart(charts.statusTamper, countBy(rows, r=>r.tamper_detected ? 'Có' : 'Không'), ['Có','Không']);
+}
+
+function renderNfc(rows){
+  document.getElementById('chipNfc').textContent = rows.length;
+  renderTable({
+    bodyId:'nfcBody', countId:'nfcCount', searchId:'searchNfc', rows, colspan:7,
+    keyFn:r => `${r.time}|${r.device}|${r.user}`,
+    columns:[
+      {get:r=>fmtTime(r.time)},
+      {get:r=>r.device},
+      {get:r=>r.user},
+      {get:r=>r.reader},
+      {get:r=>r.event_type},
+      {get:r=>r.success?'ok':'fail', html:r=>r.success ? '<span class="ok-txt">OK</span>' : '<span class="fail-txt">FAIL</span>'},
+      {get:r=>r.ip},
+    ],
+  });
+  updateDistChart(charts.nfcResult, countBy(rows, r=>r.success ? 'Thành công' : 'Thất bại'), ['Thành công','Thất bại']);
+  updateDistChart(charts.nfcEvent, topN(countBy(rows, r=>r.event_type), 8));
+}
+
+function renderRules(rows){
+  document.getElementById('chipRules').textContent = rows.length;
+  renderTable({
+    bodyId:'ruleBody', countId:'ruleCount', searchId:'searchRules', rows, colspan:5,
+    keyFn:r => `${r.time}|${r.rule}|${r.device}`,
+    columns:[
+      {get:r=>fmtTime(r.time)},
+      {get:r=>r.rule},
+      {get:r=>r.device},
+      {get:r=>r.action_taken},
+      {get:r=>r.measured_value},
+    ],
+  });
+  updateDistChart(charts.ruleAction, countBy(rows, r=>r.action_taken));
+  updateDistChart(charts.ruleName, topN(countBy(rows, r=>r.rule), 6));
+}
+
+function renderLogins(rows){
+  document.getElementById('chipLogins').textContent = rows.length;
+  renderTable({
+    bodyId:'loginBody', countId:'loginCount', searchId:'searchLogins', rows, colspan:5,
+    keyFn:r => `${r.time}|${r.identifier}|${r.ip}`,
+    columns:[
+      {get:r=>fmtTime(r.time)},
+      {get:r=>r.identifier},
+      {get:r=>r.user},
+      {get:r=>r.success?'ok':'fail', html:r=>r.success ? '<span class="ok-txt">OK</span>' : '<span class="fail-txt">FAIL</span>'},
+      {get:r=>r.ip},
+    ],
+  });
+  updateDistChart(charts.loginResult, countBy(rows, r=>r.success ? 'Thành công' : 'Thất bại'), ['Thành công','Thất bại']);
+  updateDistChart(charts.loginTop, topN(countBy(rows.filter(r=>!r.success), r=>r.identifier), 6));
+}
+
+function renderAudit(rows){
+  document.getElementById('chipAudit').textContent = rows.length;
+  renderTable({
+    bodyId:'auditBody', countId:'auditCount', searchId:'searchAudit', rows, colspan:8,
+    keyFn:r => `${r.time}|${r.action}|${r.actor}`,
+    columns:[
+      {get:r=>fmtTime(r.time)},
+      {get:r=>r.action},
+      {get:r=>r.actor},
+      {get:r=>r.target},
+      {get:r=>r.device},
+      {get:r=>r.severity, html:r=>`<span class="pill ${esc(r.severity)}">${esc(r.severity)}</span>`},
+      {get:r=>r.success?'ok':'fail', html:r=>r.success ? '<span class="ok-txt">OK</span>' : '<span class="fail-txt">FAIL</span>'},
+      {get:r=>r.ip},
+    ],
+  });
+  updateDistChart(charts.auditSeverity, countBy(rows, r=>r.severity), ['info','warning','critical']);
+  updateDistChart(charts.auditResult, countBy(rows, r=>r.success ? 'Thành công' : 'Thất bại'), ['Thành công','Thất bại']);
+}
+
+/* ---------- poll loop ---------- */
+let lastData = null;
+async function poll(){
+  try{
+    const res = await fetch(API_URL, {cache:'no-store'});
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    lastData = data;
+
+    renderStats(data.stats);
+    renderAlerts(data.devices);
+    updateCharts(data.chart);
+    renderDevices(data.devices);
+    renderCommands(data.commands);
+    renderStatusLogs(data.status_logs);
+    renderNfc(data.nfc_logs);
+    renderRules(data.rule_logs);
+    renderLogins(data.login_attempts);
+    renderAudit(data.audit_logs);
+
+    document.getElementById('liveDot').classList.remove('bad');
+    document.getElementById('liveText').textContent =
+      'Cập nhật lúc ' + new Date(data.server_time).toLocaleTimeString('vi-VN', {hour12:false});
+  }catch(err){
+    document.getElementById('liveDot').classList.add('bad');
+    document.getElementById('liveText').textContent = 'Mất kết nối - đang thử lại…';
+    console.error('poll error', err);
+  }
+}
+
+/* re-filter tables instantly as the user types, without waiting for the next poll */
+['searchDevices','searchCommands','searchStatus','searchNfc','searchRules','searchLogins','searchAudit']
+  .forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+      if(!lastData) return;
+      const map = {
+        searchDevices: () => renderDevices(lastData.devices),
+        searchCommands: () => renderCommands(lastData.commands),
+        searchStatus: () => renderStatusLogs(lastData.status_logs),
+        searchNfc: () => renderNfc(lastData.nfc_logs),
+        searchRules: () => renderRules(lastData.rule_logs),
+        searchLogins: () => renderLogins(lastData.login_attempts),
+        searchAudit: () => renderAudit(lastData.audit_logs),
+      };
+      map[id]();
+    });
+  });
+
+initCharts();
+poll();
+setInterval(poll, POLL_MS);
+</script>
 </body>
 </html>

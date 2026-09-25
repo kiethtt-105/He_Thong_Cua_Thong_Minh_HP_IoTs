@@ -27,8 +27,8 @@ from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
-from django.db.models.functions import TruncDate
+from django.db.models import Avg, Count, Q
+from django.db.models.functions import TruncDate, TruncMinute
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -56,9 +56,9 @@ from webauthn.helpers.structs import (
 
 from .email_templates import render_email
 from .models import (
-    AccessCard, Announcement, AuditLog, AutomationRule, CardDeviceAccess, Device, DeviceAccess,
-    DeviceCommand, DeviceStatusLog, EmailVerificationToken, Fido2Credential, LoginAttemptLog,
-    LoginLockout, NfcLog, NfcReader, NfcReaderConfig, Notification, Permission,
+    AccessCard, Announcement, AuditLog, AutomationRule, AutomationRuleLog, CardDeviceAccess,
+    Device, DeviceAccess, DeviceCommand, DeviceStatusLog, EmailVerificationToken, Fido2Credential,
+    LoginAttemptLog, LoginLockout, NfcLog, NfcReader, NfcReaderConfig, Notification, Permission,
     ShareAccessCode, SupportRequest, SystemSettings, TwoFactorBackupCode, TwoFactorConfig,
     TwoFactorEmailCode, User, fernet, sync_two_fa_flag,
 )
@@ -1813,52 +1813,185 @@ def audit_logs(request):
     return render(request, 'account/audit/logs.html', context)
 
 
-# ====================== PUBLIC DEMO: SYSTEM LOGS (KHÔNG YÊU CẦU ĐĂNG NHẬP) ======================
-# CẢNH BÁO BẢO MẬT: view này show TOÀN BỘ AuditLog của TOÀN HỆ THỐNG (mọi user, mọi
-# thiết bị), cho bất kỳ ai có URL - KHÔNG cần đăng nhập, KHÔNG lọc theo owner.
-# Chỉ nên bật khi demo/bảo vệ đồ án trên máy local. Trước khi deploy thật, PHẢI
-# xoá route này hoặc chặn lại (VD: if not settings.DEMO_MODE: raise Http404).
+# ====================== PUBLIC DEMO: SYSTEM LOGS REAL-TIME (KHÔNG YÊU CẦU ĐĂNG NHẬP) ======================
+# CẢNH BÁO BẢO MẬT: view này show TOÀN BỘ log của TOÀN HỆ THỐNG (mọi user, mọi thiết bị),
+# cho bất kỳ ai có URL - KHÔNG cần đăng nhập, KHÔNG lọc theo owner. Chỉ dùng khi demo/bảo
+# vệ đồ án trên máy local.
+#
+# "Real-time" ở đây = JS phía client fetch() JSON endpoint bên dưới mỗi 2 giây rồi tự vẽ
+# lại DOM/biểu đồ (KHÔNG F5 trang) - không dùng WebSocket/Django Channels vì project đang
+# chạy WSGI (runserver bình thường), không cần đổi sang ASGI + thêm Redis chỉ để demo.
+# Polling 2s là đủ "độ trễ thấp" cho mục đích trình bày, không cần hạ tầng phức tạp hơn.
+
+def _bucketed_counts(queryset, dt_field, minutes=20):
+    """Đếm số bản ghi theo từng phút trong `minutes` phút gần nhất, KHÔNG bị hụt phút nào
+    (phút không có dữ liệu vẫn trả về 0) - dùng để vẽ biểu đồ đường theo thời gian."""
+    since = timezone.now() - timedelta(minutes=minutes)
+    rows = (
+        queryset.filter(**{f'{dt_field}__gte': since})
+        .annotate(minute=TruncMinute(dt_field)).values('minute')
+        .annotate(n=Count('id')).order_by('minute')
+    )
+    counts = {r['minute']: r['n'] for r in rows}
+    now_minute = timezone.now().replace(second=0, microsecond=0)
+    labels, data = [], []
+    for i in range(minutes - 1, -1, -1):
+        m = now_minute - timedelta(minutes=i)
+        labels.append(m.strftime('%H:%M'))
+        data.append(counts.get(m, 0))
+    return labels, data
+
+
+def _bucketed_avg(queryset, dt_field, value_field, minutes=20):
+    """Giống _bucketed_counts nhưng lấy TRUNG BÌNH của value_field theo từng phút
+    (vd: pin trung bình, nhiệt độ trung bình). Phút không có dữ liệu -> None (Chart.js
+    tự bỏ qua điểm đó, không vẽ về 0 gây hiểu nhầm)."""
+    since = timezone.now() - timedelta(minutes=minutes)
+    rows = (
+        queryset.filter(**{f'{dt_field}__gte': since, f'{value_field}__isnull': False})
+        .annotate(minute=TruncMinute(dt_field)).values('minute')
+        .annotate(avg=Avg(value_field)).order_by('minute')
+    )
+    avgs = {r['minute']: r['avg'] for r in rows}
+    now_minute = timezone.now().replace(second=0, microsecond=0)
+    labels, data = [], []
+    for i in range(minutes - 1, -1, -1):
+        m = now_minute - timedelta(minutes=i)
+        labels.append(m.strftime('%H:%M'))
+        v = avgs.get(m)
+        data.append(round(v, 1) if v is not None else None)
+    return labels, data
+
+
 def public_system_logs(request):
-    """Chỉ xem (read-only) - trang này không xử lý bất kỳ POST/action nào."""
-    qs = (AuditLog.objects.all()
-          .select_related('device', 'actor_user', 'target_user')
-          .order_by('-created_at'))
+    """Trang khung (shell) - không truyền dữ liệu log qua context. Toàn bộ số liệu/log/
+    biểu đồ được JS nạp qua public_system_logs_api() và tự làm mới liên tục."""
+    return render(request, 'public/system_logs.html', {})
 
-    status = request.GET.get('status')
-    if status == 'ok':
-        qs = qs.filter(success=True)
-    elif status == 'fail':
-        qs = qs.filter(success=False)
 
-    severity = request.GET.get('severity')
-    if severity in ('info', 'warning', 'critical'):
-        qs = qs.filter(severity=severity)
+LOG_ROW_LIMIT = 100  # số dòng gần nhất trả về mỗi loại log (tăng từ 40 -> 100 để trang demo hiển thị nhiều hơn)
 
-    q = (request.GET.get('q') or '').strip()
-    if q:
-        qs = qs.filter(
-            Q(action__icontains=q) | Q(username_attempt__icontains=q)
-            | Q(actor_user__username__icontains=q) | Q(target_user__username__icontains=q)
-            | Q(device__name__icontains=q)
-        )
 
-    extra = ''.join('&' + urlencode({k: v}) for k, v in
-                    (('status', status), ('severity', severity), ('q', q)) if v)
+def public_system_logs_api(request):
+    """JSON snapshot mới nhất của TOÀN BỘ log trong hệ thống - client gọi lại mỗi 2s.
+    Chỉ đọc (GET), không có tham số nào làm thay đổi dữ liệu."""
+    devices = Device.objects.select_related('owner').order_by('name')
+    device_rows = []
+    for d in devices:
+        latest = DeviceStatusLog.objects.filter(device=d).order_by('-recorded_at').first()
+        device_rows.append({
+            'id': str(d.id), 'name': d.name, 'code': d.device_code, 'status': d.status,
+            'battery_level': d.battery_level,
+            'lock_state': latest.lock_state if latest else None,
+            'tamper_detected': bool(latest and latest.tamper_detected),
+            'temperature': str(latest.temperature) if latest and latest.temperature is not None else None,
+            'signal_strength': latest.signal_strength if latest else None,
+            'last_seen_at': d.last_seen_at.isoformat() if d.last_seen_at else None,
+            'owner': d.owner.username if d.owner else None,
+            'bluetooth_enabled': d.bluetooth_enabled, 'wifi_enabled': d.wifi_enabled,
+            'nfc_enabled': d.nfc_enabled,
+        })
+
+    commands = (DeviceCommand.objects.select_related('device', 'issued_by')
+                .order_by('-created_at')[:LOG_ROW_LIMIT])
+    command_rows = [{
+        'time': c.created_at.isoformat(), 'device': c.device.name if c.device else '—',
+        'command_type': c.command_type, 'status': c.status,
+        'issued_by': c.issued_by.username if c.issued_by else '—',
+        'expires_at': c.expires_at.isoformat() if c.expires_at else None,
+        'acknowledged_at': c.acknowledged_at.isoformat() if c.acknowledged_at else None,
+    } for c in commands]
+
+    status_logs = DeviceStatusLog.objects.select_related('device').order_by('-recorded_at')[:LOG_ROW_LIMIT]
+    status_rows = [{
+        'time': s.recorded_at.isoformat(), 'device': s.device.name if s.device else '—',
+        'battery_level': s.battery_level, 'lock_state': s.lock_state,
+        'tamper_detected': s.tamper_detected,
+        'temperature': str(s.temperature) if s.temperature is not None else None,
+        'signal_strength': s.signal_strength,
+    } for s in status_logs]
+
+    nfc_logs = NfcLog.objects.select_related('device', 'user', 'reader').order_by('-created_at')[:LOG_ROW_LIMIT]
+    nfc_rows = [{
+        'time': n.created_at.isoformat(), 'device': n.device.name if n.device else '—',
+        'user': n.user.username if n.user else '—', 'event_type': n.event_type,
+        'success': n.success, 'ip': n.ip_address,
+        'reader': n.reader.id and str(n.reader) if n.reader else '—',
+    } for n in nfc_logs]
+
+    rule_logs = AutomationRuleLog.objects.select_related('rule', 'device').order_by('-triggered_at')[:LOG_ROW_LIMIT]
+    rule_rows = [{
+        'time': r.triggered_at.isoformat(), 'rule': r.rule.name if r.rule else '—',
+        'device': r.device.name if r.device else '—', 'action_taken': r.action_taken,
+        'measured_value': str(r.measured_value) if r.measured_value is not None else None,
+    } for r in rule_logs]
+
+    audit_logs = (AuditLog.objects.select_related('device', 'actor_user', 'target_user')
+                  .order_by('-created_at')[:LOG_ROW_LIMIT])
+    audit_rows = [{
+        'time': a.created_at.isoformat(), 'action': a.action,
+        'actor': a.actor_user.username if a.actor_user else (a.username_attempt or '—'),
+        'target': a.target_user.username if a.target_user else '—',
+        'device': a.device.name if a.device else '—',
+        'severity': a.severity, 'success': a.success, 'ip': a.ip_address,
+    } for a in audit_logs]
+
+    login_attempts = LoginAttemptLog.objects.select_related('user').order_by('-created_at')[:LOG_ROW_LIMIT]
+    login_rows = [{
+        'time': la.created_at.isoformat(), 'identifier': la.identifier,
+        'user': la.user.username if la.user else '—', 'success': la.success, 'ip': la.ip_address,
+    } for la in login_attempts]
+
+    labels, lock_series = _bucketed_counts(DeviceCommand.objects.filter(command_type='LOCK'), 'created_at')
+    _, unlock_series = _bucketed_counts(DeviceCommand.objects.filter(command_type='UNLOCK'), 'created_at')
+    _, nfc_ok_series = _bucketed_counts(NfcLog.objects.filter(success=True), 'created_at')
+    _, nfc_fail_series = _bucketed_counts(NfcLog.objects.filter(success=False), 'created_at')
+    _, audit_total_series = _bucketed_counts(AuditLog.objects.all(), 'created_at')
+    _, audit_fail_series = _bucketed_counts(AuditLog.objects.filter(success=False), 'created_at')
+    _, login_ok_series = _bucketed_counts(LoginAttemptLog.objects.filter(success=True), 'created_at')
+    _, login_fail_series = _bucketed_counts(LoginAttemptLog.objects.filter(success=False), 'created_at')
+    _, rule_fire_series = _bucketed_counts(AutomationRuleLog.objects.all(), 'triggered_at')
+    _, status_report_series = _bucketed_counts(DeviceStatusLog.objects.all(), 'recorded_at')
+    _, tamper_series = _bucketed_counts(DeviceStatusLog.objects.filter(tamper_detected=True), 'recorded_at')
+    _, avg_battery_series = _bucketed_avg(DeviceStatusLog.objects.all(), 'recorded_at', 'battery_level')
+    _, avg_temp_series = _bucketed_avg(DeviceStatusLog.objects.all(), 'recorded_at', 'temperature')
 
     since_24h = timezone.now() - timedelta(hours=24)
     stats = {
-        'total_logs': AuditLog.objects.count(),
+        'total_devices': devices.count(),
+        'devices_online': devices.filter(status='online').count(),
         'total_users': User.objects.count(),
-        'total_devices': Device.objects.count(),
-        'failed_last_24h': AuditLog.objects.filter(success=False, created_at__gte=since_24h).count(),
+        'total_commands': DeviceCommand.objects.count(),
+        'total_status_logs': DeviceStatusLog.objects.count(),
+        'total_nfc_logs': NfcLog.objects.count(),
+        'total_rule_logs': AutomationRuleLog.objects.count(),
+        'total_audit_logs': AuditLog.objects.count(),
+        'total_login_attempts': LoginAttemptLog.objects.count(),
+        'failed_audit_24h': AuditLog.objects.filter(success=False, created_at__gte=since_24h).count(),
+        'failed_nfc_24h': NfcLog.objects.filter(success=False, created_at__gte=since_24h).count(),
+        'failed_login_24h': LoginAttemptLog.objects.filter(success=False, created_at__gte=since_24h).count(),
     }
 
-    context = {
-        'audit_logs': _page(request, qs),
-        'status': status or '', 'severity': severity or '', 'q': q, 'qs': extra,
+    return JsonResponse({
+        'server_time': timezone.now().isoformat(),
         'stats': stats,
-    }
-    return render(request, 'public/system_logs.html', context)
+        'devices': device_rows,
+        'commands': command_rows,
+        'status_logs': status_rows,
+        'nfc_logs': nfc_rows,
+        'rule_logs': rule_rows,
+        'audit_logs': audit_rows,
+        'login_attempts': login_rows,
+        'chart': {
+            'labels': labels, 'lock': lock_series, 'unlock': unlock_series,
+            'nfc_ok': nfc_ok_series, 'nfc_fail': nfc_fail_series,
+            'audit_total': audit_total_series, 'audit_fail': audit_fail_series,
+            'login_ok': login_ok_series, 'login_fail': login_fail_series,
+            'rule_fires': rule_fire_series, 'status_reports': status_report_series,
+            'tamper_events': tamper_series,
+            'avg_battery': avg_battery_series, 'avg_temp': avg_temp_series,
+        },
+    })
 
 
 # ====================== 2FA: CONSTANTS ======================
