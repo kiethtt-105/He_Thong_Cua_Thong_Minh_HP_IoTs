@@ -35,6 +35,7 @@ urlpatterns = [
     path('support/requests/<uuid:request_id>/', views.support_request_detail, name='support-request-detail'),
 
     path('permissions/manage/', views.permissions_manage, name='permissions-manage'),
+    path('automation-rules/', views.automation_rules_manage, name='automation-rules'),
     path('settings/system/', views.settings_system, name='settings-system'),
     path('settings/announcements/', views.announcements_manage, name='announcements-manage'),
     path('notifications/', views.notifications_list, name='notifications'),
