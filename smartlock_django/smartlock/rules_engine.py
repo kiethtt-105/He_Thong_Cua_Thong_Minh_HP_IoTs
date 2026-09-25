@@ -1,153 +1,190 @@
-# smartlock/rules_engine.py
+# smartlock/admin_audit.py
+"""
+Tự động ghi AuditLog cho MỌI thay đổi dữ liệu do admin thực hiện
+NGOÀI phạm vi manage_sys (vd: Django admin /admin/, shell chạy qua request,
+script chạy dưới danh nghĩa 1 request giả admin...).
 
-import hashlib
+Các action trong manage_sys/views.py đã tự gọi audit(...) thủ công với action
+name + metadata rõ ràng (MANAGE_USER_ACTIVATED, MANAGE_DEVICE_MAINTENANCE_ON,
+MANAGE_SUPPORT_APPROVE, ...), nên signal ở đây PHẢI bỏ qua các request có
+path nằm trong MANAGE_SYS_URL_PREFIX, nếu không mỗi thao tác trong trang
+quản trị sẽ bị ghi 2 lần (1 dòng MANAGE_* do view ghi + 1 dòng ADMIN_*_UPDATED
+do signal ghi) vào AuditLog.
+
+Cách hoạt động:
+  - AuditRequestMiddleware giữ request hiện tại (để biết ai đang thao tác, IP, user-agent).
+  - Signal pre_save/post_save/post_delete trên các model được theo dõi.
+  - Chỉ ghi khi người thao tác là admin VÀ request KHÔNG thuộc manage_sys
+    (đường dẫn quản trị đã tự ghi log rồi).
+
+Lưu ý: QuerySet.update() / bulk_create() / bulk_update() KHÔNG bắn signal.
+Trong view admin nếu dùng các hàm đó thì phải gọi audit(...) thủ công (đã làm
+đúng ở manage_sys.helpers/views cho reset_lockout).
+"""
+import contextvars
+import datetime
+import decimal
 import logging
-import secrets
-from datetime import timedelta
+import uuid
 
-from django.db.models import Q
-from django.utils import timezone
+from django.conf import settings
+from django.db.models.signals import post_delete, post_save, pre_save
 
-from .models import (
-    AutomationRule, AutomationRuleLog, Device, DeviceCommand, DeviceStatusLog,
-    NfcLog, Notification,
-)
-from .mqtt_client import publish_command, MqttPublishError
+logger = logging.getLogger('smartlock.audit')
 
-logger = logging.getLogger('smartlock.rules_engine')
+_current_request = contextvars.ContextVar('smartlock_audit_request', default=None)
 
-AUTO_LOCK_COMMAND_TTL_SECONDS = 120
-
-
-def _hash_token(token) -> str:
-    return hashlib.sha256(str(token).encode()).hexdigest()
-
-
-def _active_rules_for(device, trigger_types):
-    """Luật đang active của đúng thiết bị này, HOẶC luật device=None (áp dụng cho mọi
-    thiết bị của cùng 1 owner)."""
-    return (
-        AutomationRule.objects
-        .filter(is_active=True, trigger_type__in=trigger_types)
-        .filter(Q(device=device) | Q(device__isnull=True, owner=device.owner))
-        .select_related('owner', 'device')
-    )
+# Trường không cần so sánh / không được ghi giá trị ra log.
+_SKIP_FIELDS = {'updated_at', 'last_login'}
+_MASKED_FIELDS = {
+    'password', 'provisioning_secret_hash', 'card_uid_hash', 'code_encrypted',
+    'authorization_code_hash', 'recovery_code_hash', 'command_token_hash',
+}
+# Thay đổi các trường này được đánh dấu severity=warning.
+_SENSITIVE_FIELDS = {'is_active', 'is_admin', 'is_staff', 'is_superuser', 'password',
+                     'email', 'username', 'owner_id', 'status'}
 
 
-def _apply_action(rule, device):
-    """Thực hiện action_type của rule. Trả về action_taken để ghi vào AutomationRuleLog."""
-    if rule.action_type == AutomationRule.ACTION_AUTO_LOCK:
+class AuditRequestMiddleware:
+    """Thêm 'smartlock.admin_audit.AuditRequestMiddleware' vào MIDDLEWARE (sau AuthenticationMiddleware)."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        token = _current_request.set(request)
         try:
-            cmd = DeviceCommand.objects.create(
-                device=device, issued_by=rule.owner, command_type='LOCK', status='pending',
-                command_token_hash=_hash_token(secrets.token_urlsafe(32)),
-                expires_at=timezone.now() + timedelta(seconds=AUTO_LOCK_COMMAND_TTL_SECONDS),
-            )
-            publish_command(device.device_code, {
-                'command_id': str(cmd.id), 'command': 'LOCK', 'token': cmd.command_token_hash,
-                'source': 'automation_rule', 'rule_id': str(rule.id),
-            })
-            cmd.status = 'sent'
-            cmd.save(update_fields=['status'])
-            return AutomationRule.ACTION_AUTO_LOCK
-        except MqttPublishError as e:
-            
-            logger.warning('automation_rule %s: AUTO_LOCK thất bại (mqtt): %s', rule.id, e)
-            return AutomationRule.ACTION_NOTIFY_ONLY
-    if rule.action_type == AutomationRule.ACTION_TEMP_BLOCK_ACCESS:
-        Device.objects.filter(pk=device.pk).update(nfc_enabled=False, updated_at=timezone.now())
-        return AutomationRule.ACTION_TEMP_BLOCK_ACCESS
-    return AutomationRule.ACTION_NOTIFY_ONLY
+            return self.get_response(request)
+        finally:
+            _current_request.reset(token)
 
 
-def _fire(rule, device, measured_value, message):
-    action_taken = _apply_action(rule, device)
-    notif = Notification.objects.create(
-        user=rule.owner, device=device, type='AUTOMATION_RULE',
-        title=f'Luật "{rule.name}" đã kích hoạt'[:150], message=message, severity=rule.notify_severity,
-    )
-    AutomationRuleLog.objects.create(
-        rule=rule, device=device, measured_value=measured_value,
-        action_taken=action_taken, notification=notif,
-    )
-    rule.mark_triggered()
-    logger.info('automation_rule fired: rule=%s device=%s action=%s', rule.id, device.id, action_taken)
+# ------------------------------------------------------------------ helpers
+def _manage_sys_prefix():
+    return getattr(settings, 'MANAGE_SYS_URL_PREFIX', '/manage-sys/')
 
 
-def evaluate_device_status(device, status_log: DeviceStatusLog):
-    """Chạy các luật dựa trên 1 bản ghi DeviceStatusLog vừa nhận được: pin yếu, tamper,
-    nhiệt độ vượt ngưỡng, cửa mở quá lâu."""
-    rules = _active_rules_for(device, [
-        AutomationRule.TRIGGER_BATTERY_LOW,
-        AutomationRule.TRIGGER_TAMPER_DETECTED,
-        AutomationRule.TRIGGER_TEMPERATURE_OUT_OF_RANGE,
-        AutomationRule.TRIGGER_DOOR_OPEN_TOO_LONG,
-    ])
-    for rule in rules:
-        if rule.is_in_cooldown():
-            continue
-
-        if rule.trigger_type == AutomationRule.TRIGGER_BATTERY_LOW:
-            if (status_log.battery_level is not None and rule.threshold_value is not None
-                    and status_log.battery_level < rule.threshold_value):
-                _fire(rule, device, status_log.battery_level,
-                      f'Pin còn {status_log.battery_level}%, dưới ngưỡng {rule.threshold_value}%.')
-
-        elif rule.trigger_type == AutomationRule.TRIGGER_TAMPER_DETECTED:
-            if status_log.tamper_detected:
-                _fire(rule, device, None, 'Phát hiện tác động vật lý lên thiết bị (tamper).')
-
-        elif rule.trigger_type == AutomationRule.TRIGGER_TEMPERATURE_OUT_OF_RANGE:
-            if (status_log.temperature is not None and rule.threshold_value is not None
-                    and status_log.temperature > rule.threshold_value):
-                _fire(rule, device, status_log.temperature,
-                      f'Nhiệt độ {status_log.temperature}°C vượt ngưỡng {rule.threshold_value}°C.')
-
-        elif rule.trigger_type == AutomationRule.TRIGGER_DOOR_OPEN_TOO_LONG:
-            if status_log.lock_state == 'unlocked' and rule.threshold_window_seconds:
-                # Tìm lần 'locked' gần nhất TRƯỚC bản ghi hiện tại để suy ra cửa đã mở
-                # liên tục bao lâu.
-                prev_locked = (
-                    DeviceStatusLog.objects
-                    .filter(device=device, lock_state='locked', recorded_at__lt=status_log.recorded_at)
-                    .order_by('-recorded_at').first()
-                )
-                started_at = prev_locked.recorded_at if prev_locked else status_log.recorded_at
-                elapsed = (status_log.recorded_at - started_at).total_seconds()
-                if elapsed >= rule.threshold_window_seconds:
-                    _fire(rule, device, elapsed,
-                          f'Cửa mở liên tục {int(elapsed)}s, vượt ngưỡng {rule.threshold_window_seconds}s.')
+def _admin_request():
+    request = _current_request.get()
+    user = getattr(request, 'user', None)
+    if not request or not user or not user.is_authenticated:
+        return None
+    # manage_sys/views.py đã tự ghi audit (MANAGE_*) cho mọi action của nó,
+    # nên bỏ qua ở đây để không bị ghi trùng.
+    if request.path_info.startswith(_manage_sys_prefix()):
+        return None
+    if user.is_staff or user.is_superuser or getattr(user, 'is_admin', False):
+        return request
+    return None
 
 
-def evaluate_failed_access_burst(device):
-    """Chạy luật FAILED_ACCESS_BURST: đếm số NfcLog(event_type='TAP_FAILED') trong
-    threshold_window_seconds gần nhất, so với threshold_value (số lần)."""
-    rules = _active_rules_for(device, [AutomationRule.TRIGGER_FAILED_ACCESS_BURST])
-    for rule in rules:
-        if rule.is_in_cooldown() or not rule.threshold_value or not rule.threshold_window_seconds:
-            continue
-        since = timezone.now() - timedelta(seconds=rule.threshold_window_seconds)
-        count = NfcLog.objects.filter(device=device, event_type='TAP_FAILED', created_at__gte=since).count()
-        if count >= rule.threshold_value:
-            _fire(rule, device, count,
-                  f'{count} lần quẹt thẻ/nhập sai trong {rule.threshold_window_seconds}s.')
+def _jsonable(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, (uuid.UUID, decimal.Decimal)):
+        return str(value)
+    return str(value)[:200]
 
 
-def evaluate_offline_devices():
-    now = timezone.now()
-    rules = (
-        AutomationRule.objects
-        .filter(is_active=True, trigger_type=AutomationRule.TRIGGER_OFFLINE_TOO_LONG)
-        .select_related('device', 'owner')
-    )
-    for rule in rules:
-        if rule.is_in_cooldown() or not rule.threshold_value:
-            continue
-        devices = [rule.device] if rule.device else list(Device.objects.filter(owner=rule.owner))
-        for device in devices:
-            if not device or not device.last_seen_at:
-                continue
-            offline_seconds = (now - device.last_seen_at).total_seconds()
-            if offline_seconds >= float(rule.threshold_value):
-                _fire(rule, device, offline_seconds,
-                      f'Thiết bị mất kết nối {int(offline_seconds)}s, vượt ngưỡng {int(rule.threshold_value)}s.')
+def _snapshot(obj):
+    return {f.attname: getattr(obj, f.attname) for f in obj._meta.concrete_fields
+            if f.attname not in _SKIP_FIELDS}
+
+
+def _diff(before, after):
+    changes = {}
+    for key, new in after.items():
+        old = before.get(key)
+        if old != new:
+            changes[key] = ['***', '***'] if key in _MASKED_FIELDS else [_jsonable(old), _jsonable(new)]
+    return changes
+
+
+def _target_user(instance):
+    from .models import User
+    if isinstance(instance, User):
+        return instance
+    for attr in ('user', 'requested_by', 'owner'):
+        try:
+            value = getattr(instance, attr, None)
+        except Exception:
+            value = None
+        if isinstance(value, User):
+            return value
+    return None
+
+
+def _device_of(instance):
+    from .models import Device
+    if isinstance(instance, Device):
+        return instance
+    try:
+        return getattr(instance, 'device', None)
+    except Exception:
+        return None
+
+
+def _write(request, instance, verb, metadata, severity='info'):
+    from .models import AuditLog
+    from .views import _client_ip, _user_agent  # import muộn để tránh vòng lặp import
+    try:
+        AuditLog.objects.create(
+            actor_user=request.user,
+            target_user=_target_user(instance),
+            device=_device_of(instance),
+            action=f'ADMIN_{instance.__class__.__name__.upper()}_{verb}'[:50],
+            severity=severity, success=True,
+            ip_address=_client_ip(request), user_agent=_user_agent(request),
+            metadata=metadata,
+        )
+    except Exception:
+        logger.exception('admin_audit: không ghi được log %s %s', instance.__class__.__name__, verb)
+
+
+# ------------------------------------------------------------------ signal handlers
+def _on_pre_save(sender, instance, **kwargs):
+    instance._audit_before = None
+    if not instance.pk or not _admin_request():
+        return
+    old = sender.objects.filter(pk=instance.pk).first()
+    if old is not None:
+        instance._audit_before = _snapshot(old)
+
+
+def _on_post_save(sender, instance, created, **kwargs):
+    request = _admin_request()
+    if not request:
+        return
+    if created:
+        _write(request, instance, 'CREATED', {'id': str(instance.pk), 'repr': str(instance)[:100]})
+        return
+    before = getattr(instance, '_audit_before', None)
+    if before is None:
+        return
+    changes = _diff(before, _snapshot(instance))
+    if not changes:
+        return
+    severity = 'warning' if _SENSITIVE_FIELDS & set(changes) else 'info'
+    _write(request, instance, 'UPDATED', {'id': str(instance.pk), 'changes': changes}, severity)
+
+
+def _on_post_delete(sender, instance, **kwargs):
+    request = _admin_request()
+    if request:
+        _write(request, instance, 'DELETED',
+               {'id': str(instance.pk), 'repr': str(instance)[:100]}, 'warning')
+
+
+def register_signals():
+    """Gọi 1 lần trong AppConfig.ready()."""
+    from .models import (AccessCard, Announcement, Device, DeviceAccess, LoginLockout,
+                         ShareAccessCode, SupportRequest, SystemSettings, User)
+    tracked = (User, Device, DeviceAccess, AccessCard, ShareAccessCode, SupportRequest,
+               Announcement, SystemSettings, LoginLockout)
+    for model in tracked:
+        name = model.__name__
+        pre_save.connect(_on_pre_save, sender=model, dispatch_uid=f'audit_pre_{name}')
+        post_save.connect(_on_post_save, sender=model, dispatch_uid=f'audit_post_{name}')
+        post_delete.connect(_on_post_delete, sender=model, dispatch_uid=f'audit_del_{name}')
