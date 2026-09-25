@@ -1,16 +1,25 @@
 # smartlock/admin_audit.py
 """
 Tự động ghi AuditLog cho MỌI thay đổi dữ liệu do admin thực hiện
-(manage_sys, Django admin, shell chạy qua request...), kể cả admin tác động lên user.
+NGOÀI phạm vi manage_sys (vd: Django admin /admin/, shell chạy qua request,
+script chạy dưới danh nghĩa 1 request giả admin...).
+
+Các action trong manage_sys/views.py đã tự gọi audit(...) thủ công với action
+name + metadata rõ ràng (MANAGE_USER_ACTIVATED, MANAGE_DEVICE_MAINTENANCE_ON,
+MANAGE_SUPPORT_APPROVE, ...), nên signal ở đây PHẢI bỏ qua các request có
+path nằm trong MANAGE_SYS_URL_PREFIX, nếu không mỗi thao tác trong trang
+quản trị sẽ bị ghi 2 lần (1 dòng MANAGE_* do view ghi + 1 dòng ADMIN_*_UPDATED
+do signal ghi) vào AuditLog.
 
 Cách hoạt động:
   - AuditRequestMiddleware giữ request hiện tại (để biết ai đang thao tác, IP, user-agent).
   - Signal pre_save/post_save/post_delete trên các model được theo dõi.
-  - Chỉ ghi khi người thao tác là admin. Thao tác của user thường vẫn do views.py ghi như cũ,
-    nên không bị ghi trùng.
+  - Chỉ ghi khi người thao tác là admin VÀ request KHÔNG thuộc manage_sys
+    (đường dẫn quản trị đã tự ghi log rồi).
 
 Lưu ý: QuerySet.update() / bulk_create() / bulk_update() KHÔNG bắn signal.
-Trong view admin nếu dùng các hàm đó thì phải gọi _audit(...) thủ công.
+Trong view admin nếu dùng các hàm đó thì phải gọi audit(...) thủ công (đã làm
+đúng ở manage_sys.helpers/views cho reset_lockout).
 """
 import contextvars
 import datetime
@@ -18,6 +27,7 @@ import decimal
 import logging
 import uuid
 
+from django.conf import settings
 from django.db.models.signals import post_delete, post_save, pre_save
 
 logger = logging.getLogger('smartlock.audit')
@@ -50,10 +60,18 @@ class AuditRequestMiddleware:
 
 
 # ------------------------------------------------------------------ helpers
+def _manage_sys_prefix():
+    return getattr(settings, 'MANAGE_SYS_URL_PREFIX', '/manage-sys/')
+
+
 def _admin_request():
     request = _current_request.get()
     user = getattr(request, 'user', None)
     if not request or not user or not user.is_authenticated:
+        return None
+    # manage_sys/views.py đã tự ghi audit (MANAGE_*) cho mọi action của nó,
+    # nên bỏ qua ở đây để không bị ghi trùng.
+    if request.path_info.startswith(_manage_sys_prefix()):
         return None
     if user.is_staff or user.is_superuser or getattr(user, 'is_admin', False):
         return request
