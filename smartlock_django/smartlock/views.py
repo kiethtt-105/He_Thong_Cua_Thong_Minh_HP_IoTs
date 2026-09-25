@@ -61,7 +61,7 @@ from .models import (
     AccessCard, Announcement, AuditLog, AutomationRule, AutomationRuleLog, CardDeviceAccess,
     Device, DeviceAccess, DeviceCommand, DeviceStatusLog, EmailVerificationToken, Fido2Credential,
     LoginAttemptLog, LoginLockout, NfcLog, NfcReader, NfcReaderConfig, Notification, Permission,
-    ShareAccessCode, SupportRequest, SystemSettings, TwoFactorBackupCode, TwoFactorConfig,
+    ShareAccessCode, SupportRequest, SystemSettings, TwoFactorConfig,
     TwoFactorEmailCode, User, fernet, sync_two_fa_flag,
 )
 from .mqtt_client import publish_command, MqttPublishError
@@ -2003,7 +2003,6 @@ MAX_PENDING_FAILS = 5                  # sai quá 5 lần trong 1 phiên -> hủ
 EMAIL_CODE_TTL_MIN = 10
 EMAIL_CODE_COOLDOWN = 60               # giây giữa 2 lần gửi mã
 EMAIL_CODE_MAX_ATTEMPTS = 5
-BACKUP_CODE_COUNT = 8
 TOTP_ISSUER = 'Smart Lock'
 SETUP_TTL = 10 * 60
 WEBAUTHN_TTL = 5 * 60
@@ -2020,9 +2019,9 @@ def _now_ts():
     return int(timezone.now().timestamp())
 
 
-# ====================== HÀM PHỤ (mã hóa / mã dự phòng / TOTP / email) ======================
+# ====================== HÀM PHỤ (mã hóa / TOTP / email) ======================
 def _pepper_hash(user, value: str) -> str:
-    """HMAC-SHA256 gắn với SECRET_KEY + user để lưu hash của mã OTP / mã dự phòng."""
+    """HMAC-SHA256 gắn với SECRET_KEY + user để lưu hash của mã OTP."""
     msg = f'{user.pk}:{value}'.encode()
     return hmac.new(dj_settings.SECRET_KEY.encode(), msg, hashlib.sha256).hexdigest()
 
@@ -2062,46 +2061,6 @@ def _verify_totp(cfg: TwoFactorConfig, code: str) -> bool:
                 locked.save(update_fields=['totp_last_step', 'updated_at'])
                 return True
     return False
-
-
-def _new_backup_codes(user):
-    """Xóa mã cũ, tạo BACKUP_CODE_COUNT mã mới (chỉ lưu hash). Trả về danh sách mã thô để hiển thị 1 lần."""
-    alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    codes = [
-        '-'.join(''.join(secrets.choice(alphabet) for _ in range(4)) for _ in range(2))
-        for _ in range(BACKUP_CODE_COUNT)
-    ]
-    with transaction.atomic():
-        TwoFactorBackupCode.objects.filter(user=user).delete()
-        TwoFactorBackupCode.objects.bulk_create([
-            TwoFactorBackupCode(user=user, code_hash=_pepper_hash(user, 'bk:' + _norm_backup(c)))
-            for c in codes
-        ])
-    return codes
-
-
-def _norm_backup(value) -> str:
-    return re.sub(r'[^A-Z0-9]', '', (value or '').upper())
-
-
-def _use_backup_code(user, raw) -> bool:
-    norm = _norm_backup(raw)
-    if len(norm) != 8:
-        return False
-    h = _pepper_hash(user, 'bk:' + norm)
-    with transaction.atomic():
-        obj = TwoFactorBackupCode.objects.select_for_update().filter(
-            user=user, code_hash=h, is_used=False).first()
-        if not obj:
-            return False
-        obj.is_used = True
-        obj.used_at = timezone.now()
-        obj.save(update_fields=['is_used', 'used_at'])
-    return True
-
-
-def _backup_left(user) -> int:
-    return TwoFactorBackupCode.objects.filter(user=user, is_used=False).count()
 
 
 def _send_email_code(user, purpose):
@@ -2311,7 +2270,6 @@ def verify_2fa(request):
 
     cfg = _get_cfg(user)
     methods = cfg.available_methods()          # danh sách 'totp' / 'fido2' / 'email'
-    backup_left = _backup_left(user)
     if not methods:
         _clear_pending(request)
         messages.error(request, 'Tài khoản chưa có phương thức 2FA khả dụng.')
@@ -2325,14 +2283,6 @@ def verify_2fa(request):
             ok = _verify_totp(cfg, code)
         elif method == 'email' and 'email' in methods:
             ok = _verify_email_code(user, code, 'VERIFY')
-        elif method == 'backup' and backup_left:
-            ok = _use_backup_code(user, code)
-            if ok:
-                left = _backup_left(user)
-                _audit(request, 'TWO_FACTOR_BACKUP_USED', actor=user, target_user=user, severity='warning',
-                       metadata={'left': left})
-                _notify(user, 'Đã dùng mã dự phòng 2FA', f'Bạn còn {left} mã dự phòng.',
-                        severity='warning', type_='SECURITY')
         else:
             messages.error(request, 'Phương thức không hợp lệ.')
             return redirect('smartlock:tf-verify')
@@ -2347,13 +2297,13 @@ def verify_2fa(request):
     order = [m for m in ('totp', 'fido2', 'email') if m in methods]
     default_tab = cfg.preferred_method if cfg.preferred_method in methods else order[0]
     tab = request.GET.get('tab')
-    if tab not in methods + (['backup'] if backup_left else []):
+    if tab not in methods:
         tab = default_tab
     title, subtitle = PURPOSE_TEXT.get(p['purpose'], PURPOSE_TEXT['login'])
     return render(request, 'account/base/verify_2fa.html', {
         'purpose': p['purpose'], 'title': title, 'subtitle': subtitle,
         'has_totp': 'totp' in methods, 'has_fido2': 'fido2' in methods, 'has_email': 'email' in methods,
-        'has_backup': backup_left > 0, 'tab': tab,
+        'tab': tab,
         'email_masked': _mask_email(user.email),
         'cancel_url': reverse('smartlock:tf-cancel'),
     })
@@ -2559,12 +2509,10 @@ def totp_confirm(request):
 
 
 def _after_method_added(request, user, method):
-    """Ghi log, thông báo, và tạo mã dự phòng lần đầu (hiển thị 1 lần ở trang profile)."""
+    """Ghi log, thông báo."""
     _audit(request, 'TWO_FACTOR_METHOD_ADDED', target_user=user, severity='warning', metadata={'method': method})
     _notify(user, 'Đã thêm phương thức 2FA', f'Phương thức {method.upper()} vừa được thêm vào tài khoản.',
             severity='info', type_='SECURITY')
-    if not TwoFactorBackupCode.objects.filter(user=user).exists():
-        request.session['new_backup_codes'] = _new_backup_codes(user)
     # Phương thức ĐẦU TIÊN vừa xác nhận xong -> tự bật 2FA luôn (user đã chứng minh sở hữu phương thức).
     cfg = _get_cfg(user)
     was_enabled = user.two_fa_enabled
@@ -2729,27 +2677,11 @@ def _after_method_removed(request, user, method):
     if cfg.preferred_method not in left:
         cfg.preferred_method = left[0] if left else ''
     cfg.save()
-    if not sync_two_fa_flag(user):
-        TwoFactorBackupCode.objects.filter(user=user).delete()
+    sync_two_fa_flag(user)
     _audit(request, 'TWO_FACTOR_METHOD_REMOVED', target_user=user, severity='warning', metadata={'method': method})
     _notify(user, 'Đã gỡ phương thức 2FA', f'Phương thức {method.upper()} vừa được gỡ khỏi tài khoản.',
             severity='warning', type_='SECURITY')
     messages.success(request, 'Đã gỡ phương thức xác thực.')
-
-
-@auth_required
-@require_POST
-def backup_regenerate(request):
-    user = request.user
-    if not _get_cfg(user).available_methods():
-        messages.error(request, 'Cần thiết lập ít nhất một phương thức trước.')
-        return redirect('smartlock:profile')
-    if not _require_password(request):
-        return redirect('smartlock:profile')
-    request.session['new_backup_codes'] = _new_backup_codes(user)
-    _audit(request, 'TWO_FACTOR_BACKUP_REGEN', target_user=user, severity='warning')
-    messages.success(request, 'Đã tạo mã dự phòng mới. Mã cũ không còn dùng được.')
-    return redirect('smartlock:profile')
 
 
 # ====================== CONTEXT CHO TRANG PROFILE ======================
@@ -2762,10 +2694,8 @@ def two_factor_context(request, user):
         'tf_email': bool(cfg and cfg.email_otp_enabled),
         'tf_passkeys': passkeys,
         'tf_has_method': bool(cfg and cfg.available_methods()),
-        'tf_backup_left': _backup_left(user),
         'tf_email_pending': False,
         'tf_totp_setup': None,
-        'tf_new_backup_codes': request.session.pop('new_backup_codes', None),
         'tf_email_masked': _mask_email(user.email),
         'tf_email_verified': user.email_verified,
     }
@@ -2921,4 +2851,3 @@ def access_events_history(request):
         'access_events': _page(request, qs),
     }
     return render(request, 'account/access/history.html', context)
- 

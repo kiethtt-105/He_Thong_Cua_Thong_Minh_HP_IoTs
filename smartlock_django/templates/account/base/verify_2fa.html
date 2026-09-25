@@ -32,7 +32,6 @@
                 {% if has_totp %}<button type="button" class="btn btn-sm btn-outline-primary tf-tab" data-tab="totp"><i class="fa-solid fa-mobile-screen-button me-1"></i>Authenticator</button>{% endif %}
                 {% if has_fido2 %}<button type="button" class="btn btn-sm btn-outline-primary tf-tab" data-tab="fido2"><i class="fa-solid fa-fingerprint me-1"></i>Passkey</button>{% endif %}
                 {% if has_email %}<button type="button" class="btn btn-sm btn-outline-primary tf-tab" data-tab="email"><i class="fa-solid fa-envelope me-1"></i>Email</button>{% endif %}
-                {% if has_backup %}<button type="button" class="btn btn-sm btn-outline-secondary tf-tab" data-tab="backup"><i class="fa-solid fa-life-ring me-1"></i>Mã dự phòng</button>{% endif %}
             </div>
 
             {% if has_totp %}
@@ -65,17 +64,6 @@
                 <form method="post" autocomplete="off">{% csrf_token %}
                     <input type="hidden" name="method" value="email">
                     <input type="text" name="code" class="form-control tf-code mb-3" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" placeholder="000000" autocomplete="one-time-code" required>
-                    <button class="btn btn-primary w-100">Xác nhận</button>
-                </form>
-            </div>
-            {% endif %}
-
-            {% if has_backup %}
-            <div class="tf-panel" id="panel-backup">
-                <form method="post" autocomplete="off">{% csrf_token %}
-                    <input type="hidden" name="method" value="backup">
-                    <label class="form-label small">Nhập một mã dự phòng (dùng được 1 lần)</label>
-                    <input type="text" name="code" class="form-control text-center mb-3" maxlength="9" placeholder="XXXX-XXXX" autocapitalize="characters" required>
                     <button class="btn btn-primary w-100">Xác nhận</button>
                 </form>
             </div>

@@ -44,6 +44,16 @@ FERNET_KEY = os.environ.get("FERNET_KEY")
 OTP_EXPIRY_MINUTES = env_int("OTP_EXPIRY_MINUTES", 5)
 OTP_MAX_ATTEMPTS = env_int("OTP_MAX_ATTEMPTS", 5)
 
+# ==================== WEBAUTHN (PASSKEY) ====================
+# Để trống -> tự suy ra từ Host header của request (dễ sai khi chạy qua devtunnel/ngrok
+# vì tunnel có thể đổi Host header thành localhost). Đặt cứng trong .env để chắc chắn khớp
+# domain đang mở trên trình duyệt, ví dụ khi test qua devtunnel:
+#   WEBAUTHN_RP_ID=xxxx.asse.devtunnels.ms
+#   WEBAUTHN_ORIGIN=https://xxxx.asse.devtunnels.ms
+WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID") or None
+WEBAUTHN_ORIGIN = os.environ.get("WEBAUTHN_ORIGIN") or None
+WEBAUTHN_RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "Smart Lock")
+
 # ==================== MQTT ====================
 MQTT_HOST = os.environ.get("MQTT_HOST")
 MQTT_PORT = env_int("MQTT_PORT", 1883)

@@ -72,5 +72,4 @@ urlpatterns = [
     path('two-factor/passkey/register/', views.passkey_register, name='tf-passkey-register'),
     path('two-factor/passkey/<uuid:cred_id>/delete/', views.passkey_delete, name='tf-passkey-delete'),
     path('two-factor/remove/<str:method>/', views.remove_method, name='tf-remove-method'),
-    path('two-factor/backup/regenerate/', views.backup_regenerate, name='tf-backup-regenerate'),
 ]

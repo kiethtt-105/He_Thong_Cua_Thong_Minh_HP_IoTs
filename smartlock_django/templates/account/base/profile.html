@@ -137,17 +137,6 @@
                         {% endif %}
                     </li>
 
-                    <!-- Mã dự phòng -->
-                    {% if tf_has_method %}
-                    <li class="list-group-item px-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                        <div>
-                            <div class="fw-semibold"><i class="fa-solid fa-life-ring me-2"></i>Mã dự phòng</div>
-                            <small class="{% if tf_backup_left <= 2 %}text-warning{% else %}text-muted{% endif %}">Còn {{ tf_backup_left }} mã dùng được - dùng khi mất điện thoại/khóa</small>
-                        </div>
-                        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#tfPwModal"
-                                data-url="{% url 'smartlock:tf-backup-regenerate' %}" data-title="Tạo lại mã dự phòng" data-label="Tạo mã mới">Tạo mã mới</button>
-                    </li>
-                    {% endif %}
                 </ul>
             </div>
         </div>
@@ -199,26 +188,6 @@
 </div>
 {% endif %}
 
-{% if tf_new_backup_codes %}
-<!-- Modal mã dự phòng (chỉ hiện 1 lần) -->
-<div class="modal fade" id="tfBackupModal" tabindex="-1" data-bs-backdrop="static" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-header"><h6 class="modal-title"><i class="fa-solid fa-life-ring me-2"></i>Mã dự phòng của bạn</h6></div>
-            <div class="modal-body">
-                <div class="alert alert-warning py-2 small">Lưu các mã này ở nơi an toàn. Mỗi mã chỉ dùng <b>một lần</b> và <b>sẽ không hiển thị lại</b>.</div>
-                <pre id="tfBackupList" class="border rounded p-3 text-center fs-6 mb-0">{% for c in tf_new_backup_codes %}{{ c }}
-{% endfor %}</pre>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" id="tfBackupCopy"><i class="fa-regular fa-copy me-1"></i>Sao chép</button>
-                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Tôi đã lưu</button>
-            </div>
-        </div>
-    </div>
-</div>
-{% endif %}
-
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     var csrf = (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
@@ -233,16 +202,9 @@ document.addEventListener('DOMContentLoaded', function () {
         pw.querySelector('[name=password]').value = '';
     });
 
-    // --- tự mở modal TOTP / mã dự phòng ---
-    ['tfTotpModal', 'tfBackupModal'].forEach(function (id) {
-        var el = document.getElementById(id);
-        if (el && window.bootstrap) new bootstrap.Modal(el).show();
-    });
-    var cp = document.getElementById('tfBackupCopy');
-    if (cp) cp.addEventListener('click', function () {
-        navigator.clipboard.writeText(document.getElementById('tfBackupList').textContent.trim())
-            .then(function () { cp.textContent = 'Đã sao chép'; });
-    });
+    // --- tự mở modal TOTP ---
+    var totpModal = document.getElementById('tfTotpModal');
+    if (totpModal && window.bootstrap) new bootstrap.Modal(totpModal).show();
 
     // --- đăng ký passkey (WebAuthn) ---
     function b64uToBuf(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); s += '='.repeat((4 - s.length % 4) % 4);

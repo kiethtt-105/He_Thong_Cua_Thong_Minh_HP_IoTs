@@ -733,19 +733,6 @@ class TwoFactorEmailCode(models.Model):
         indexes = [models.Index(fields=['user', 'created_at'], name='idx_tfemail_user_time')]
 
 
-class TwoFactorBackupCode(models.Model):
-    """Mã dự phòng dùng 1 lần khi mất thiết bị (chỉ lưu hash)."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='two_factor_backup_codes')
-    code_hash = models.CharField(max_length=64)
-    is_used = models.BooleanField(default=False)
-    used_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [models.Index(fields=['user', 'is_used'], name='idx_tfbackup_user_used')]
-
-
 # ==================== SIGNALS ====================
 @receiver(pre_save, sender=User)
 def set_updated_at_user(sender, instance, **kwargs):

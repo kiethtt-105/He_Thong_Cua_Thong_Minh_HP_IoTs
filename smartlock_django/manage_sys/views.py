@@ -63,20 +63,20 @@ def login_view(request):
     ctx = {'next': next_url}
 
     if request.method != 'POST':
-        return render(request, 'manage_sys/login.html', ctx)
+        return render(request, 'manage_sys/login/login.html', ctx)
 
     identifier = (request.POST.get('identifier') or '').strip()
     password = request.POST.get('password') or ''
     if not identifier or not password:
         messages.error(request, 'Vui lòng điền đầy đủ thông tin.')
-        return render(request, 'manage_sys/login.html', ctx)
+        return render(request, 'manage_sys/login/login.html', ctx)
 
     ip = client_ip(request)
     if ip_blacklisted(get_settings(), ip):
         audit(request, 'MANAGE_LOGIN_BLOCKED_IP', actor=None, success=False,
               severity='warning', username_attempt=identifier[:150])
         messages.error(request, 'Địa chỉ IP của bạn đã bị chặn.')
-        return render(request, 'manage_sys/login.html', ctx)
+        return render(request, 'manage_sys/login/login.html', ctx)
 
     user = _find_user(identifier)
     is_manager_account = bool(user and has_manage_role(user))
@@ -87,7 +87,7 @@ def login_view(request):
             messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {remaining} phút.')
             audit(request, 'MANAGE_LOGIN_LOCKED', actor=None, target_user=user, success=False,
                   severity='warning', username_attempt=identifier[:150])
-            return render(request, 'manage_sys/login.html', ctx)
+            return render(request, 'manage_sys/login/login.html', ctx)
 
     auth_user = authenticate(request, username=user.email, password=password) if user else None
     ok = bool(auth_user and has_manage_role(auth_user))
@@ -117,7 +117,7 @@ def login_view(request):
     audit(request, action, actor=None, target_user=user, success=False,
           severity='warning', username_attempt=identifier[:150])
     messages.error(request, LOGIN_ERROR)
-    return render(request, 'manage_sys/login.html', ctx)
+    return render(request, 'manage_sys/login/login.html', ctx)
 
 
 @require_POST
@@ -167,7 +167,7 @@ def dashboard(request):
         'alert_logs': (AuditLog.objects.filter(severity__in=['warning', 'critical'])
                        .select_related('actor_user', 'device').order_by('-created_at')[:8]),
     }
-    return render(request, 'manage_sys/dashboard.html', context)
+    return render(request, 'manage_sys/dashboard/dashboard.html', context)
 
 
 # ====================== USERS ======================
@@ -524,7 +524,7 @@ def announcements(request):
 
     qs = Announcement.objects.select_related('created_by').order_by('-created_at')
     page_obj, qs_str = paginate(request, qs, per_page=10)
-    return render(request, 'manage_sys/announcements.html', {'page_obj': page_obj, 'qs': qs_str})
+    return render(request, 'manage_sys/announcements/announcements.html', {'page_obj': page_obj, 'qs': qs_str})
 
 
 # ====================== SETTINGS ======================
@@ -582,7 +582,7 @@ def settings_system(request):
         messages.success(request, 'Đã lưu cài đặt hệ thống.')
         return redirect('manage_sys:settings')
 
-    return render(request, 'manage_sys/settings.html', {
+    return render(request, 'manage_sys/settings/settings.html', {
         'st': st,
         'stages_text': ', '.join(str(x) for x in (st.login_lockout_stage_minutes or [])),
     })
