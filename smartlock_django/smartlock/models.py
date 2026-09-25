@@ -197,7 +197,13 @@ class Device(models.Model):
     provisioning_secret_hash = models.CharField(max_length=255)
     device_mode = models.CharField(max_length=20, default='physical', choices=[('physical', 'Physical'), ('simulated', 'Simulated')])
     owner = models.ForeignKey(User, on_delete=models.RESTRICT, null=True, blank=True)
-    # is_purchased = models.BooleanField(default=False)          # <--- THAY ĐỔI MỚI
+    is_purchased = models.BooleanField(
+        default=False,
+        help_text='True khi thiết bị đã được khách mua/kích hoạt chính thức, khác với '
+                   'thiết bị demo/dùng thử nội bộ. Chỉ thiết bị đã mua mới được tính vào '
+                   'doanh số và được cấp bảo hành/hỗ trợ (SupportRequest).'
+    )
+    purchased_at = models.DateTimeField(null=True, blank=True)
     name = models.CharField(max_length=100)
     mac_address = models.CharField(max_length=17, blank=True, null=True)
     firmware_version = models.CharField(max_length=30, blank=True, null=True)
@@ -242,6 +248,14 @@ class Device(models.Model):
         self.owner = None
         if save:
             self.save(update_fields=['status', 'owner', 'updated_at'])
+
+    def mark_purchased(self, save=True):
+        """Đánh dấu thiết bị đã được mua/kích hoạt chính thức (không set tay is_purchased
+        + purchased_at riêng lẻ ở view, tránh quên set 1 trong 2 field như factory_reset)."""
+        self.is_purchased = True
+        self.purchased_at = timezone.now()
+        if save:
+            self.save(update_fields=['is_purchased', 'purchased_at', 'updated_at'])
 
 
 class DeviceStatusLog(models.Model):
@@ -521,7 +535,110 @@ class AuditLog(models.Model):
         ]
 
 
-# ==================== NHÓM F: XÁC THỰC 2 LỚP (2FA) ====================
+# ==================== NHÓM F: RULE ENGINE (CẢNH BÁO / TỰ ĐỘNG HOÁ) ====================
+# Đáp ứng yêu cầu bắt buộc của đề bài (Phần 2.3 Lớp 3 - Backend, rubric mục 5):
+# "Rule engine: ít nhất 03 luật cảnh báo/tự động hoá do người dùng cấu hình được
+# (không hard-code ngưỡng trong mã nguồn)". Trước đây hệ thống chưa có model nào
+# cho phần này - toàn bộ ngưỡng (pin yếu, quẹt sai liên tiếp...) đang là hằng số
+# trong code, không đúng yêu cầu. Nhóm model dưới đây thay thế cho việc đó.
+class AutomationRule(models.Model):
+    """1 luật cảnh báo/tự động hoá do user tự tạo, sửa, bật/tắt qua giao diện
+    web (views.py: permissions_manage/settings_system nên có thêm 1 trang
+    'automation-rules'), KHÔNG cần sửa mã nguồn khi muốn đổi ngưỡng."""
+
+    TRIGGER_BATTERY_LOW = 'BATTERY_LOW'
+    TRIGGER_OFFLINE_TOO_LONG = 'OFFLINE_TOO_LONG'
+    TRIGGER_FAILED_ACCESS_BURST = 'FAILED_ACCESS_BURST'
+    TRIGGER_DOOR_OPEN_TOO_LONG = 'DOOR_OPEN_TOO_LONG'
+    TRIGGER_TAMPER_DETECTED = 'TAMPER_DETECTED'
+    TRIGGER_TEMPERATURE_OUT_OF_RANGE = 'TEMPERATURE_OUT_OF_RANGE'
+    TRIGGER_CHOICES = [
+        (TRIGGER_BATTERY_LOW, 'Pin yếu dưới ngưỡng (%)'),
+        (TRIGGER_OFFLINE_TOO_LONG, 'Mất kết nối quá lâu (giây)'),
+        (TRIGGER_FAILED_ACCESS_BURST, 'Quẹt thẻ / nhập sai liên tiếp (số lần trong khoảng thời gian)'),
+        (TRIGGER_DOOR_OPEN_TOO_LONG, 'Cửa mở quá lâu chưa đóng (giây)'),
+        (TRIGGER_TAMPER_DETECTED, 'Phát hiện tác động vật lý (tamper)'),
+        (TRIGGER_TEMPERATURE_OUT_OF_RANGE, 'Nhiệt độ vượt ngưỡng (°C)'),
+    ]
+
+    ACTION_NOTIFY_ONLY = 'NOTIFY_ONLY'
+    ACTION_AUTO_LOCK = 'AUTO_LOCK'
+    ACTION_TEMP_BLOCK_ACCESS = 'TEMP_BLOCK_ACCESS'
+    ACTION_CHOICES = [
+        (ACTION_NOTIFY_ONLY, 'Chỉ gửi thông báo'),
+        (ACTION_AUTO_LOCK, 'Tự động khoá cửa (gửi lệnh LOCK)'),
+        (ACTION_TEMP_BLOCK_ACCESS, 'Tạm khoá quyền truy cập của thẻ/user liên quan'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='automation_rules')
+    device = models.ForeignKey(
+        Device, on_delete=models.CASCADE, null=True, blank=True, related_name='automation_rules',
+        help_text='Để trống = áp dụng cho mọi thiết bị của owner.'
+    )
+    name = models.CharField(max_length=150)
+    trigger_type = models.CharField(max_length=30, choices=TRIGGER_CHOICES)
+    threshold_value = models.DecimalField(
+        max_digits=8, decimal_places=2, null=True, blank=True,
+        help_text='VD: 20 (pin %), 300 (giây), 3 (số lần thất bại), 40 (°C).'
+    )
+    threshold_window_seconds = models.IntegerField(
+        null=True, blank=True,
+        help_text='Khoảng thời gian tính ngưỡng cho các luật kiểu "N lần trong X giây".'
+    )
+    action_type = models.CharField(max_length=30, choices=ACTION_CHOICES, default=ACTION_NOTIFY_ONLY)
+    notify_severity = models.CharField(
+        max_length=20, default='warning',
+        choices=[('info', 'Info'), ('warning', 'Warning'), ('critical', 'Critical')]
+    )
+    cooldown_seconds = models.IntegerField(
+        default=300,
+        help_text='Không kích hoạt lại luật này trong khoảng thời gian sau lần kích hoạt gần nhất, '
+                   'tránh spam thông báo khi điều kiện vẫn còn đúng.'
+    )
+    is_active = models.BooleanField(default=True)
+    last_triggered_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['owner', 'is_active'], name='idx_autorule_owner_active'),
+            models.Index(fields=['device', 'trigger_type'], name='idx_autorule_dev_trigger'),
+        ]
+
+    def is_in_cooldown(self) -> bool:
+        if not self.last_triggered_at:
+            return False
+        return (timezone.now() - self.last_triggered_at).total_seconds() < self.cooldown_seconds
+
+    def mark_triggered(self, save=True):
+        self.last_triggered_at = timezone.now()
+        if save:
+            self.save(update_fields=['last_triggered_at'])
+
+    def __str__(self):
+        return f'{self.name} ({self.get_trigger_type_display()})'
+
+
+class AutomationRuleLog(models.Model):
+    """Lịch sử mỗi lần 1 rule thực sự được kích hoạt - dùng làm bằng chứng
+    rule engine hoạt động thật (đưa vào Chương 6 báo cáo: bảng kịch bản kiểm thử)."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    rule = models.ForeignKey(AutomationRule, on_delete=models.CASCADE, related_name='logs')
+    device = models.ForeignKey(Device, on_delete=models.SET_NULL, null=True, blank=True)
+    measured_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    action_taken = models.CharField(max_length=30)
+    notification = models.ForeignKey(
+        'Notification', on_delete=models.SET_NULL, null=True, blank=True, related_name='rule_log_entries'
+    )
+    triggered_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['rule', 'triggered_at'], name='idx_autorulelog_rule_time')]
+
+
+# ==================== NHÓM G: XÁC THỰC 2 LỚP (2FA) ====================
 class TwoFactorConfig(models.Model):
     """Cấu hình 2FA của 1 user (TOTP/Email). Trạng thái bật/tắt tổng thể không lưu ở đây
     mà lấy từ User.two_fa_enabled, luôn được đồng bộ bởi sync_two_fa_flag()."""
@@ -656,4 +773,9 @@ def set_updated_at_nfc_reader(sender, instance, **kwargs):
 
 @receiver(pre_save, sender=SystemSettings)
 def set_updated_at_system_settings(sender, instance, **kwargs):
+    instance.updated_at = timezone.now()
+
+
+@receiver(pre_save, sender=AutomationRule)
+def set_updated_at_automation_rule(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
