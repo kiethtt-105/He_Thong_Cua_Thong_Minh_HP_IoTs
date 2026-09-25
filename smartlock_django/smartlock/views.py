@@ -13,7 +13,9 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
-
+import random, string
+from .models import DoorPinCode, FaceProfile, AccessEvent
+from . import access_control
 import pyotp
 import qrcode
 import qrcode.image.svg
@@ -2779,3 +2781,144 @@ def two_factor_context(request, user):
             'token': setup['token'],
         }
     return ctx
+
+# ==================== A2: QUẢN LÝ MÃ PIN CỬA ====================
+@auth_required
+def door_pins(request):
+    """Trang cho chủ nhà cấp/thu hồi PIN cho khách thuê. Chỉ chủ thiết bị (hoặc
+    người có quyền 'manage_pins') mới được cấp PIN mới."""
+    devices = _accessible_devices(request.user)
+    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
+                          strict=request.method == 'POST')
+ 
+    if request.method == 'POST':
+        if not device:
+            messages.error(request, 'Không tìm thấy thiết bị.')
+            return redirect('smartlock:door-pins')
+        if not _has_permission(request.user, device, 'manage_pins'):
+            _audit(request, 'DOOR_PIN_CREATE_DENIED', device=device, success=False, severity='warning')
+            messages.error(request, 'Bạn không có quyền cấp mã PIN cho thiết bị này.')
+            return _redirect_with('smartlock:door-pins', device=device.id)
+ 
+        action = request.POST.get('action')
+        if action == 'issue':
+            try:
+                ttl_minutes = max(1, min(int(request.POST.get('ttl_minutes') or 1440), 43200))  # tối đa 30 ngày
+                max_uses = max(0, int(request.POST.get('max_uses') or 1))
+            except (TypeError, ValueError):
+                messages.error(request, 'Thời hạn hoặc số lần dùng không hợp lệ.')
+                return _redirect_with('smartlock:door-pins', device=device.id)
+ 
+            label = (request.POST.get('label') or '').strip()[:100]
+            plain_pin = ''.join(random.choices(string.digits, k=6))
+            pin = access_control.issue_door_pin(
+                device=device, created_by=request.user, plain_pin=plain_pin,
+                ttl_minutes=ttl_minutes, label=label, max_uses=max_uses,
+            )
+            _audit(request, 'DOOR_PIN_CREATED', device=device, metadata={'pin_id': str(pin.id), 'label': label})
+            # plain_pin CHỈ xuất hiện 1 lần duy nhất ở đây - không lưu, không log lại
+            # dạng thô. Chủ nhà tự chụp màn hình / copy để gửi cho khách.
+            messages.success(request, f'Đã tạo mã PIN mới: {plain_pin} (hết hạn sau {ttl_minutes} phút).')
+            return _redirect_with('smartlock:door-pins', device=device.id)
+ 
+        if action == 'revoke':
+            pin = DoorPinCode.objects.filter(id=_parse_uuid(request.POST.get('pin_id')), device=device).first()
+            if not pin:
+                messages.error(request, 'Không tìm thấy mã PIN.')
+            else:
+                pin.revoke()
+                _audit(request, 'DOOR_PIN_REVOKED', device=device, metadata={'pin_id': str(pin.id)})
+                messages.success(request, 'Đã thu hồi mã PIN.')
+            return _redirect_with('smartlock:door-pins', device=device.id)
+ 
+    pins = (DoorPinCode.objects.filter(device=device).order_by('-created_at')[:50]
+            if device else DoorPinCode.objects.none())
+    context = {'device_list': devices, 'device': device, 'door_pins': pins}
+    return render(request, 'account/access/door_pins.html', context)
+ 
+ 
+# ==================== A2: ĐĂNG KÝ KHUÔN MẶT ====================
+@auth_required
+def face_profiles(request):
+    """
+    Trang đăng ký/quản lý khuôn mặt được phép mở cửa. Việc TRÍCH XUẤT embedding từ
+    ảnh (face_recognition/InsightFace) chạy ở dịch vụ suy luận riêng (theo đúng thiết
+    kế "công nghệ theo từng lớp" của đề tài A2: backend FastAPI/Flask chạy mô hình);
+    view Django này chỉ NHẬN embedding đã tính sẵn (list số thực) qua form/AJAX rồi
+    lưu mã hoá, không tự chạy suy luận nặng trong tiến trình web.
+    """
+    devices = _accessible_devices(request.user)
+    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
+                          strict=request.method == 'POST')
+ 
+    if request.method == 'POST':
+        if not device:
+            messages.error(request, 'Không tìm thấy thiết bị.')
+            return redirect('smartlock:face-profiles')
+        action = request.POST.get('action')
+ 
+        if action == 'register':
+            if not _has_permission(request.user, device, 'manage_face_profiles'):
+                _audit(request, 'FACE_PROFILE_CREATE_DENIED', device=device, success=False, severity='warning')
+                messages.error(request, 'Bạn không có quyền đăng ký khuôn mặt cho thiết bị này.')
+                return _redirect_with('smartlock:face-profiles', device=device.id)
+ 
+            if not request.POST.get('consent_confirmed'):
+                messages.error(request, 'Cần xác nhận người được đăng ký đã đồng ý thu thập dữ liệu khuôn mặt.')
+                return _redirect_with('smartlock:face-profiles', device=device.id)
+ 
+            raw_embedding = request.POST.get('embedding_json') or '[]'
+            try:
+                embedding = json.loads(raw_embedding)
+                assert isinstance(embedding, list) and len(embedding) >= 32
+            except Exception:
+                _audit(request, 'FACE_PROFILE_INVALID_EMBEDDING', device=device, success=False, severity='warning')
+                messages.error(request, 'Dữ liệu khuôn mặt không hợp lệ. Hãy chụp lại.')
+                return _redirect_with('smartlock:face-profiles', device=device.id)
+ 
+            name = (request.POST.get('name') or request.user.full_name or request.user.username)[:100]
+            access_control.register_face(device=device, user=request.user, embedding=embedding,
+                                          name=name, consent_confirmed=True)
+            messages.success(request, 'Đã đăng ký khuôn mặt.')
+            return _redirect_with('smartlock:face-profiles', device=device.id)
+ 
+        if action == 'toggle':
+            profile = FaceProfile.objects.filter(
+                id=_parse_uuid(request.POST.get('profile_id')), device=device, user=request.user
+            ).first()
+            if not profile:
+                messages.error(request, 'Không tìm thấy hồ sơ khuôn mặt.')
+            else:
+                profile.is_active = not profile.is_active
+                profile.save(update_fields=['is_active', 'updated_at'])
+                messages.success(request, 'Đã cập nhật trạng thái.')
+            return _redirect_with('smartlock:face-profiles', device=device.id)
+ 
+    profiles = (FaceProfile.objects.filter(device=device).select_related('user').order_by('-created_at')
+                if device else FaceProfile.objects.none())
+    context = {'device_list': devices, 'device': device, 'face_profiles': profiles}
+    return render(request, 'account/access/face_profiles.html', context)
+ 
+ 
+# ==================== A2: LỊCH SỬ RA VÀO (RFID + PIN + KHUÔN MẶT) ====================
+@auth_required
+def access_events_history(request):
+    """Trang 'xem lịch sử ra vào kèm ảnh chụp' mà đề tài A2 yêu cầu - hợp nhất cả 3
+    kênh RFID/PIN/khuôn mặt trên cùng 1 danh sách, có thể lọc theo thiết bị/kênh."""
+    devices = _accessible_devices(request.user)
+    device = _pick_device(devices, request.GET.get('device'))
+    qs = AccessEvent.objects.filter(device__in=devices).select_related(
+        'device', 'user', 'access_card', 'door_pin', 'face_profile'
+    ).order_by('-created_at')
+    if device:
+        qs = qs.filter(device=device)
+    method = request.GET.get('method')
+    if method in dict(AccessEvent.METHOD_CHOICES):
+        qs = qs.filter(method=method)
+ 
+    context = {
+        'device_list': devices, 'device': device, 'method': method or '',
+        'access_events': _page(request, qs),
+    }
+    return render(request, 'account/access/history.html', context)
+ 

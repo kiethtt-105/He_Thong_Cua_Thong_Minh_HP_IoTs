@@ -27,6 +27,10 @@ urlpatterns = [
 
     path('nfc/tags/', views.nfc_tags, name='nfc-tags'),
     path('nfc/reader/', views.nfc_reader, name='nfc-reader'),
+    path('access/door-pins/', views.door_pins, name='door-pins'),
+    path('access/face-profiles/', views.face_profiles, name='face-profiles'),
+    path('access/history/', views.access_events_history, name='access-history'),
+ 
 
     path('share/codes/', views.share_codes, name='share-codes'),
     path('share/request/', views.share_request, name='share-request'),

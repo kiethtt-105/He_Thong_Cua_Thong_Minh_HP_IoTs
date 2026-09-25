@@ -54,10 +54,11 @@ MQTT_TOPIC_PREFIX = os.environ.get("MQTT_TOPIC_PREFIX", "")
 # Ví dụ: ALLOWED_HOSTS=localhost,127.0.0.1,ten-mien.vercel.app
 # Muốn cho phép mọi link preview của Vercel: thêm ".vercel.app"
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
+if DEBUG:
+    ALLOWED_HOSTS = list(ALLOWED_HOSTS) + ["*"]
 
 
 # ==================== CSRF TRUSTED ORIGINS ====================
-# Tự sinh từ ALLOWED_HOSTS, hoặc ghi đè bằng biến CSRF_TRUSTED_ORIGINS (phân tách bằng dấu phẩy)
 _explicit_origins = env_list("CSRF_TRUSTED_ORIGINS")
 if _explicit_origins:
     CSRF_TRUSTED_ORIGINS = _explicit_origins

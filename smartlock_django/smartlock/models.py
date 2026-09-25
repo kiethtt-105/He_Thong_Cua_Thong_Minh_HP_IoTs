@@ -10,6 +10,7 @@ from django.dispatch import receiver
 import uuid
 import os
 import hmac
+import json  
 import hashlib
 from cryptography.fernet import Fernet
 
@@ -779,3 +780,161 @@ def set_updated_at_system_settings(sender, instance, **kwargs):
 @receiver(pre_save, sender=AutomationRule)
 def set_updated_at_automation_rule(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
+
+
+
+
+# ==================== A2: MÃ PIN CỬA (KHÁCH THUÊ) ====================
+def _hash_door_pin(device_id, plain_pin: str) -> str:
+    """
+    PIN chỉ có 4-6 chữ số => không được băm SHA-256 trần (dễ vét cạn 10^6 khả năng nếu
+    lộ DB). Băm cùng device_id (salt theo từng thiết bị) + SHARE_CODE_PEPPER (bí mật
+    server) để một PIN giống nhau ở 2 thiết bị khác nhau vẫn ra hash khác nhau, và kẻ
+    tấn công không dò được bằng rainbow table dựng sẵn cho 1.000.000 mã 6 số.
+    """
+    return hashlib.sha256(f'{SHARE_CODE_PEPPER}:doorpin:{device_id}:{plain_pin}'.encode()).hexdigest()
+
+
+class DoorPinCode(models.Model):
+    """
+    Mã PIN dùng một lần (OTP) do chủ nhà cấp từ xa cho khách thuê, nhập trực tiếp trên
+    bàn phím ma trận 4x4 gắn ở khoá cửa. Đáp ứng đúng bài toán A2:
+    "Chủ nhà cấp OTP từ xa cho 'khách thuê' -> nhập trên bàn phím -> mở được, hết hạn
+    thì không mở" (kịch bản demo bắt buộc #3 của đề tài A2).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name='door_pins')
+    created_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='created_door_pins')
+    label = models.CharField(max_length=100, blank=True, null=True, help_text='VD: "Khách Booking #123"')
+    pin_hash = models.CharField(max_length=255)
+    valid_from = models.DateTimeField(default=timezone.now)
+    expires_at = models.DateTimeField()
+    # 1 = mã dùng đúng 1 lần rồi hết hạn (khuyến nghị cho khách vãng lai);
+    # 0 = không giới hạn số lần dùng trong thời hạn hiệu lực (khách thuê dài ngày).
+    max_uses = models.IntegerField(default=1)
+    use_count = models.IntegerField(default=0)
+    is_revoked = models.BooleanField(default=False)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['device', 'expires_at'], name='idx_doorpin_dev_exp'),
+        ]
+
+    def set_pin(self, plain_pin: str):
+        self.pin_hash = _hash_door_pin(self.device_id, plain_pin)
+
+    def check_pin(self, plain_pin: str) -> bool:
+        return hmac.compare_digest(self.pin_hash, _hash_door_pin(self.device_id, plain_pin))
+
+    def is_valid_now(self) -> bool:
+        now = timezone.now()
+        if self.is_revoked:
+            return False
+        if not (self.valid_from <= now <= self.expires_at):
+            return False
+        if self.max_uses and self.use_count >= self.max_uses:
+            return False
+        return True
+
+    def register_use(self, save=True):
+        self.use_count += 1
+        if save:
+            self.save(update_fields=['use_count'])
+
+    def revoke(self, save=True):
+        self.is_revoked = True
+        self.revoked_at = timezone.now()
+        if save:
+            self.save(update_fields=['is_revoked', 'revoked_at'])
+
+
+# ==================== A2: NHẬN DIỆN KHUÔN MẶT TẠI BIÊN ====================
+class FaceProfile(models.Model):
+    """
+    Đặc trưng khuôn mặt (embedding) của 1 thành viên được phép mở cửa bằng nhận diện
+    khuôn mặt. ESP32-CAM chụp ảnh -> trích embedding (tại biên hoặc gửi ảnh lên server
+    suy luận) -> so khớp với các FaceProfile.is_active=True của device đó.
+
+    Dữ liệu sinh trắc học là dữ liệu cá nhân nhạy cảm theo Nghị định 13/2023/NĐ-CP =>
+    embedding LUÔN được mã hoá (Fernet) trước khi lưu, không bao giờ lưu vector thô.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='face_profiles')
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name='face_profiles')
+    name = models.CharField(max_length=100, blank=True, null=True)
+    embedding_encrypted = models.BinaryField(
+        help_text='Vector đặc trưng khuôn mặt (vd. 128 chiều), đã mã hoá Fernet.'
+    )
+    # Với embedding chuẩn hoá (facenet/dlib): khoảng cách Euclid < threshold => coi là khớp.
+    threshold = models.FloatField(default=0.6)
+    consent_confirmed = models.BooleanField(
+        default=False,
+        help_text='Xác nhận người này đã đồng ý được thu thập dữ liệu khuôn mặt (bắt buộc theo NĐ 13/2023).'
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'device'], name='uniq_faceprofile_user_device')
+        ]
+
+    def set_embedding(self, vector) -> None:
+        raw = json.dumps(list(vector)).encode()
+        self.embedding_encrypted = fernet.encrypt(raw)
+
+    def get_embedding(self) -> list:
+        try:
+            return json.loads(fernet.decrypt(bytes(self.embedding_encrypted)).decode())
+        except Exception:
+            return []
+
+
+# ==================== A2: LOG HỢP NHẤT MỌI LƯỢT MỞ CỬA ====================
+class AccessEvent(models.Model):
+    """
+    Log hợp nhất cho MỌI lượt mở cửa thành công/thất bại của A2, dù qua kênh nào (RFID
+    / PIN / khuôn mặt) - phục vụ đúng yêu cầu "toàn bộ lượt ra/vào được ghi log về máy
+    chủ" và trang "xem lịch sử ra vào kèm ảnh chụp" của đề tài A2.
+
+    NfcLog (model gốc) vẫn giữ nguyên riêng cho sự kiện đầu đọc NFC ở tầng thấp
+    (reader connect/disconnect, config...). AccessEvent là log nghiệp vụ cấp cao hơn,
+    dùng cho automation rule FAILED_ACCESS_BURST và cho giao diện lịch sử ra vào.
+    """
+    METHOD_RFID = 'RFID'
+    METHOD_PIN = 'PIN'
+    METHOD_FACE = 'FACE'
+    METHOD_CHOICES = [
+        (METHOD_RFID, 'Thẻ RFID'),
+        (METHOD_PIN, 'Mã PIN'),
+        (METHOD_FACE, 'Khuôn mặt'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name='access_events')
+    method = models.CharField(max_length=10, choices=METHOD_CHOICES)
+    success = models.BooleanField()
+    reason = models.CharField(max_length=100, blank=True, null=True, help_text='Lý do thất bại, nếu có.')
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    access_card = models.ForeignKey(AccessCard, on_delete=models.SET_NULL, null=True, blank=True)
+    door_pin = models.ForeignKey(DoorPinCode, on_delete=models.SET_NULL, null=True, blank=True)
+    face_profile = models.ForeignKey(FaceProfile, on_delete=models.SET_NULL, null=True, blank=True)
+    confidence = models.FloatField(null=True, blank=True, help_text='Độ tin cậy nhận diện khuôn mặt (nếu có).')
+    snapshot_url = models.URLField(
+        max_length=512, blank=True, null=True,
+        help_text='Ảnh chụp lúc mở cửa, lưu ở object storage (MinIO/S3), khuyến nghị giữ tối đa 30 ngày.'
+    )
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['device', 'created_at'], name='idx_accessevt_dev_time'),
+            models.Index(fields=['device', 'method', 'success', 'created_at'], name='idx_accessevt_method_ok'),
+        ]
+
+    def __str__(self):
+        return f'{self.get_method_display()} - {"OK" if self.success else "FAIL"} @ {self.device_id}'
