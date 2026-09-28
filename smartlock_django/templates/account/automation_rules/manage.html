@@ -97,7 +97,7 @@
                         <button type="submit" class="btn btn-sm btn-outline-secondary">{% if rule.is_active %}Tắt{% else %}Bật{% endif %}</button>
                     </form>
                     <form class="d-inline" method="post" action="{% url 'smartlock:automation-rules' %}"
-                          data-confirm="Xoá luật {{ rule.name }}?">
+                          onsubmit="return confirm('Xoá luật {{ rule.name }}?');">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="rule_id" value="{{ rule.id }}">

@@ -52,7 +52,7 @@
                         </div>
                         <div class="d-flex gap-2 align-items-start">
                             <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#edit-{{ a.id }}"><i class="fa-solid fa-pen me-1"></i>Sửa</button>
-                            <form method="post" data-confirm="Thu hồi quyền của người này?">{% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="access_id" value="{{ a.id }}">
+                            <form method="post" onsubmit="return confirm('Thu hồi quyền của người này?')">{% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="access_id" value="{{ a.id }}">
                                 <button class="btn btn-sm btn-outline-danger">Thu hồi</button></form>
                         </div>
                     </div>

@@ -19,7 +19,7 @@
                 <td class="text-nowrap"><div class="small mb-1">{{ c.expires_at|date:"d/m/Y H:i" }}</div>{% if c.is_expired %}<span class="status">Hết hạn</span>{% else %}<span class="status ok">Còn hiệu lực</span>{% endif %}</td>
                 <td class="text-end text-nowrap">
                     {% if not c.is_expired %}<button class="btn btn-sm btn-outline-primary js-copy" data-text="{{ c.plain }}"><i class="fa-regular fa-copy"></i> Sao chép</button>{% endif %}
-                    <form method="post" class="d-inline" data-confirm="Xóa mã này?">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="code_id" value="{{ c.id }}">
+                    <form method="post" class="d-inline" onsubmit="return confirm('Xóa mã này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="code_id" value="{{ c.id }}">
                         <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash"></i></button></form>
                 </td>
             </tr>

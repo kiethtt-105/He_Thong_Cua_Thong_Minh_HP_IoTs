@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#0b1020">
-    <meta name="color-scheme" content="light">
     <meta name="format-detection" content="telephone=no">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -12,33 +11,9 @@
     <meta name="csrf-token" content="{{ csrf_token }}">
     {% if request.session.sync_key %}<meta name="sync-key" content="{{ request.session.sync_key }}">{% endif %}
     <title>{% block title %}Smart Lock{% endblock %} · Smart Lock</title>
-    <script>
-        /* Chạy sớm nhất: nhận diện app (WebView gắn UA "SmartLockApp") để CSS/JS xử lý riêng, không bị nháy giao diện */
-        (function () {
-            var d = document.documentElement;
-            if (/SmartLockApp/i.test(navigator.userAgent) || window.SmartLockNative) d.classList.add('in-app');
-            if (window.matchMedia && matchMedia('(pointer: coarse)').matches) d.classList.add('touch');
-        })();
-    </script>
-    <!-- Nền trùng màu trang ngay từ byte đầu tiên -> không chớp trắng khi đổi trang trong WebView -->
-    <style>html,body{background:#f4f5f9;margin:0}</style>
-    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Bootstrap JS tải song song từ đầu (defer), chạy xong trước DOMContentLoaded -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" defer></script>
-    <!-- Google Font KHÔNG chặn render: hiện font hệ thống trước, tải xong thì swap -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" media="print" onload="this.media='all'">
-    <noscript>
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
-    </noscript>
-    <!-- Prefetch trang kế tiếp (Chrome/Edge/WebView Chromium). Bỏ qua link có hành động / đăng xuất -->
-    <script type="speculationrules">
-    {"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"selector_matches":"[data-no-prefetch], [download], [target=_blank]"}},{"not":{"href_matches":["/*logout*","/*delete*","/*api/*","/*sync*"]}}]},"eagerness":"moderate"}]}
-    </script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
     <style>
         /* ============ TOKENS ============ */
         :root {
@@ -63,8 +38,6 @@
             --radius-sm: 9px;
             --shadow: 0 1px 2px rgba(15,23,42,.04), 0 4px 16px -8px rgba(15,23,42,.08);
             --sidebar-w: 268px;
-            --sat: env(safe-area-inset-top, 0px);    --sab: env(safe-area-inset-bottom, 0px);
-            --sal: env(safe-area-inset-left, 0px);   --sar: env(safe-area-inset-right, 0px);
             --font-display: 'Be Vietnam Pro', 'Inter', sans-serif;
             --font-body: 'Inter', system-ui, sans-serif;
             --font-mono: 'JetBrains Mono', 'Courier New', monospace;
@@ -149,7 +122,7 @@
 
         /* ============ MAIN / HEADER ============ */
         .content-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-        .main { padding: calc(1.5rem + var(--sat)) max(1.25rem, var(--sar)) calc(3rem + var(--sab)) max(1.25rem, var(--sal)); width: 100%; max-width: 1400px; margin: 0 auto; }
+        .main { padding: 1.5rem 1.25rem 3rem; width: 100%; max-width: 1400px; margin: 0 auto; }
         @media (min-width: 992px) { .main { padding: 2rem 2.25rem 3rem; } }
         .page-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .75rem; margin-bottom: 1.5rem; }
         .page-head-l { display: flex; align-items: center; gap: .75rem; min-width: 0; }
@@ -293,76 +266,103 @@
         /* ============ TOAST ============ */
         .toast { border: 0; border-radius: 12px; box-shadow: 0 12px 30px -10px rgba(15,23,42,.35); }
 
-        /* ============ WEBVIEW / MOBILE / CHUYỂN TRANG ============ */
+        /* ============ RESPONSIVE / WEBVIEW ============ */
+        :root { --bn-h: 62px; }
         html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-        a, button, select, label, .sb-link, .btn, .form-check-input { -webkit-tap-highlight-color: transparent; touch-action: manipulation; } /* bỏ trễ 300ms khi chạm */
-        img, svg { max-width: 100%; }
+        body { -webkit-tap-highlight-color: transparent; overflow-x: hidden; overscroll-behavior-y: contain; }
+        body.sb-open { overflow: hidden; }
+        img, canvas, svg { max-width: 100%; }
+        .app, .auth-split { min-height: 100vh; min-height: 100dvh; }
+        .sidebar { height: 100vh; height: 100dvh; padding-top: env(safe-area-inset-top); }
+        .auth-main { padding-bottom: calc(2rem + env(safe-area-inset-bottom)); }
 
-        /* dvh = chiều cao thật khi thanh địa chỉ / bàn phím ẩn hiện (100vh sẽ bị hụt/tràn trên điện thoại) */
-        .app { min-height: 100dvh; }
-        .sidebar { height: 100dvh; padding-top: var(--sat); padding-left: var(--sal); }
-        .sb-foot { padding-bottom: calc(.9rem + var(--sab)); }
-        .auth-bg, .auth-split { min-height: 100dvh; }
-        .auth-main { padding: calc(2rem + var(--sat)) max(1.25rem, var(--sar)) calc(2rem + var(--sab)) max(1.25rem, var(--sal)); }
-        .toast-container { padding-bottom: calc(1rem + var(--sab)) !important; padding-right: max(1rem, var(--sar)) !important; }
-        .sb-nav { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+        /* mobile top bar + bottom tab bar (hidden on desktop by d-lg-none) */
+        .m-top { position: sticky; top: 0; z-index: 1030; display: flex; align-items: center; justify-content: space-between;
+            padding: calc(.55rem + env(safe-area-inset-top)) 1rem .55rem; color: #fff;
+            background: linear-gradient(100deg, var(--sb-1), var(--sb-2)); border-bottom: 1px solid var(--sb-line); }
+        .m-brand { display: flex; align-items: center; gap: .6rem; color: #fff; font-family: var(--font-display); font-weight: 700; }
+        .brand-mark.sm { width: 32px; height: 32px; font-size: .85rem; border-radius: 9px; }
+        .avatar-sm.sm { width: 32px; height: 32px; font-size: .78rem; }
 
-        /* Phản hồi chạm tức thì */
-        .sb-link:active { background: rgba(255,255,255,.12); }
-        .btn:active { transform: scale(.98); }
-        .dev-card:active { transform: scale(.985); }
+        .bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1040; display: flex;
+            height: calc(var(--bn-h) + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom);
+            background: rgba(255,255,255,.96); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+            border-top: 1px solid var(--line); box-shadow: 0 -6px 20px -12px rgba(15,23,42,.25); }
+        .bn-item { flex: 1; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+            color: var(--muted); font-size: .68rem; font-weight: 600; background: none; border: 0; padding: 0; min-width: 0; }
+        .bn-item i { font-size: 1.15rem; }
+        .bn-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .bn-item.active { color: var(--accent); }
+        .bn-item.active::before { content: ""; position: absolute; top: 0; width: 28px; height: 3px; border-radius: 0 0 3px 3px; background: var(--accent); }
+        .bn-badge { position: absolute; top: 7px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px;
+            background: var(--bad); color: #fff; font-size: .62rem; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 
-        @media (pointer: coarse) {
-            .form-control:not(.form-control-lg):not(.otp):not(.tf-code), .form-select { font-size: 16px; } /* >=16px: iOS không tự zoom khi focus */
-            .sb-link { min-height: 44px; }
-            .sb-toggle { width: 44px; height: 44px; }
-            .sb-logout { min-height: 44px; }
-            .btn { min-height: 40px; }
-            .btn-sm { min-height: 36px; }
-        }
-        @media (hover: none) {
-            .dev-card:hover { transform: none; box-shadow: var(--shadow); }
-        }
         @media (max-width: 991.98px) {
-            .sidebar { will-change: transform; }
-            .sb-backdrop { backdrop-filter: none; -webkit-backdrop-filter: none; } /* blur tốn GPU, giật trên WebView máy yếu */
-            body.sb-open { overflow: hidden; }
-        }
-        @media (max-width: 575.98px) {
+            .main { padding: 1rem .9rem calc(var(--bn-h) + env(safe-area-inset-bottom) + 1.25rem); }
             .page-title { font-size: 1.3rem; }
+            .page-head { margin-bottom: 1rem; }
+            #toasts { bottom: calc(var(--bn-h) + env(safe-area-inset-bottom)) !important; }
+            .sidebar { padding-bottom: env(safe-area-inset-bottom); width: min(84vw, var(--sidebar-w)); }
+        }
+
+        @media (max-width: 767.98px) {
+            /* 16px inputs stop iOS from zooming on focus */
+            .form-control, .form-select, .form-control-sm, .form-select-sm, textarea { font-size: 16px; }
             .card-body { padding: 1rem; }
-            .table > :not(caption) > * > * { padding: .7rem .8rem; }
-            .modal-dialog { margin: .75rem; }
+            .card-header { padding: .85rem 1rem; }
+            .stat-card .stat-num { font-size: 1.5rem; }
+            .stat-icon { width: 40px; height: 40px; font-size: 1rem; }
+            .lock-ring { width: 92px; height: 92px; }
+            .auth-box { padding-top: .5rem; }
+            .row-item { padding: .9rem 1rem; }
+            .filter-bar > * { flex: 1 1 100% !important; min-width: 0 !important; }
+
+            /* tables become stacked cards (labels are filled in by JS from <thead>) */
+            .card table.table thead { display: none; }
+            .card table.table, .card table.table tbody { display: block; }
+            .card table.table tr { display: block; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
+            .card table.table tbody tr:last-child { border-bottom: 0; }
+            .card table.table tr.collapse:not(.show) { display: none; }
+            .card table.table td { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .35rem 0;
+                border: 0; box-shadow: none; background: transparent !important; text-align: right; white-space: normal !important; }
+            .card table.table td::before { content: attr(data-label); flex: 0 0 34%; max-width: 40%; text-align: left; color: var(--muted);
+                font-size: .7rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+            .card table.table td[data-label=""]::before, .card table.table td:not([data-label])::before { display: none; }
+            .card table.table td[data-label=""] { justify-content: flex-end; flex-wrap: wrap; padding-top: .6rem; }
+            .card table.table td:not([data-label]) { display: block; text-align: center; }
+            .card table.table td > form:not(.d-inline) { flex: 1; }
+            .card table.table td .btn-sm { min-height: 38px; }
         }
 
-        /* Trong app: cảm giác native (không bôi chọn chữ lung tung, không menu giữ-link) */
-        .in-app body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-        .in-app input, .in-app textarea, .in-app select, .in-app code, .in-app .code-chip, .in-app .kv dd { -webkit-user-select: text; user-select: text; }
-
-        /* Thanh tiến trình + làm mờ nhẹ ngay khi bấm link (cảm giác phản hồi tức thì kể cả khi server chậm) */
-        #nav-progress { position: fixed; top: 0; left: 0; height: 3px; width: 0; z-index: 2000; pointer-events: none; opacity: 0;
-            background: linear-gradient(90deg, var(--accent-2), #7c3aed); box-shadow: 0 0 8px rgba(99,102,241,.6); }
-        .is-navigating #nav-progress { opacity: 1; width: 85%; transition: width 8s cubic-bezier(.1,.6,.2,1), opacity .1s; }
-        .is-navigating .main { opacity: .55; transition: opacity .15s .15s; } /* chỉ mờ nếu >150ms => trang nhanh thì không nháy */
-
-        /* Chuyển trang: cross-document View Transitions (Chrome/Edge/Android WebView, Safari 18.2+). Trình duyệt cũ tự bỏ qua. */
-        @view-transition { navigation: auto; }
-        .sidebar { view-transition-name: sidebar; }
-        ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .14s; animation-timing-function: ease-out; }
-        /* Không hỗ trợ View Transitions -> fade-in nhẹ để bớt giật */
-        @supports not (view-transition-name: none) {
-            .main { animation: pageIn .16s ease-out; }
-            @keyframes pageIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-        }
-        @media (prefers-reduced-motion: reduce) {
-            *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
-            ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+        @media (max-width: 575.98px) {
+            .page-head > div:last-child { width: 100%; }
+            .page-head > div:last-child > .d-flex { width: 100%; }
+            .page-head > div:last-child > .d-flex > form, .page-head > div:last-child > .d-flex > .btn-group { flex: 1; }
+            .page-head > div:last-child > .d-flex > .btn, .page-head .form-select { width: 100%; }
+            .page-head > div:last-child > .btn, .page-head > div:last-child > form { width: 100%; }
+            .js-cmd.btn-lg { flex: 1 1 100%; }
+            .kv { grid-template-columns: 1fr !important; gap: .1rem; }
+            /* modals become bottom sheets */
+            .modal-dialog { margin: 0; min-height: 100%; display: flex; align-items: flex-end; max-width: none; }
+            .modal-dialog-centered { min-height: 100%; }
+            .modal-content { width: 100%; border-radius: 20px 20px 0 0; max-height: 92dvh; }
+            .modal-body { overflow-y: auto; }
+            .modal-footer { padding-bottom: calc(.75rem + env(safe-area-inset-bottom)); }
+            .modal-footer > .btn { flex: 1; }
         }
 
-        /* Hộp xác nhận (thay confirm() - WebView mặc định KHÔNG hiện confirm nếu app chưa cài onJsConfirm) */
-        #confirmModal .ci { width: 56px; height: 56px; border-radius: 50%; margin: 0 auto; display: flex; align-items: center; justify-content: center;
-            font-size: 1.4rem; background: var(--accent-soft); color: var(--accent); }
-        #confirmModal.danger .ci { background: var(--bad-bg); color: var(--bad); }
+        /* touch devices: comfortable hit targets */
+        @media (pointer: coarse) {
+            .btn { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: .1rem; }
+            .btn-sm { min-height: 38px; padding-left: .8rem; padding-right: .8rem; }
+            .form-control, .form-select { min-height: 44px; }
+            .form-check-input { width: 1.3em; height: 1.3em; }
+            .form-switch .form-check-input { width: 2.4em; }
+            .sb-link { padding-top: .75rem; padding-bottom: .75rem; }
+            .page-link { padding: .55rem .9rem; }
+            .btn-close { padding: .9rem; }
+        }
+        @media (hover: none) { .dev-card:hover { transform: none; box-shadow: var(--shadow); } }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
@@ -380,7 +380,7 @@
             <div class="sb-label">Tổng quan</div>
             <a class="sb-link {% if u == 'dashboard' %}active{% endif %}" href="{% url 'smartlock:dashboard' %}"><i class="fa-solid fa-gauge"></i> Dashboard</a>
             <a class="sb-link {% if u|slice:':6' == 'device' %}active{% endif %}" href="{% url 'smartlock:devices-list' %}"><i class="fa-solid fa-plug"></i> Thiết bị</a>
-            <a class="sb-link {% if u == 'notifications' %}active{% endif %}" href="{% url 'smartlock:notifications' %}" data-no-prefetch><i class="fa-solid fa-bell"></i> Thông báo <span id="notif-badge" class="badge bg-danger d-none">0</span></a>
+            <a class="sb-link {% if u == 'notifications' %}active{% endif %}" href="{% url 'smartlock:notifications' %}"><i class="fa-solid fa-bell"></i> Thông báo <span id="notif-badge" class="badge bg-danger d-none">0</span></a>
 
             <div class="sb-label">Truy cập</div>
             <a class="sb-link {% if u|slice:':3' == 'nfc' %}active{% endif %}" href="{% url 'smartlock:nfc-tags' %}"><i class="fa-solid fa-id-card"></i> Thẻ NFC</a>
@@ -414,10 +414,13 @@
     <div class="sb-backdrop" onclick="document.body.classList.remove('sb-open')"></div>
 
     <div class="content-wrap">
+        <header class="m-top d-lg-none">
+            <a class="m-brand" href="{% url 'smartlock:dashboard' %}"><span class="brand-mark sm"><i class="fa-solid fa-lock"></i></span><span>Smart Lock</span></a>
+            <a href="{% url 'smartlock:profile' %}" aria-label="Tài khoản"><div class="avatar-sm sm">{{ user.username|upper|slice:":1" }}</div></a>
+        </header>
         <main class="main">
             <div class="page-head">
                 <div class="page-head-l">
-                    <button type="button" class="sb-toggle d-lg-none" aria-label="Menu" onclick="document.body.classList.toggle('sb-open')"><i class="fa-solid fa-bars"></i></button>
                     <div class="min-w-0"><h4 class="page-title">{% block page_title %}{% endblock %}</h4>{% block page_sub %}{% endblock %}</div>
                 </div>
                 <div>{% block page_actions %}{% endblock %}</div>
@@ -428,33 +431,22 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+
+    <nav class="bottom-nav d-lg-none" aria-label="Điều hướng nhanh">
+        <a class="bn-item {% if u == 'dashboard' %}active{% endif %}" href="{% url 'smartlock:dashboard' %}"><i class="fa-solid fa-gauge"></i><span>Tổng quan</span></a>
+        <a class="bn-item {% if u|slice:':6' == 'device' %}active{% endif %}" href="{% url 'smartlock:devices-list' %}"><i class="fa-solid fa-plug"></i><span>Thiết bị</span></a>
+        <a class="bn-item {% if u|slice:':3' == 'nfc' %}active{% endif %}" href="{% url 'smartlock:nfc-tags' %}"><i class="fa-solid fa-id-card"></i><span>Thẻ NFC</span></a>
+        <a class="bn-item {% if u == 'notifications' %}active{% endif %}" href="{% url 'smartlock:notifications' %}"><i class="fa-solid fa-bell"></i><span>Thông báo</span><span id="notif-badge-m" class="bn-badge d-none">0</span></a>
+        <button type="button" class="bn-item" onclick="document.body.classList.toggle('sb-open')" aria-label="Menu"><i class="fa-solid fa-bars"></i><span>Menu</span></button>
+    </nav>
 </div>
 {% endwith %}
 {% endblock %}
 
-<div id="nav-progress"></div>
 <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
-
-<!-- Hộp xác nhận dùng chung: form nào có data-confirm="..." sẽ tự hiện hộp này -->
-<div class="modal fade" id="confirmModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered modal-sm">
-        <div class="modal-content">
-            <div class="modal-body text-center p-4">
-                <div class="ci mb-3"><i class="fa-solid fa-circle-question"></i></div>
-                <p id="confirmText" class="fw-semibold mb-4"></p>
-                <div class="d-flex gap-2">
-                    <button type="button" class="btn btn-light flex-fill" data-bs-dismiss="modal">Hủy</button>
-                    <button type="button" class="btn btn-primary flex-fill" id="confirmOk">Xác nhận</button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     const CSRF = document.querySelector('meta[name=csrf-token]').content;
-    const root = document.documentElement;
-
     function showToast(msg, type) {
         const el = document.createElement('div');
         el.className = 'toast align-items-center text-bg-' + (type || 'primary') + ' border-0';
@@ -464,124 +456,24 @@
         el.addEventListener('hidden.bs.toast', () => el.remove());
         new bootstrap.Toast(el, { delay: 4000 }).show();
     }
-
-    /* ---------- Xác nhận bằng modal (thay confirm()) ---------- */
-    function confirmDialog(msg, okText, danger) {
-        return new Promise(resolve => {
-            const el = document.getElementById('confirmModal');
-            const ok = document.getElementById('confirmOk');
-            document.getElementById('confirmText').textContent = msg;
-            ok.textContent = okText || 'Xác nhận';
-            ok.className = 'btn flex-fill ' + (danger ? 'btn-danger' : 'btn-primary');
-            el.classList.toggle('danger', !!danger);
-            const modal = bootstrap.Modal.getOrCreateInstance(el);
-            let result = false;
-            const onOk = () => { result = true; modal.hide(); };
-            ok.addEventListener('click', onOk, { once: true });
-            el.addEventListener('hidden.bs.modal', () => { ok.removeEventListener('click', onOk); resolve(result); }, { once: true });
-            modal.show();
-        });
-    }
-
-    /* ---------- Gửi lệnh khoá (fetch) ---------- */
-    async function sendCommand(url, command, label, btn) {
-        if (!(await confirmDialog('Xác nhận ' + label + '?'))) return;
-        if (btn) btn.disabled = true;
-        const ctl = new AbortController();
-        const timer = setTimeout(() => ctl.abort(), 15000);   // mạng yếu: báo lỗi thay vì treo vô hạn
+    async function sendCommand(url, command, label) {
+        if (!confirm('Xác nhận ' + label + '?')) return;
         try {
             const r = await fetch(url, {
-                method: 'POST', signal: ctl.signal, credentials: 'same-origin',
+                method: 'POST',
                 headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: new URLSearchParams({ command })
             });
             const d = await r.json();
             showToast(d.message, d.ok ? 'success' : 'danger');
-        } catch (e) {
-            showToast(e && e.name === 'AbortError' ? 'Máy chủ phản hồi quá lâu, thử lại.' : 'Không thể kết nối máy chủ.', 'danger');
-        } finally {
-            clearTimeout(timer);
-            if (btn) btn.disabled = false;
-        }
+        } catch (e) { showToast('Không thể kết nối máy chủ.', 'danger'); }
     }
-
-    /* ---------- Sao chép (clipboard API hay bị chặn trong WebView -> fallback execCommand) ---------- */
-    function legacyCopy(text) {
-        const ta = document.createElement('textarea');
-        ta.value = text; ta.setAttribute('readonly', '');
-        ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;font-size:16px';
-        document.body.appendChild(ta);
-        ta.select(); ta.setSelectionRange(0, text.length);
-        let ok = false;
-        try { ok = document.execCommand('copy'); } catch (e) {}
-        ta.remove();
-        return ok;
-    }
-    function copyText(text) {
-        const done = ok => showToast(ok ? 'Đã sao chép' : 'Không sao chép được, hãy chạm giữ để chọn mã.', ok ? 'success' : 'warning');
-        if (navigator.clipboard && window.isSecureContext) {
-            navigator.clipboard.writeText(text).then(() => done(true), () => done(legacyCopy(text)));
-        } else done(legacyCopy(text));
-    }
-
     document.addEventListener('click', e => {
         const b = e.target.closest('.js-cmd');
-        if (b) sendCommand(b.dataset.url, b.dataset.command, b.dataset.label, b);
+        if (b) sendCommand(b.dataset.url, b.dataset.command, b.dataset.label);
         const c = e.target.closest('.js-copy');
-        if (c) copyText(c.dataset.text);
+        if (c) navigator.clipboard.writeText(c.dataset.text).then(() => showToast('Đã sao chép', 'success'));
     });
-
-    /* ---------- Form: data-confirm + chống bấm đúp + báo "đang tải" ---------- */
-    document.addEventListener('submit', async e => {
-        const f = e.target;
-        if (!(f instanceof HTMLFormElement) || !f.dataset.confirm || f.dataset.confirmed) return;
-        e.preventDefault(); e.stopImmediatePropagation();
-        const sub = e.submitter || undefined;
-        if (await confirmDialog(f.dataset.confirm, f.dataset.confirmOk || 'Xác nhận', f.dataset.confirmDanger !== 'false')) {
-            f.dataset.confirmed = '1';
-            if (f.requestSubmit) f.requestSubmit(sub); else f.submit();
-            delete f.dataset.confirmed;
-        }
-    }, true);
-    document.addEventListener('submit', e => {
-        const f = e.target;
-        if (e.defaultPrevented || !(f instanceof HTMLFormElement) || (f.method || '').toLowerCase() !== 'post') return;
-        root.classList.add('is-navigating');
-        // disable ở tick sau để nút vẫn gửi được name/value; tránh bấm đúp tạo trùng bản ghi trên mạng chậm
-        setTimeout(() => f.querySelectorAll('button:not([type=button]), [type=submit]').forEach(b => { if (!b.disabled) { b.disabled = true; b.dataset.lockedBySubmit = '1'; } }), 0);
-        setTimeout(() => { root.classList.remove('is-navigating'); document.querySelectorAll('[data-locked-by-submit]').forEach(b => { b.disabled = false; delete b.dataset.lockedBySubmit; }); }, 15000);   // POST không chuyển trang (tải file, 204...) -> mở khoá lại
-    });
-
-    /* ---------- Điều hướng: phản hồi tức thì khi bấm link ---------- */
-    (function () {
-        let prevActive = null, timer = null;
-        function reset() {
-            root.classList.remove('is-navigating');
-            clearTimeout(timer);
-            document.querySelectorAll('[data-locked-by-submit]').forEach(b => { b.disabled = false; delete b.dataset.lockedBySubmit; });
-            if (prevActive) {   // quay lại từ bfcache: trả trạng thái menu về đúng trang
-                document.querySelectorAll('.sb-link.active').forEach(x => x.classList.remove('active'));
-                prevActive.classList.add('active'); prevActive = null;
-            }
-        }
-        document.addEventListener('click', e => {
-            if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-            const a = e.target.closest('a[href]');
-            if (!a || a.target === '_blank' || a.hasAttribute('download') || a.hasAttribute('data-bs-toggle') || a.hasAttribute('data-no-nav')) return;
-            const href = a.getAttribute('href');
-            if (!href || href.charAt(0) === '#' || /^(javascript|mailto|tel):/i.test(href) || a.origin !== location.origin) return;
-            if (a.pathname === location.pathname && a.search === location.search) return;   // cùng trang / chỉ đổi hash
-            root.classList.add('is-navigating');
-            if (a.classList.contains('sb-link')) {   // tô sáng menu ngay, đóng drawer ngay
-                prevActive = document.querySelector('.sb-link.active');
-                document.querySelectorAll('.sb-link.active').forEach(x => x.classList.remove('active'));
-                a.classList.add('active');
-            }
-            document.body.classList.remove('sb-open');
-            clearTimeout(timer); timer = setTimeout(reset, 12000);   // an toàn: điều hướng không xảy ra thì gỡ trạng thái
-        });
-        window.addEventListener('pageshow', e => { if (e.persisted) reset(); });
-    })();
 </script>
 <script>
     /* ====================== CACHE MÃ HOÁ + AUTO REFRESH NỀN ======================
@@ -668,31 +560,14 @@
                 if (!r.ok) return;
                 const bundle = await r.json();
                 await store('bootstrap', bundle);
-                ssSet(BADGE_KEY, String(bundle.unread_count || 0));
                 applyToUI(bundle);
             } catch (e) { /* mất mạng: giữ nguyên cache cũ, thử lại ở lần refresh sau */ }
         }
 
-        /* Không refresh mỗi lần đổi trang (mỗi lần = 1 request + giải mã) -> tối đa 1 lần / 30s mỗi phiên tab */
-        const LAST_KEY = 'sl_sync_at_' + USER_ID, BADGE_KEY = 'sl_unread_' + USER_ID;
-        function ssGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
-        function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
-        function refreshIfStale(minAge) {
-            if (Date.now() - (parseInt(ssGet(LAST_KEY), 10) || 0) < minAge) return;
-            ssSet(LAST_KEY, String(Date.now()));
-            refresh();
-        }
-        // Badge vẽ NGAY (đồng bộ) từ giá trị lần trước -> không nháy khi đổi trang
-        (function () {
-            const n = parseInt(ssGet(BADGE_KEY), 10), badge = document.getElementById('notif-badge');
-            if (badge && n > 0) { badge.textContent = n; badge.classList.remove('d-none'); }
-        })();
-
-        const idle = window.requestIdleCallback ? cb => requestIdleCallback(cb, { timeout: 1500 }) : cb => setTimeout(cb, 250);
-        const FORCE = {% if request.resolver_match.url_name == 'notifications' %}true{% else %}false{% endif %};   // trang thông báo: luôn lấy số mới
-        idle(() => { load('bootstrap').then(applyToUI); refreshIfStale(FORCE ? 0 : 30000); });   // để trang vẽ xong rồi mới làm việc nền
-        setInterval(() => refreshIfStale(40000), 45000);
-        document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfStale(15000); });
+        load('bootstrap').then(applyToUI);   // sơn UI ngay từ cache cũ (nếu đọc được)
+        refresh();                            // rồi refresh nền ngay lập tức
+        setInterval(refresh, 45000);          // và định kỳ mỗi 45s
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 
         window.SmartlockCache = {
             getBootstrap: () => load('bootstrap'),
@@ -701,6 +576,46 @@
         document.querySelectorAll('form[action*="logout"]').forEach(f => {
             f.addEventListener('submit', () => window.SmartlockCache.clear());
         });
+    })();
+</script>
+<script>
+    /* ---- mobile / WebView helpers (UI only) ---- */
+    (function () {
+        // 1) clipboard fallback: WebView / non-HTTPS has no navigator.clipboard
+        if (!navigator.clipboard) {
+            try {
+                Object.defineProperty(navigator, 'clipboard', { value: { writeText: function (t) {
+                    return new Promise(function (ok, fail) {
+                        var a = document.createElement('textarea');
+                        a.value = t; a.setAttribute('readonly', ''); a.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+                        document.body.appendChild(a); a.select();
+                        try { document.execCommand('copy') ? ok() : fail(); } catch (e) { fail(e); }
+                        document.body.removeChild(a);
+                    });
+                } } });
+            } catch (e) {}
+        }
+        // 2) bottom-bar notification badge mirrors the sidebar badge updated by the cache script
+        var a = document.getElementById('notif-badge'), b = document.getElementById('notif-badge-m');
+        if (a && b) {
+            var sync = function () { b.textContent = a.textContent; b.classList.toggle('d-none', a.classList.contains('d-none')); };
+            new MutationObserver(sync).observe(a, { attributes: true, childList: true, characterData: true, subtree: true });
+            sync();
+        }
+        // 3) data-label for stacked-card tables on phones
+        document.querySelectorAll('table.table').forEach(function (t) {
+            var ths = t.querySelectorAll('thead th'); if (!ths.length) return;
+            var labels = Array.prototype.map.call(ths, function (th) { return th.classList.contains('text-end') ? '' : th.textContent.trim(); });
+            t.querySelectorAll('tbody tr').forEach(function (tr) {
+                var i = 0;
+                Array.prototype.forEach.call(tr.children, function (td) {
+                    if (td.colSpan > 1) { i += td.colSpan; return; }
+                    td.setAttribute('data-label', labels[i] || ''); i++;
+                });
+            });
+        });
+        // 4) close drawer on Escape
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') document.body.classList.remove('sb-open'); });
     })();
 </script>
 {% block scripts %}{% endblock %}

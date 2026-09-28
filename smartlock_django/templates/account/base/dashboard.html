@@ -1,6 +1,6 @@
 {% extends 'account/base/layout.html' %}
 {% block title %}Dashboard{% endblock %}
-{% block extra_head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>{% endblock %}
+{% block extra_head %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>{% endblock %}
 {% block page_title %}Xin chào, {{ user.full_name|default:user.username }}{% endblock %}
 {% block page_sub %}<p class="page-sub">Tổng quan hệ thống khóa thông minh của bạn</p>{% endblock %}
 {% block page_actions %}
@@ -142,17 +142,14 @@
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function () {   // Chart.js nạp bằng defer -> chạy sau khi nó sẵn sàng
     const cd = JSON.parse(document.getElementById('chart-data').textContent);
     Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
     Chart.defaults.color = '#64748b';
     new Chart(document.getElementById('activityChart'), {
         type: 'line',
         data: { labels: cd.labels, datasets: [{ label: 'Thao tác', data: cd.values, borderColor: '#4f46e5', backgroundColor: 'rgba(79,70,229,.12)', tension: .35, fill: true, pointBackgroundColor: '#4f46e5', pointRadius: 3 }] },
-        options: { responsive: true, maintainAspectRatio: false, animation: { duration: 350 }, devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-                   plugins: { legend: { display: false } },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
                    scales: { y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: '#eef0f5' } }, x: { grid: { display: false } } } }
     });
-});
 </script>
 {% endblock %}

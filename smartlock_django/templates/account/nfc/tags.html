@@ -24,7 +24,7 @@
                 <td class="text-end text-nowrap">
                     <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="toggle"><input type="hidden" name="card_id" value="{{ card.id }}">
                         <button class="btn btn-sm {% if card.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}">{% if card.is_active %}Vô hiệu hóa{% else %}Kích hoạt{% endif %}</button></form>
-                    <form method="post" class="d-inline" data-confirm="Xóa thẻ này?">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="card_id" value="{{ card.id }}">
+                    <form method="post" class="d-inline" onsubmit="return confirm('Xóa thẻ này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="card_id" value="{{ card.id }}">
                         <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash"></i></button></form>
                 </td>
             </tr>

@@ -224,7 +224,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var add = document.getElementById('tfPasskeyAdd'), msg = document.getElementById('tfPasskeyMsg');
     if (add) add.addEventListener('click', async function () {
         msg.textContent = '';
-        if (!window.PublicKeyCredential || document.documentElement.classList.contains('in-app')) { msg.textContent = 'Passkey chưa dùng được trong app. Hãy đăng ký passkey trên trình duyệt (Chrome/Safari), hoặc dùng Authenticator / Email.'; return; }
+        if (!window.PublicKeyCredential) { msg.textContent = 'Trình duyệt không hỗ trợ passkey/WebAuthn.'; return; }
         add.disabled = true;
         try {
             var r = await fetch("{% url 'smartlock:tf-passkey-options' %}", { method: 'POST', headers: { 'X-CSRFToken': csrf }, credentials: 'same-origin' });

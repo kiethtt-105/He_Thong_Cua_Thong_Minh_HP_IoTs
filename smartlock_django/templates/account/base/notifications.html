@@ -10,7 +10,7 @@
     </div>
     <form method="post">{% csrf_token %}<input type="hidden" name="action" value="mark_all">
         <button class="btn btn-sm btn-outline-success" {% if not unread_count %}disabled{% endif %}><i class="fa-solid fa-check-double me-1"></i>Đọc tất cả</button></form>
-    <form method="post" data-confirm="Xóa tất cả thông báo đã đọc?">{% csrf_token %}<input type="hidden" name="action" value="delete_all_read">
+    <form method="post" onsubmit="return confirm('Xóa tất cả thông báo đã đọc?')">{% csrf_token %}<input type="hidden" name="action" value="delete_all_read">
         <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash me-1"></i>Xóa đã đọc</button></form>
 </div>
 {% endblock %}

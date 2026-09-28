@@ -21,7 +21,7 @@
             <dt>Hoàn tất lúc</dt><dd>{{ support_request.completed_at|date:"d/m/Y H:i"|default:"—" }}</dd>
         </dl>
         {% if support_request.status == 'pending' %}
-        <form method="post" class="mt-4 pt-3 border-top" data-confirm="Hủy yêu cầu này?">
+        <form method="post" class="mt-4 pt-3 border-top" onsubmit="return confirm('Hủy yêu cầu này?')">
             {% csrf_token %}<input type="hidden" name="action" value="cancel">
             <button class="btn btn-outline-danger"><i class="fa-solid fa-ban me-2"></i>Hủy yêu cầu</button>
         </form>
