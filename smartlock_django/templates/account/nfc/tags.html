@@ -1,6 +1,7 @@
 {% extends 'account/base/layout.html' %}
 {% block title %}Thẻ NFC{% endblock %}
 {% block page_title %}Thẻ NFC của tôi{% endblock %}
+{% block page_sub %}<p class="page-sub">Đổi tên, bật/tắt hoặc xóa các thẻ đã đăng ký.</p>{% endblock %}
 {% block page_actions %}<a href="{% url 'smartlock:nfc-reader' %}" class="btn btn-primary"><i class="fa-solid fa-plus me-2"></i>Đăng ký thẻ mới</a>{% endblock %}
 
 {% block content %}
@@ -10,7 +11,7 @@
         <tbody>
             {% for card in access_cards %}
             <tr>
-                <td>
+                <td style="min-width:230px">
                     <form method="post" class="d-flex gap-2">
                         {% csrf_token %}<input type="hidden" name="action" value="rename"><input type="hidden" name="card_id" value="{{ card.id }}">
                         <input type="text" name="name" value="{{ card.name|default:'' }}" class="form-control form-control-sm" placeholder="Chưa đặt tên" maxlength="100">
@@ -18,17 +19,17 @@
                     </form>
                 </td>
                 <td><code>{{ card.card_uid_hash|slice:":8" }}…</code></td>
-                <td>{% for a in card.carddeviceaccess_set.all %}<span class="badge bg-light text-dark border me-1">{{ a.device.name }}</span>{% empty %}<span class="text-muted">—</span>{% endfor %}</td>
-                <td>{% if card.is_active %}<span class="badge bg-success">Đang hoạt động</span>{% else %}<span class="badge bg-secondary">Vô hiệu hóa</span>{% endif %}</td>
-                <td class="text-end">
+                <td>{% for a in card.carddeviceaccess_set.all %}<span class="chip plain me-1">{{ a.device.name }}</span>{% empty %}<span class="text-muted">—</span>{% endfor %}</td>
+                <td>{% if card.is_active %}<span class="status ok">Đang hoạt động</span>{% else %}<span class="status">Vô hiệu hóa</span>{% endif %}</td>
+                <td class="text-end text-nowrap">
                     <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="toggle"><input type="hidden" name="card_id" value="{{ card.id }}">
                         <button class="btn btn-sm {% if card.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}">{% if card.is_active %}Vô hiệu hóa{% else %}Kích hoạt{% endif %}</button></form>
-                    <form method="post" class="d-inline" onsubmit="return confirm('Xóa thẻ này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="card_id" value="{{ card.id }}">
+                    <form method="post" class="d-inline" data-confirm="Xóa thẻ này?">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="card_id" value="{{ card.id }}">
                         <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash"></i></button></form>
                 </td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" class="text-center text-muted py-5">Bạn chưa đăng ký thẻ NFC nào.</td></tr>
+            <tr><td colspan="5"><div class="empty-state"><div class="ei"><i class="fa-solid fa-id-card"></i></div><h6>Chưa có thẻ NFC nào</h6><div>Bấm “Đăng ký thẻ mới” để thêm thẻ đầu tiên.</div></div></td></tr>
             {% endfor %}
         </tbody>
     </table>

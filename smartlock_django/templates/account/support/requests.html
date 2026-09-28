@@ -1,6 +1,7 @@
 {% extends 'account/base/layout.html' %}
 {% block title %}Hỗ trợ{% endblock %}
 {% block page_title %}Yêu cầu hỗ trợ{% endblock %}
+{% block page_sub %}<p class="page-sub">Theo dõi các yêu cầu hỗ trợ và ủy quyền của bạn.</p>{% endblock %}
 {% block page_actions %}
 <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newRequest" {% if not device_list %}disabled{% endif %}><i class="fa-solid fa-plus me-2"></i>Tạo yêu cầu</button>
 {% endblock %}
@@ -13,13 +14,13 @@
             {% for r in support_requests %}
             <tr>
                 <td><code>{{ r.id|stringformat:"s"|slice:":8" }}</code></td>
-                <td>{{ r.device.name }}</td>
+                <td class="fw-semibold">{{ r.device.name }}</td>
                 <td>{{ r.get_action_display }}</td>
-                <td><span class="badge {% if r.status == 'executed' or r.status == 'approved' %}bg-success{% elif r.status == 'pending' %}bg-warning text-dark{% elif r.status == 'rejected' %}bg-danger{% else %}bg-secondary{% endif %}">{{ r.get_status_display }}</span></td>
-                <td>{{ r.expires_at|date:"d/m/Y H:i" }}</td>
+                <td><span class="status {% if r.status == 'executed' or r.status == 'approved' %}ok{% elif r.status == 'pending' %}warn{% elif r.status == 'rejected' %}bad{% endif %}">{{ r.get_status_display }}</span></td>
+                <td class="text-nowrap">{{ r.expires_at|date:"d/m/Y H:i" }}</td>
                 <td class="text-end"><a href="{% url 'smartlock:support-request-detail' r.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
             </tr>
-            {% empty %}<tr><td colspan="6" class="text-center text-muted py-5">Bạn chưa có yêu cầu hỗ trợ nào.</td></tr>{% endfor %}
+            {% empty %}<tr><td colspan="6"><div class="empty-state"><div class="ei"><i class="fa-solid fa-headset"></i></div><h6>Chưa có yêu cầu hỗ trợ nào</h6><div>Bấm “Tạo yêu cầu” khi bạn cần trợ giúp.</div></div></td></tr>{% endfor %}
         </tbody>
     </table>
 </div></div>
@@ -41,7 +42,7 @@
             <div class="mb-3"><label class="form-label">Loại yêu cầu</label>
                 <select name="action" class="form-select" required>{% for value, label in action_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></div>
             <div class="mb-1"><label class="form-label">Phạm vi / ghi chú</label><input type="text" name="scope" class="form-control" maxlength="100"></div>
-            <small class="text-muted">Sau khi tạo, hệ thống hiển thị mã ủy quyền (và mã khôi phục nếu cần) đúng một lần.</small>
+            <div class="alert alert-info small mt-3 mb-0"><i class="fa-solid fa-circle-info me-1"></i>Sau khi tạo, hệ thống hiển thị mã ủy quyền (và mã khôi phục nếu cần) đúng một lần.</div>
         </div>
         <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button><button class="btn btn-primary">Gửi yêu cầu</button></div>
     </form>

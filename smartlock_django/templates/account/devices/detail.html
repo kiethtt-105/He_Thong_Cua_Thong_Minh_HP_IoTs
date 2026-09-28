@@ -1,36 +1,48 @@
 {% extends 'account/base/layout.html' %}
 {% block title %}{{ device.name }}{% endblock %}
 {% block page_title %}{{ device.name }}{% endblock %}
+{% block page_sub %}<p class="page-sub"><code>{{ device.device_code }}</code></p>{% endblock %}
 {% block page_actions %}<a href="{% url 'smartlock:devices-list' %}" class="btn btn-outline-secondary"><i class="fa-solid fa-arrow-left me-2"></i>Danh sách</a>{% endblock %}
 
 {% block content %}
 <div class="row g-3">
     <div class="col-lg-7">
         <div class="card mb-3">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span>Thông tin thiết bị</span>
-                <span class="badge {% if device.status == 'online' %}bg-success{% elif device.status == 'maintenance' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ device.status|title }}</span>
-            </div>
             <div class="card-body">
-                <div class="row">
-                    <div class="col-md-6"><table class="table table-borderless table-sm mb-0">
-                        <tr><th>Mã thiết bị</th><td><code>{{ device.device_code }}</code></td></tr>
-                        <tr><th>Mã MAC</th><td>{{ device.mac_address|default:"Chưa có" }}</td></tr>
-                        <tr><th>Firmware</th><td>{{ device.firmware_version|default:"Chưa có" }}</td></tr>
-                        <tr><th>Chế độ</th><td>{{ device.get_device_mode_display }}</td></tr>
-                    </table></div>
-                    <div class="col-md-6"><table class="table table-borderless table-sm mb-0">
-                        <tr><th>Vị trí</th><td>{{ device.location|default:"Chưa cập nhật" }}</td></tr>
-                        <tr><th>Pin</th><td>{{ device.battery_level }}%</td></tr>
-                        <tr><th>Khóa</th><td>{% if device.lock_state == 'locked' %}<span class="badge bg-success">Đã khóa</span>{% elif device.lock_state == 'unlocked' %}<span class="badge bg-danger">Đang mở</span>{% elif device.lock_state == 'jammed' %}<span class="badge bg-warning text-dark">Bị kẹt</span>{% else %}<span class="badge bg-secondary">Không rõ</span>{% endif %}</td></tr>
-                        <tr><th>Online lần cuối</th><td>{{ device.last_seen_at|date:"d/m/Y H:i"|default:"—" }}</td></tr>
-                    </table></div>
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                    <div class="d-flex align-items-center gap-3">
+                        {% if device.lock_state == 'locked' %}<div class="stat-icon bg-success-subtle text-success"><i class="fa-solid fa-lock"></i></div><div><div class="fw-bold fs-5 text-success">Đã khóa</div>
+                        {% elif device.lock_state == 'unlocked' %}<div class="stat-icon bg-danger-subtle text-danger"><i class="fa-solid fa-lock-open"></i></div><div><div class="fw-bold fs-5 text-danger">Đang mở</div>
+                        {% elif device.lock_state == 'jammed' %}<div class="stat-icon bg-warning-subtle text-warning"><i class="fa-solid fa-triangle-exclamation"></i></div><div><div class="fw-bold fs-5 text-warning">Bị kẹt</div>
+                        {% else %}<div class="stat-icon bg-secondary-subtle text-secondary"><i class="fa-solid fa-circle-question"></i></div><div><div class="fw-bold fs-5 text-secondary">Không rõ</div>{% endif %}
+                            <small class="text-muted">Trạng thái khóa</small></div>
+                    </div>
+                    <span class="status {% if device.status == 'online' %}ok{% elif device.status == 'maintenance' %}warn{% endif %}">{{ device.status|title }}</span>
                 </div>
-                <hr>
                 <div class="d-flex flex-wrap gap-2">
                     <button class="btn btn-success js-cmd" {% if device.status != 'online' %}disabled{% endif %} data-url="{% url 'smartlock:device-command' device.id %}" data-command="LOCK" data-label="khóa thiết bị"><i class="fa-solid fa-lock me-1"></i>Khóa</button>
                     <button class="btn btn-danger js-cmd" {% if device.status != 'online' %}disabled{% endif %} data-url="{% url 'smartlock:device-command' device.id %}" data-command="UNLOCK" data-label="mở khóa thiết bị"><i class="fa-solid fa-lock-open me-1"></i>Mở khóa</button>
                     {% if is_owner %}<button class="btn btn-outline-secondary js-cmd" {% if device.status != 'online' %}disabled{% endif %} data-url="{% url 'smartlock:device-command' device.id %}" data-command="REBOOT" data-label="khởi động lại thiết bị"><i class="fa-solid fa-power-off me-1"></i>Khởi động lại</button>{% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header">Thông tin thiết bị</div>
+            <div class="card-body">
+                <div class="row g-4">
+                    <div class="col-md-6"><dl class="kv" style="grid-template-columns:110px 1fr">
+                        <dt>Mã thiết bị</dt><dd><code>{{ device.device_code }}</code></dd>
+                        <dt>Mã MAC</dt><dd>{{ device.mac_address|default:"Chưa có" }}</dd>
+                        <dt>Firmware</dt><dd>{{ device.firmware_version|default:"Chưa có" }}</dd>
+                        <dt>Chế độ</dt><dd>{{ device.get_device_mode_display }}</dd>
+                    </dl></div>
+                    <div class="col-md-6"><dl class="kv" style="grid-template-columns:110px 1fr">
+                        <dt>Vị trí</dt><dd>{{ device.location|default:"Chưa cập nhật" }}</dd>
+                        <dt>Pin</dt><dd><div class="d-flex align-items-center gap-2"><div class="progress flex-grow-1" style="height:6px"><div class="progress-bar {% if device.battery_level < 20 %}bg-danger{% elif device.battery_level < 50 %}bg-warning{% else %}bg-success{% endif %}" style="width: {{ device.battery_level }}%"></div></div>{{ device.battery_level }}%</div></dd>
+                        <dt>Khóa</dt><dd>{% if device.lock_state == 'locked' %}<span class="status ok">Đã khóa</span>{% elif device.lock_state == 'unlocked' %}<span class="status bad">Đang mở</span>{% elif device.lock_state == 'jammed' %}<span class="status warn">Bị kẹt</span>{% else %}<span class="status">Không rõ</span>{% endif %}</dd>
+                        <dt>Online lần cuối</dt><dd>{{ device.last_seen_at|date:"d/m/Y H:i"|default:"—" }}</dd>
+                    </dl></div>
                 </div>
             </div>
         </div>
@@ -60,27 +72,32 @@
     <div class="col-lg-5">
         <div class="card mb-3">
             <div class="card-header">Lệnh gần đây</div>
-            <ul class="list-group list-group-flush">
+            <div>
                 {% for c in recent_commands %}
-                <li class="list-group-item d-flex justify-content-between align-items-center">
+                <div class="row-item align-items-center">
                     <div><strong>{{ c.command_type }}</strong><div class="small text-muted">{{ c.issued_by.username }} • {{ c.created_at|date:"d/m H:i" }}</div></div>
-                    <span class="badge {% if c.status == 'acknowledged' %}bg-success{% elif c.status == 'failed' or c.status == 'expired' %}bg-danger{% else %}bg-secondary{% endif %}">{{ c.status }}</span>
-                </li>
-                {% empty %}<li class="list-group-item text-muted">Chưa có lệnh nào.</li>{% endfor %}
-            </ul>
+                    <span class="status {% if c.status == 'acknowledged' %}ok{% elif c.status == 'failed' or c.status == 'expired' %}bad{% endif %}">{{ c.status }}</span>
+                </div>
+                {% empty %}<div class="empty-state py-4"><div class="text-muted">Chưa có lệnh nào.</div></div>{% endfor %}
+            </div>
         </div>
         {% if is_owner %}
         <div class="card">
-            <div class="card-header d-flex justify-content-between"><span>Người có quyền truy cập</span><a href="{% url 'smartlock:permissions-manage' %}?device={{ device.id }}" class="small text-decoration-none">Quản lý</a></div>
-            <ul class="list-group list-group-flush">
+            <div class="card-header d-flex justify-content-between align-items-center"><span>Người có quyền truy cập</span><a href="{% url 'smartlock:permissions-manage' %}?device={{ device.id }}" class="small">Quản lý</a></div>
+            <div>
                 {% for a in accesses %}
-                <li class="list-group-item">
-                    <div class="fw-semibold">{{ a.user.full_name|default:a.user.username }}</div>
-                    <div>{% for p in a.permissions.all %}<span class="badge bg-primary me-1">{{ p.name }}</span>{% endfor %}</div>
-                    <small class="text-muted">{% if a.expires_at %}Hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn{% endif %}</small>
-                </li>
-                {% empty %}<li class="list-group-item text-muted">Chưa chia sẻ cho ai.</li>{% endfor %}
-            </ul>
+                <div class="row-item">
+                    <div class="d-flex gap-3 align-items-start">
+                        <div class="avatar-sm" style="width:38px;height:38px">{{ a.user.username|upper|slice:":1" }}</div>
+                        <div>
+                            <div class="fw-semibold">{{ a.user.full_name|default:a.user.username }}</div>
+                            <div class="my-1 d-flex flex-wrap gap-1">{% for p in a.permissions.all %}<span class="chip">{{ p.name }}</span>{% endfor %}</div>
+                            <small class="text-muted">{% if a.expires_at %}Hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn{% endif %}</small>
+                        </div>
+                    </div>
+                </div>
+                {% empty %}<div class="empty-state py-4"><div class="text-muted">Chưa chia sẻ cho ai.</div></div>{% endfor %}
+            </div>
         </div>
         {% endif %}
     </div>

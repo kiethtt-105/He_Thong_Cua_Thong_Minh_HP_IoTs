@@ -1,46 +1,35 @@
-{% extends 'account/base/layout.html' %}
+{% extends 'account/base/auth_base.html' %}
 {% block title %}Đăng ký{% endblock %}
-{% block shell %}
-<div class="auth-bg"><div class="container py-4">
-    <div class="card auth-card mx-auto"><div class="card-body p-4 p-md-5">
-        <div class="text-center mb-4">
-            <div class="brand-icon mx-auto mb-3"><i class="fa-solid fa-user-plus"></i></div>
-            <h3 class="fw-bold mb-1">Tạo tài khoản</h3>
-            <p class="text-muted mb-0">Đăng ký Smart Lock</p>
-        </div>
-        {% for m in messages %}<div class="alert alert-{% if m.tags == 'error' %}danger{% else %}{{ m.tags }}{% endif %}">{{ m }}</div>{% endfor %}
-
-        {% if disabled %}
-            <div class="alert alert-warning mb-0"><i class="fa-solid fa-triangle-exclamation me-2"></i>Hệ thống hiện đang tạm đóng đăng ký tài khoản mới.</div>
-        {% else %}
-        <form method="post">
-            {% csrf_token %}
-            <div class="input-group mb-3">
-                <span class="input-group-text"><i class="fa-solid fa-envelope"></i></span>
-                <input type="email" name="email" class="form-control" placeholder="Email" value="{{ form.email }}" required>
-            </div>
-            <div class="input-group mb-3">
-                <span class="input-group-text"><i class="fa-solid fa-at"></i></span>
-                <input type="text" name="username" class="form-control" placeholder="Tên đăng nhập" value="{{ form.username }}" required maxlength="50">
-            </div>
-            <div class="input-group mb-3">
-                <span class="input-group-text"><i class="fa-solid fa-id-badge"></i></span>
-                <input type="text" name="full_name" class="form-control" placeholder="Họ và tên (không bắt buộc)" value="{{ form.full_name }}" maxlength="100">
-            </div>
-            <div class="input-group mb-3">
-                <span class="input-group-text"><i class="fa-solid fa-key"></i></span>
-                <input type="password" name="password1" class="form-control" placeholder="Mật khẩu" required autocomplete="new-password">
-            </div>
-            <div class="input-group mb-4">
-                <span class="input-group-text"><i class="fa-solid fa-key"></i></span>
-                <input type="password" name="password2" class="form-control" placeholder="Xác nhận mật khẩu" required autocomplete="new-password">
-            </div>
-            <button type="submit" class="btn btn-primary w-100 py-2">Đăng ký</button>
-        </form>
-        {% endif %}
-        <div class="text-center mt-4 small">
-            <a href="{% url 'smartlock:login' %}" class="text-decoration-none">Đã có tài khoản? Đăng nhập</a>
-        </div>
-    </div></div>
-</div></div>
+{% block auth_icon %}fa-user-plus{% endblock %}
+{% block auth_title %}Tạo tài khoản{% endblock %}
+{% block auth_sub %}Đăng ký Smart Lock chỉ mất vài giây{% endblock %}
+{% block auth_content %}
+{% if disabled %}
+    <div class="alert alert-warning mb-3"><i class="fa-solid fa-triangle-exclamation me-2"></i>Hệ thống hiện đang tạm đóng đăng ký tài khoản mới.</div>
+{% else %}
+<form method="post">
+    {% csrf_token %}
+    <div class="mb-3"><label class="form-label">Email</label>
+        <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-envelope"></i></span>
+            <input type="email" name="email" class="form-control" placeholder="ten@email.com" value="{{ form.email }}" required></div></div>
+    <div class="row g-3 mb-3">
+        <div class="col-sm-6"><label class="form-label">Tên đăng nhập</label>
+            <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-at"></i></span>
+                <input type="text" name="username" class="form-control" placeholder="username" value="{{ form.username }}" required maxlength="50"></div></div>
+        <div class="col-sm-6"><label class="form-label">Họ và tên <span class="text-muted fw-normal">(tùy chọn)</span></label>
+            <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-id-badge"></i></span>
+                <input type="text" name="full_name" class="form-control" placeholder="Nguyễn Văn A" value="{{ form.full_name }}" maxlength="100"></div></div>
+    </div>
+    <div class="row g-3 mb-4">
+        <div class="col-sm-6"><label class="form-label">Mật khẩu</label>
+            <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-key"></i></span>
+                <input type="password" name="password1" class="form-control" required autocomplete="new-password"></div></div>
+        <div class="col-sm-6"><label class="form-label">Xác nhận mật khẩu</label>
+            <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-key"></i></span>
+                <input type="password" name="password2" class="form-control" required autocomplete="new-password"></div></div>
+    </div>
+    <button type="submit" class="btn btn-primary w-100 py-2">Đăng ký</button>
+</form>
+{% endif %}
+<p class="text-center text-muted small mt-4 mb-0">Đã có tài khoản? <a href="{% url 'smartlock:login' %}">Đăng nhập</a></p>
 {% endblock %}

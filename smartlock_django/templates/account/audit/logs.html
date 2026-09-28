@@ -1,6 +1,7 @@
 {% extends 'account/base/layout.html' %}
 {% block title %}Nhật ký{% endblock %}
 {% block page_title %}Nhật ký hệ thống{% endblock %}
+{% block page_sub %}<p class="page-sub">Lịch sử thao tác và sự kiện bảo mật.</p>{% endblock %}
 {% block page_actions %}
 {% if can_see_all %}
 <a href="?{% if not show_all %}all=1{% endif %}" class="btn btn-sm {% if show_all %}btn-primary{% else %}btn-outline-primary{% endif %}"><i class="fa-solid fa-users me-1"></i>{% if show_all %}Đang xem toàn hệ thống{% else %}Xem toàn hệ thống{% endif %}</a>
@@ -8,15 +9,15 @@
 {% endblock %}
 
 {% block content %}
-<form method="get" class="row g-2 mb-3">
+<form method="get" class="filter-bar">
     {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
-    <div class="col-md-5"><input type="text" name="q" value="{{ q }}" class="form-control" placeholder="Tìm theo hành động..."></div>
-    <div class="col-md-3"><select name="status" class="form-select">
+    <div class="flex-grow-1" style="min-width:220px"><input type="text" name="q" value="{{ q }}" class="form-control" placeholder="Tìm theo hành động..."></div>
+    <div style="min-width:180px"><select name="status" class="form-select">
         <option value="">Tất cả trạng thái</option>
         <option value="ok" {% if status == 'ok' %}selected{% endif %}>Thành công</option>
         <option value="fail" {% if status == 'fail' %}selected{% endif %}>Thất bại</option>
     </select></div>
-    <div class="col-md-2"><button class="btn btn-primary w-100">Lọc</button></div>
+    <button class="btn btn-primary px-4"><i class="fa-solid fa-filter me-1"></i>Lọc</button>
 </form>
 
 <div class="card"><div class="table-responsive">
@@ -25,15 +26,15 @@
         <tbody>
             {% for log in audit_logs %}
             <tr>
-                <td class="text-nowrap">{{ log.created_at|date:"d/m/Y H:i" }}</td>
+                <td class="text-nowrap text-muted">{{ log.created_at|date:"d/m/Y H:i" }}</td>
                 <td><code>{{ log.action }}</code></td>
                 {% if show_all %}<td>{{ log.actor_user.username|default:log.username_attempt|default:"Hệ thống" }}</td>{% endif %}
                 <td>{{ log.device.name|default:"—" }}</td>
-                <td><span class="badge {% if log.severity == 'critical' %}bg-danger{% elif log.severity == 'warning' %}bg-warning text-dark{% else %}bg-info text-dark{% endif %}">{{ log.severity }}</span></td>
-                <td class="text-muted">{{ log.ip_address|default:"—" }}</td>
-                <td>{% if log.success %}<span class="badge bg-success">Thành công</span>{% else %}<span class="badge bg-danger">Thất bại</span>{% endif %}</td>
+                <td><span class="status {% if log.severity == 'critical' %}bad{% elif log.severity == 'warning' %}warn{% else %}info{% endif %}">{{ log.severity }}</span></td>
+                <td class="text-muted font-mono">{{ log.ip_address|default:"—" }}</td>
+                <td>{% if log.success %}<span class="status ok">Thành công</span>{% else %}<span class="status bad">Thất bại</span>{% endif %}</td>
             </tr>
-            {% empty %}<tr><td colspan="7" class="text-center text-muted py-5">Chưa có nhật ký.</td></tr>{% endfor %}
+            {% empty %}<tr><td colspan="7"><div class="empty-state"><div class="ei"><i class="fa-solid fa-file-lines"></i></div><h6>Chưa có nhật ký</h6></div></td></tr>{% endfor %}
         </tbody>
     </table>
 </div></div>

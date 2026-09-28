@@ -1,53 +1,62 @@
 {% extends 'account/base/layout.html' %}
 {% block title %}Tài khoản{% endblock %}
 {% block page_title %}Thông tin cá nhân{% endblock %}
+{% block page_sub %}<p class="page-sub">Quản lý hồ sơ, mật khẩu và bảo mật tài khoản.</p>{% endblock %}
 {% block content %}
 <div class="row g-3">
-    <div class="col-lg-6">
-        <div class="card h-100">
-            <div class="card-header">Thông tin tài khoản</div>
+    <div class="col-lg-4">
+        <div class="card h-100"><div class="card-body text-center py-4">
+            <div class="avatar-lg">{{ user.username|upper|slice:":1" }}</div>
+            <h5 class="fw-bold mb-0">{{ user.full_name|default:user.username }}</h5>
+            <div class="text-muted small mb-3">@{{ user.username }}</div>
+            <span class="status {% if user.email_verified %}ok{% else %}warn{% endif %}">{% if user.email_verified %}Email đã xác thực{% else %}Email chưa xác thực{% endif %}</span>
+            <div class="row g-0 mini-stat border-top pt-3 mt-4">
+                <div class="col"><b>{{ device_count }}</b><small>Thiết bị</small></div>
+                <div class="col"><b>{{ card_count }}</b><small>Thẻ NFC</small></div>
+                <div class="col"><b class="fs-6 pt-1">{{ user.created_at|date:"d/m/Y" }}</b><small>Tham gia</small></div>
+            </div>
+        </div></div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card mb-3">
+            <div class="card-header"><i class="fa-solid fa-id-card me-2 text-primary"></i>Thông tin tài khoản</div>
             <div class="card-body">
                 <form method="post">
                     {% csrf_token %}<input type="hidden" name="action" value="update_info">
-                    <div class="mb-3"><label class="form-label">Email</label>
-                        <input class="form-control" value="{{ user.email }}" disabled>
-                        <small class="{% if user.email_verified %}text-success{% else %}text-warning{% endif %}">
-                            <i class="fa-solid {% if user.email_verified %}fa-circle-check{% else %}fa-circle-exclamation{% endif %} me-1"></i>{% if user.email_verified %}Đã xác thực{% else %}Chưa xác thực{% endif %}</small></div>
-                    <div class="mb-3"><label class="form-label">Tên đăng nhập</label><input class="form-control" value="{{ user.username }}" disabled></div>
-                    <div class="mb-3"><label class="form-label">Họ và tên</label><input type="text" name="full_name" class="form-control" value="{{ user.full_name|default:'' }}" maxlength="100"></div>
-                    <div class="mb-3"><label class="form-label">Số điện thoại</label><input type="tel" name="phone" class="form-control" value="{{ user.phone|default:'' }}" maxlength="20"></div>
-                    <button class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>
+                    <div class="row g-3">
+                        <div class="col-md-6"><label class="form-label">Email</label>
+                            <input class="form-control" value="{{ user.email }}" disabled>
+                            <small class="{% if user.email_verified %}text-success{% else %}text-warning{% endif %}">
+                                <i class="fa-solid {% if user.email_verified %}fa-circle-check{% else %}fa-circle-exclamation{% endif %} me-1"></i>{% if user.email_verified %}Đã xác thực{% else %}Chưa xác thực{% endif %}</small></div>
+                        <div class="col-md-6"><label class="form-label">Tên đăng nhập</label><input class="form-control" value="{{ user.username }}" disabled></div>
+                        <div class="col-md-6"><label class="form-label">Họ và tên</label><input type="text" name="full_name" class="form-control" value="{{ user.full_name|default:'' }}" maxlength="100"></div>
+                        <div class="col-md-6"><label class="form-label">Số điện thoại</label><input type="tel" name="phone" class="form-control" value="{{ user.phone|default:'' }}" maxlength="20"></div>
+                    </div>
+                    <button class="btn btn-primary mt-3"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>
                 </form>
             </div>
         </div>
-    </div>
-    <div class="col-lg-6">
-        <div class="card mb-3">
-            <div class="card-header">Đổi mật khẩu</div>
+        <div class="card">
+            <div class="card-header"><i class="fa-solid fa-key me-2 text-primary"></i>Đổi mật khẩu</div>
             <div class="card-body">
                 <form method="post">
                     {% csrf_token %}<input type="hidden" name="action" value="change_password">
-                    <div class="mb-3"><label class="form-label">Mật khẩu hiện tại</label><input type="password" name="old_password" class="form-control" required autocomplete="current-password"></div>
-                    <div class="mb-3"><label class="form-label">Mật khẩu mới</label><input type="password" name="new_password1" class="form-control" required autocomplete="new-password"></div>
-                    <div class="mb-3"><label class="form-label">Xác nhận mật khẩu mới</label><input type="password" name="new_password2" class="form-control" required autocomplete="new-password"></div>
-                    <button class="btn btn-outline-primary"><i class="fa-solid fa-key me-2"></i>Đổi mật khẩu</button>
+                    <div class="row g-3">
+                        <div class="col-12"><label class="form-label">Mật khẩu hiện tại</label><input type="password" name="old_password" class="form-control" required autocomplete="current-password"></div>
+                        <div class="col-md-6"><label class="form-label">Mật khẩu mới</label><input type="password" name="new_password1" class="form-control" required autocomplete="new-password"></div>
+                        <div class="col-md-6"><label class="form-label">Xác nhận mật khẩu mới</label><input type="password" name="new_password2" class="form-control" required autocomplete="new-password"></div>
+                    </div>
+                    <button class="btn btn-outline-primary mt-3"><i class="fa-solid fa-key me-2"></i>Đổi mật khẩu</button>
                 </form>
             </div>
         </div>
-        <div class="card"><div class="card-body">
-            <div class="row text-center">
-                <div class="col"><div class="fs-4 fw-bold">{{ device_count }}</div><small class="text-muted">Thiết bị sở hữu</small></div>
-                <div class="col"><div class="fs-4 fw-bold">{{ card_count }}</div><small class="text-muted">Thẻ NFC</small></div>
-                <div class="col"><div class="fs-6 fw-bold pt-2">{{ user.created_at|date:"d/m/Y" }}</div><small class="text-muted">Ngày tham gia</small></div>
-            </div>
-        </div></div>
     </div>
     <!-- ===================== XÁC THỰC 2 LỚP (2FA) ===================== -->
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="fa-solid fa-shield-halved me-2"></i>Xác thực 2 lớp (2FA)</span>
-                {% if tf_enabled %}<span class="badge bg-success">Đang bật</span>{% else %}<span class="badge bg-secondary">Đang tắt</span>{% endif %}
+                {% if tf_enabled %}<span class="status ok">Đang bật</span>{% else %}<span class="status">Đang tắt</span>{% endif %}
             </div>
             <div class="card-body">
                 <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
@@ -215,7 +224,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var add = document.getElementById('tfPasskeyAdd'), msg = document.getElementById('tfPasskeyMsg');
     if (add) add.addEventListener('click', async function () {
         msg.textContent = '';
-        if (!window.PublicKeyCredential) { msg.textContent = 'Trình duyệt không hỗ trợ passkey/WebAuthn.'; return; }
+        if (!window.PublicKeyCredential || document.documentElement.classList.contains('in-app')) { msg.textContent = 'Passkey chưa dùng được trong app. Hãy đăng ký passkey trên trình duyệt (Chrome/Safari), hoặc dùng Authenticator / Email.'; return; }
         add.disabled = true;
         try {
             var r = await fetch("{% url 'smartlock:tf-passkey-options' %}", { method: 'POST', headers: { 'X-CSRFToken': csrf }, credentials: 'same-origin' });
