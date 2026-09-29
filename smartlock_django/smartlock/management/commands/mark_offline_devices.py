@@ -14,6 +14,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 from smartlock.models import Device
+from smartlock import rules_engine
 
 OFFLINE_AFTER_SECONDS = 180  # không nhận status > 3 phút -> coi là offline
 
@@ -24,5 +25,6 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         cutoff = timezone.now() - timedelta(seconds=OFFLINE_AFTER_SECONDS)
         n = Device.objects.filter(status='online', last_seen_at__lt=cutoff).update(status='offline')
+        rules_engine.evaluate_offline_devices()  # luật OFFLINE_TOO_LONG do user cấu hình
         if n:
             self.stdout.write(self.style.WARNING(f'Đã chuyển {n} thiết bị sang offline (mất kết nối).'))

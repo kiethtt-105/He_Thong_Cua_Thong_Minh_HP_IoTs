@@ -5,11 +5,13 @@ import logging
 import math
 from datetime import timedelta
 
+from django.conf import settings as dj_settings
 from django.core.paginator import Paginator
+from django.db import transaction
 from django.utils import timezone
 
 from smartlock.models import (
-    AuditLog, LoginLockout, Notification, SystemSettings,
+    AuditLog, Notification, SystemSettings, User,
 )
 
 logger = logging.getLogger('smartlock.manage_sys')
@@ -19,6 +21,24 @@ MAX_FAILED_ATTEMPTS = 5
 DEFAULT_LOCKOUT_STAGES = [5, 10, 30]
 # Các hành động hỗ trợ nhạy cảm (khớp CheckConstraint chk_support_requires_recovery)
 RECOVERY_ACTIONS = {'RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER'}
+
+# Lượt đăng nhập nay lấy từ AuditLog (bảng LoginAttemptLog cũ đã gộp vào AuditLog).
+LOGIN_ACTIONS = ('LOGIN', 'LOGIN_FAILED', 'LOGIN_ADMIN_REJECTED',
+                 'MANAGE_LOGIN', 'MANAGE_LOGIN_DENIED', 'MANAGE_LOGIN_FAILED')
+LOGIN_FAIL_ACTIONS = ('LOGIN_FAILED', 'LOGIN_ADMIN_REJECTED', 'MANAGE_LOGIN_DENIED', 'MANAGE_LOGIN_FAILED')
+
+
+def login_attempts_qs():
+    return AuditLog.objects.filter(action__in=LOGIN_ACTIONS)
+
+
+def decorate_login_attempt(a):
+    """Gắn thêm thuộc tính giống LoginAttemptLog cũ (identifier, user) để template cũ vẫn chạy."""
+    who = a.target_user or a.actor_user
+    ident = a.username_attempt or (who.email if who else '—')
+    a.identifier = f'[manage] {ident}' if a.action.startswith('MANAGE_') else ident
+    a.user = who
+    return a
 
 
 # ---------- Phân quyền ----------
@@ -42,9 +62,15 @@ def modify_denied_reason(actor, target):
 
 # ---------- Request ----------
 def client_ip(request):
-    xff = request.META.get('HTTP_X_FORWARDED_FOR')
-    ip = xff.split(',')[0].strip() if xff else request.META.get('REMOTE_ADDR')
-    return ip or '0.0.0.0'
+    def _valid(v):
+        try:
+            return str(ipaddress.ip_address((v or '').strip()))
+        except ValueError:
+            return None
+    ip = None
+    if getattr(dj_settings, 'TRUST_PROXY_HEADERS', False):
+        ip = _valid((request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0])
+    return ip or _valid(request.META.get('REMOTE_ADDR')) or '0.0.0.0'
 
 
 def user_agent(request):
@@ -104,32 +130,36 @@ def register_failure(user, ip):
     st = get_settings()
     stages = st.login_lockout_stage_minutes or DEFAULT_LOCKOUT_STAGES
     now = timezone.now()
-    lock, _ = LoginLockout.objects.get_or_create(user=user)
-    lock.failed_attempts += 1
-    lock.last_failed_at = now
-    lock.last_failed_ip = ip
-    if lock.failed_attempts >= MAX_FAILED_ATTEMPTS:
-        minutes = stages[min(lock.stage, len(stages) - 1)]
-        lock.locked_until = now + timedelta(minutes=minutes)
-        lock.stage += 1
-        lock.failed_attempts = 0
+    locked_minutes = None
+    with transaction.atomic():
+        lock = User.objects.select_for_update().get(pk=user.pk)
+        lock.login_failed_attempts += 1
+        lock.login_last_failed_at = now
+        lock.login_last_failed_ip = ip
+        if lock.login_failed_attempts >= MAX_FAILED_ATTEMPTS:
+            locked_minutes = stages[min(lock.login_lock_stage, len(stages) - 1)]
+            lock.login_locked_until = now + timedelta(minutes=locked_minutes)
+            lock.login_lock_stage += 1
+            lock.login_failed_attempts = 0
+        lock.save(update_fields=['login_failed_attempts', 'login_last_failed_at', 'login_last_failed_ip',
+                                 'login_locked_until', 'login_lock_stage', 'updated_at'])
+    if locked_minutes:
         notify(user, 'Tài khoản quản trị bị khóa tạm thời',
-               f'Đăng nhập trang quản trị sai nhiều lần từ IP {ip}. Khóa {minutes} phút.',
+               f'Đăng nhập trang quản trị sai nhiều lần từ IP {ip}. Khóa {locked_minutes} phút.',
                severity='critical', type_='LOGIN_LOCKOUT')
-    lock.save()
 
 
 def reset_lockout(user):
-    LoginLockout.objects.filter(user=user).update(
-        failed_attempts=0, stage=0, locked_until=None,
+    User.objects.filter(pk=user.pk).update(
+        login_failed_attempts=0, login_lock_stage=0, login_locked_until=None,
     )
 
 
 def lock_remaining_minutes(user):
-    lock = LoginLockout.objects.filter(user=user).first()
+    locked_until = User.objects.filter(pk=user.pk).values_list('login_locked_until', flat=True).first()
     now = timezone.now()
-    if lock and lock.locked_until and lock.locked_until > now:
-        return math.ceil((lock.locked_until - now).total_seconds() / 60)
+    if locked_until and locked_until > now:
+        return math.ceil((locked_until - now).total_seconds() / 60)
     return 0
 
 

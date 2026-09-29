@@ -102,6 +102,11 @@ def _log_event(**kwargs) -> AccessEvent:
     event = AccessEvent.objects.create(**kwargs)
     if not event.success and event.reason not in _NON_COUNTED_REASONS:
         _handle_burst_if_needed(event.device)
+        try:  # luật FAILED_ACCESS_BURST do user cấu hình (không để lỗi rule làm hỏng luồng mở cửa)
+            from . import rules_engine
+            rules_engine.evaluate_failed_access_burst(event.device)
+        except Exception:
+            logger.exception('access_control: lỗi khi chạy rule engine')
     return event
 
 

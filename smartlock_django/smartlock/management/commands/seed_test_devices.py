@@ -1,4 +1,4 @@
-# smartlock/management/commands/seed_test_devices.py
+seed_test_devices# smartlock/management/commands/seed_test_devices.py
 #
 #     python manage.py seed_test_devices --owner=kieth02@admin.vn
 #
@@ -19,7 +19,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 from datetime import timedelta
 
-from smartlock.models import AccessCard, CardDeviceAccess, Device, NfcReader, NfcReaderConfig
+from smartlock.models import AccessCard, CardDeviceAccess, Device, NfcReader
 from smartlock import access_control
 
 User = get_user_model()
@@ -60,7 +60,6 @@ class Command(BaseCommand):
                 device=device, reader_mode='simulated',
                 defaults={'name': f'Đầu đọc giả lập {i}', 'is_active': True, 'last_seen_at': timezone.now()},
             )
-            NfcReaderConfig.objects.get_or_create(reader=reader)
             devices.append(device)
             self.stdout.write(f'  {"Tạo mới" if created else "Đã cập nhật"} device_code={code} '
                                f'(secret dùng cho username/password MQTT: "{code}" / "{provisioning_secret}")')

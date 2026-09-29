@@ -7,6 +7,7 @@ import logging
 import re
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 
 from django.conf import settings as dj_settings
 from django.contrib import messages
@@ -22,13 +23,13 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from smartlock.models import (
     Announcement, AuditLog, Device, DeviceAccess, DeviceCommand, DeviceStatusLog,
-    LoginAttemptLog, LoginLockout, NfcReader, SupportRequest, User,
+    NfcReader, SupportRequest, User,
 )
 
 from .decorators import manage_required
 from .helpers import (
-    RECOVERY_ACTIONS, audit, client_ip, get_settings, has_manage_role, ip_blacklisted,
-    is_manager, lock_remaining_minutes, modify_denied_reason, notify, paginate,
+    LOGIN_FAIL_ACTIONS, RECOVERY_ACTIONS, audit, client_ip, decorate_login_attempt, get_settings,
+    has_manage_role, ip_blacklisted, is_manager, lock_remaining_minutes, login_attempts_qs, modify_denied_reason, notify, paginate,
     parse_ip_lines, register_failure, reset_lockout, user_agent,
 )
 
@@ -92,11 +93,6 @@ def login_view(request):
     auth_user = authenticate(request, username=user.email, password=password) if user else None
     ok = bool(auth_user and has_manage_role(auth_user))
 
-    LoginAttemptLog.objects.create(
-        identifier=f'[manage] {identifier}'[:255], user=user, ip_address=ip,
-        user_agent=user_agent(request), success=ok,
-    )
-
     if ok:
         reset_lockout(auth_user)
         login(request, auth_user)
@@ -143,8 +139,8 @@ def dashboard(request):
         'online_devices': Device.objects.filter(status='online').count(),
         'maintenance_devices': Device.objects.filter(status='maintenance').count(),
         'support_pending': SupportRequest.objects.filter(status='pending', expires_at__gt=now).count(),
-        'failed_logins_24h': LoginAttemptLog.objects.filter(success=False, created_at__gte=day_ago).count(),
-        'locked_accounts': LoginLockout.objects.filter(locked_until__gt=now).count(),
+        'failed_logins_24h': AuditLog.objects.filter(action__in=LOGIN_FAIL_ACTIONS, created_at__gte=day_ago).count(),
+        'locked_accounts': User.objects.filter(login_locked_until__gt=now).count(),
         'critical_24h': AuditLog.objects.filter(severity='critical', created_at__gte=day_ago).count(),
     }
 
@@ -187,13 +183,13 @@ def users_list(request):
     elif status == 'inactive':
         qs = qs.filter(is_active=False)
     elif status == 'locked':
-        qs = qs.filter(login_lockout__locked_until__gt=now)
+        qs = qs.filter(login_locked_until__gt=now)
     elif status == 'admin':
         qs = qs.filter(Q(is_admin=True) | Q(is_staff=True) | Q(is_superuser=True))
 
     page_obj, qs_str = paginate(request, qs)
-    locked_ids = set(LoginLockout.objects.filter(
-        user__in=[u.pk for u in page_obj], locked_until__gt=now).values_list('user_id', flat=True))
+    locked_ids = set(User.objects.filter(
+        pk__in=[u.pk for u in page_obj], login_locked_until__gt=now).values_list('pk', flat=True))
     for u in page_obj:
         u.is_locked = u.pk in locked_ids
         u.is_manager_role = has_manage_role(u)
@@ -253,17 +249,24 @@ def user_detail(request, user_id):
         return back
 
     now = timezone.now()
-    lock = LoginLockout.objects.filter(user=target).first()
+    # Giữ nguyên tên thuộc tính cũ (failed_attempts, stage, locked_until...) cho template.
+    lock = SimpleNamespace(
+        failed_attempts=target.login_failed_attempts, stage=target.login_lock_stage,
+        locked_until=target.login_locked_until, last_failed_at=target.login_last_failed_at,
+        last_failed_ip=target.login_last_failed_ip,
+    )
     context = {
         'target': target,
         'lock': lock,
-        'is_locked': bool(lock and lock.locked_until and lock.locked_until > now),
+        'is_locked': bool(lock.locked_until and lock.locked_until > now),
         'target_is_manager': has_manage_role(target),
         'deny_reason': modify_denied_reason(request.user, target),
         'devices': Device.objects.filter(owner=target).order_by('name'),
         'accesses': (DeviceAccess.objects.filter(user=target, is_active=True)
                      .select_related('device').order_by('-created_at')[:10]),
-        'login_attempts': LoginAttemptLog.objects.filter(user=target).order_by('-created_at')[:10],
+        'login_attempts': [decorate_login_attempt(a) for a in (
+            login_attempts_qs().filter(Q(actor_user=target) | Q(target_user=target))
+            .select_related('actor_user', 'target_user').order_by('-created_at')[:10])],
         'logs': (AuditLog.objects.filter(Q(actor_user=target) | Q(target_user=target))
                  .select_related('device').order_by('-created_at')[:10]),
     }
@@ -470,16 +473,19 @@ def audit_logs(request):
 
 @manage_required
 def login_attempts(request):
-    qs = LoginAttemptLog.objects.select_related('user').order_by('-created_at')
+    qs = login_attempts_qs().select_related('actor_user', 'target_user').order_by('-created_at')
     q = (request.GET.get('q') or '').strip()
     if q:
-        qs = qs.filter(Q(identifier__icontains=q) | Q(ip_address__icontains=q))
+        qs = qs.filter(Q(username_attempt__icontains=q) | Q(ip_address__icontains=q)
+                       | Q(target_user__email__icontains=q) | Q(actor_user__email__icontains=q))
     status = request.GET.get('status') or ''
     if status == 'ok':
         qs = qs.filter(success=True)
     elif status == 'fail':
         qs = qs.filter(success=False)
     page_obj, qs_str = paginate(request, qs)
+    for a in page_obj:
+        decorate_login_attempt(a)
     return render(request, 'manage_sys/audit/logins.html', {
         'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status,
     })
