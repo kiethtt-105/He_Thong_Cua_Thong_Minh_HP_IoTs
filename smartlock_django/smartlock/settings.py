@@ -287,3 +287,37 @@ MANAGE_SYS_SESSION_SECONDS = 2 * 60 * 60
 
 
 TRUST_PROXY_HEADERS=True
+
+
+# Dán vào smartlock_django/settings.py (thay khối REST_FRAMEWORK cũ nếu đã có).
+# settings.py bạn gửi KHÔNG có REST_FRAMEWORK: thiếu DEFAULT_THROTTLE_RATES thì các view dùng
+# ScopedRateThrottle (command, redeem) sẽ báo ImproperlyConfigured -> 500, và thiếu
+# DEFAULT_PERMISSION_CLASSES thì API mặc định là AllowAny.
+
+REST_FRAMEWORK = {
+    # Bearer (app) đứng trước, Session (web) đứng sau. Session vẫn bị kiểm tra CSRF; Bearer thì không cần CSRF.
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'smartlock.api.mobile_auth.MobileTokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
+    'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
+    'DEFAULT_THROTTLE_RATES': {
+        'command': '30/min',       # gửi lệnh khoá/mở
+        'redeem': '10/min',        # nhập mã chia sẻ
+        'auth_login': '10/min',    # theo IP
+        'auth_2fa': '10/min',
+        'auth_register': '5/min',
+        'auth_reset': '5/min',
+        'auth_refresh': '30/min',
+    },
+    # Số reverse proxy đứng trước Django (Vercel = 1) để throttle lấy đúng IP client.
+    'NUM_PROXIES': env_int('DRF_NUM_PROXIES', 1),
+}
+
+# ---- tuỳ chọn cho app di động ----
+MOBILE_ACCESS_TOKEN_SECONDS = 15 * 60
+MOBILE_REFRESH_TOKEN_DAYS = 30
+MOBILE_MAX_SESSIONS_PER_USER = 10
+MOBILE_MIN_APP_VERSION = '1.0.0'       # app thấp hơn -> hiện màn hình bắt cập nhật
+MOBILE_LATEST_APP_VERSION = '1.0.0'

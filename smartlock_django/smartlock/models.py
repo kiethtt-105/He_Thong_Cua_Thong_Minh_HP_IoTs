@@ -13,7 +13,7 @@ import hmac
 import json  
 import hashlib
 from cryptography.fernet import Fernet
-
+from .models_mobile import MobileSession  
 
 # ==================== CẤU HÌNH BÍ MẬT (FERNET) ====================
 FERNET_KEY = os.environ.get("FERNET_KEY")

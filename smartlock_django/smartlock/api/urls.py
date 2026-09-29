@@ -2,17 +2,46 @@
 from django.urls import path
 from django.views.decorators.csrf import ensure_csrf_cookie
 
+from . import auth_views as av
+from . import extra_views as ev
 from . import views as v
 
 app_name = 'api'
 
 urlpatterns = [
-    path('csrf/', ensure_csrf_cookie(v.CsrfView.as_view()), name='csrf'),
+    # ====================== công khai (không cần đăng nhập) ======================
+    path('csrf/', ensure_csrf_cookie(v.CsrfView.as_view()), name='csrf'),            # chỉ web (session)
+    path('app-config/', ev.AppConfigView.as_view(), name='app-config'),
+
+    # ====================== xác thực cho app (Bearer token) ======================
+    path('auth/register/', av.RegisterView.as_view(), name='register'),
+    path('auth/resend-verification/', av.ResendVerificationView.as_view(), name='resend-verification'),
+    path('auth/login/', av.LoginView.as_view(), name='login'),
+    path('auth/2fa/verify/', av.TwoFactorVerifyView.as_view(), name='login-2fa-verify'),
+    path('auth/2fa/email/send/', av.TwoFactorLoginEmailSendView.as_view(), name='login-2fa-email-send'),
+    path('auth/refresh/', av.RefreshView.as_view(), name='refresh'),
+    path('auth/logout/', av.LogoutView.as_view(), name='logout'),
+    path('auth/logout-all/', av.LogoutAllView.as_view(), name='logout-all'),
+    path('auth/sessions/', av.SessionListView.as_view(), name='sessions'),
+    path('auth/sessions/<uuid:session_id>/', av.SessionDetailView.as_view(), name='session-detail'),
+    path('auth/password-reset/', av.PasswordResetRequestView.as_view(), name='password-reset'),
+    path('auth/password-reset/confirm/', av.PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
+
     path('meta/', v.MetaView.as_view(), name='meta'),
+    path('sync/', ev.SyncView.as_view(), name='sync'),
 
     # tài khoản / tổng quan
     path('me/', v.MeView.as_view(), name='me'),
-    path('me/password/', v.ChangePasswordView.as_view(), name='change-password'),
+    path('me/password/', av.ChangePasswordView.as_view(), name='change-password'),
+    path('me/push-token/', av.PushTokenView.as_view(), name='push-token'),
+    path('me/2fa/', av.TwoFactorStatusView.as_view(), name='2fa-status'),
+    path('me/2fa/totp/begin/', av.TotpBeginView.as_view(), name='2fa-totp-begin'),
+    path('me/2fa/totp/confirm/', av.TotpConfirmView.as_view(), name='2fa-totp-confirm'),
+    path('me/2fa/email/send/', av.EmailOtpSendView.as_view(), name='2fa-email-send'),
+    path('me/2fa/email/confirm/', av.EmailOtpConfirmView.as_view(), name='2fa-email-confirm'),
+    path('me/2fa/remove/', av.RemoveMethodView.as_view(), name='2fa-remove'),
+    path('me/2fa/disable/', av.DisableTwoFactorView.as_view(), name='2fa-disable'),
+    path('me/2fa/passkeys/<uuid:cred_id>/delete/', av.PasskeyDeleteView.as_view(), name='2fa-passkey-delete'),
     path('dashboard/', v.DashboardView.as_view(), name='dashboard'),
     path('announcements/', v.AnnouncementListView.as_view(), name='announcements'),
 
@@ -77,6 +106,4 @@ urlpatterns = [
 
     # nhật ký
     path('audit-logs/', v.AuditLogListView.as_view(), name='audit-logs'),
-
-     path('login/', v.ApiLoginView.as_view(), name='login'),
 ]
