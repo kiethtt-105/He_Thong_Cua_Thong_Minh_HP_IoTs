@@ -1,10 +1,10 @@
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
 {% block title %}Thông báo hệ thống{% endblock %}
-{% block content %}
-<h4 class="mb-3"><i class="bi bi-megaphone"></i> Thông báo hệ thống</h4>
-<p class="text-muted small">Thông báo đang bật sẽ hiển thị trên trang tổng quan của người dùng.</p>
+{% block page_title %}Thông báo hệ thống{% endblock %}
+{% block page_sub %}<p class="page-sub">Thông báo đang bật sẽ hiển thị trên trang tổng quan của người dùng.</p>{% endblock %}
 
+{% block content %}
 <div class="row g-4">
     <div class="col-lg-4">
         <div class="card">
@@ -21,7 +21,7 @@
                             <option value="danger">Nguy hiểm</option>
                         </select>
                     </div>
-                    <button class="btn btn-primary w-100"><i class="bi bi-send"></i> Đăng thông báo</button>
+                    <button class="btn btn-primary w-100"><i class="fa-solid fa-paper-plane me-2"></i>Đăng thông báo</button>
                 </form>
             </div>
         </div>
@@ -31,7 +31,7 @@
         <div class="card">
             <div class="table-responsive">
                 <table class="table mb-0">
-                    <thead><tr><th>Nội dung</th><th>Mức độ</th><th>Trạng thái</th><th>Đăng lúc</th><th></th></tr></thead>
+                    <thead><tr><th>Nội dung</th><th>Mức độ</th><th>Trạng thái</th><th>Đăng lúc</th><th class="text-end"></th></tr></thead>
                     <tbody>
                     {% for a in page_obj %}
                         <tr>
@@ -43,11 +43,11 @@
                                 <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="{{ a.id }}">
                                     <button class="btn btn-sm btn-outline-secondary">{% if a.is_active %}Ẩn{% else %}Hiện{% endif %}</button></form>
                                 <form method="post" class="d-inline" onsubmit="return confirm('Xóa thông báo này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="{{ a.id }}">
-                                    <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button></form>
+                                    <button class="btn btn-sm btn-outline-danger" aria-label="Xóa"><i class="fa-solid fa-trash"></i></button></form>
                             </td>
                         </tr>
                     {% empty %}
-                        <tr><td colspan="5" class="text-center py-4 text-muted">Chưa có thông báo nào</td></tr>
+                        <tr><td colspan="5"><div class="empty-state"><div class="ei"><i class="fa-solid fa-bullhorn"></i></div><h6>Chưa có thông báo nào</h6><div class="small">Đăng thông báo đầu tiên ở form bên cạnh.</div></div></td></tr>
                     {% endfor %}
                     </tbody>
                 </table>

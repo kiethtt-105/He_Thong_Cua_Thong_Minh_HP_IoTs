@@ -69,7 +69,12 @@ def client_ip(request):
             return None
     ip = None
     if getattr(dj_settings, 'TRUST_PROXY_HEADERS', False):
-        ip = _valid((request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0])
+        # Phần tử ĐẦU của X-Forwarded-For do client tự gửi -> giả mạo được. Lấy phần tử do
+        # proxy của mình thêm vào: đếm từ cuối (TRUSTED_PROXY_COUNT = số proxy phía trước app, mặc định 1).
+        parts = [p for p in (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',') if p.strip()]
+        n = max(1, int(getattr(dj_settings, 'TRUSTED_PROXY_COUNT', 1)))
+        if len(parts) >= n:
+            ip = _valid(parts[-n])
     return ip or _valid(request.META.get('REMOTE_ADDR')) or '0.0.0.0'
 
 

@@ -1,0 +1,44 @@
+{% extends 'manage_sys/base.html' %}
+{% block title %}Thêm thiết bị{% endblock %}
+{% block page_title %}Thêm thiết bị{% endblock %}
+{% block page_actions %}<a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">Thông tin thiết bị</div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label">Mã thiết bị <span class="text-danger">*</span></label>
+                        <input type="text" name="device_code" class="form-control mono" value="{{ form.device_code }}" maxlength="50" required placeholder="LOCK-0001" autocapitalize="characters">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tên thiết bị <span class="text-danger">*</span></label>
+                        <input type="text" name="name" class="form-control" value="{{ form.name }}" maxlength="100" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Loại</label>
+                        <select name="device_mode" class="form-select">
+                            <option value="physical" {% if form.device_mode != 'simulated' %}selected{% endif %}>Thiết bị thật</option>
+                            <option value="simulated" {% if form.device_mode == 'simulated' %}selected{% endif %}>Mô phỏng</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">MAC (tùy chọn)</label>
+                        <input type="text" name="mac_address" class="form-control mono" value="{{ form.mac_address }}" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17">
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label">Chủ sở hữu (email hoặc username)</label>
+                        <input type="text" name="owner_email" class="form-control" value="{{ form.owner_email }}" autocapitalize="none">
+                        <div class="form-text">Để trống: thiết bị ở trạng thái "chờ cấu hình", người dùng tự nhận sau. Có chủ: thiết bị vào ngay tài khoản đó và được tính là đã mua.</div>
+                    </div>
+                    <button class="btn btn-primary w-100"><i class="fa-solid fa-plus me-2"></i>Tạo thiết bị</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

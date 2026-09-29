@@ -14,6 +14,7 @@ urlpatterns = [
     path('users/<uuid:user_id>/', views.user_detail, name='user-detail'),
 
     path('devices/', views.devices_list, name='devices'),
+    path('devices/new/', views.device_create, name='device-create'),
     path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
 
     path('support/', views.support_list, name='support'),

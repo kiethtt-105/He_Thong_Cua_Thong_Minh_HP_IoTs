@@ -1,65 +1,92 @@
-{% load static %}
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Manage Sys - Smart Lock{% endblock %}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-    <style>
-        body { background: #f8f9fa; font-family: system-ui, -apple-system, sans-serif; }
-        .navbar { box-shadow: 0 4px 15px rgba(0,0,0,0.12); }
-        .stat-card { transition: all 0.3s; }
-        .stat-card:hover { transform: translateY(-8px); box-shadow: 0 20px 40px rgba(0,0,0,0.18); }
-        .table th { background: #f1f3f5; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-        .toast { position: fixed; bottom: 25px; right: 25px; z-index: 9999; }
-    </style>
-    {% block extra_head %}{% endblock %}
-</head>
-<body>
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
-    <div class="container-fluid">
-        <a class="navbar-brand fw-bold" href="{% url 'manage_sys:dashboard' %}">
-            <i class="bi bi-shield-lock"></i> Manage Sys
+{% extends 'account/base/layout.html' %}
+{% comment %}
+    Manage Sys dùng chung layout.html của project (CSS, token, script, WebView helper).
+    Chỉ override block `shell` để thay sidebar/bottom-nav bằng menu quản trị.
+    Các trang con dùng: title, page_title, page_sub, page_actions, content, scripts.
+{% endcomment %}
+{% block title %}Quản trị{% endblock %}
+
+{% block extra_head %}
+<style>
+    .mono { font-family: var(--font-mono); font-size: .88em; }
+    a.stat-card { color: inherit; display: block; transition: transform .15s, box-shadow .15s; }
+    a.stat-card:hover { transform: translateY(-2px); box-shadow: 0 12px 28px -14px rgba(15,23,42,.25); color: inherit; }
+    .stat-card.sm .stat-num { font-size: 1.4rem; }
+    .bar-wrap { display: flex; align-items: flex-end; gap: .5rem; height: 160px; }
+    .bar-wrap .bar { flex: 1; min-height: 3px; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--accent-2), var(--accent)); opacity: .85; transition: opacity .15s; }
+    .bar-wrap .bar:hover { opacity: 1; }
+    .filter-bar .btn { white-space: nowrap; }
+    .pagination { flex-wrap: wrap; }
+    @media (hover: none) { a.stat-card:hover { transform: none; box-shadow: var(--shadow); } }
+</style>
+{% endblock %}
+
+{% block shell %}
+{% with u=request.resolver_match.url_name %}
+<div class="app">
+    <aside class="sidebar" id="sidebar">
+        <a class="sb-brand" href="{% url 'manage_sys:dashboard' %}">
+            <span class="brand-mark"><i class="fa-solid fa-shield-halved"></i></span>
+            <span class="brand-word">Manage Sys<span class="brand-sub">Quản trị hệ thống</span></span>
         </a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="nav">
-            <ul class="navbar-nav me-auto">
-                <li class="nav-item"><a class="nav-link {% if current == 'dashboard' %}active{% endif %}" href="{% url 'manage_sys:dashboard' %}"><i class="bi bi-speedometer2"></i> Tổng quan</a></li>
-                <li class="nav-item"><a class="nav-link {% if current in 'users user-detail' %}active{% endif %}" href="{% url 'manage_sys:users' %}"><i class="bi bi-people"></i> Người dùng</a></li>
-                <li class="nav-item"><a class="nav-link {% if current in 'devices device-detail' %}active{% endif %}" href="{% url 'manage_sys:devices' %}"><i class="bi bi-pc-display"></i> Thiết bị</a></li>
-                <li class="nav-item"><a class="nav-link {% if current in 'support support-detail' %}active{% endif %}" href="{% url 'manage_sys:support' %}"><i class="bi bi-headset"></i> Hỗ trợ</a></li>
-                <li class="nav-item"><a class="nav-link {% if current in 'logs login-attempts' %}active{% endif %}" href="{% url 'manage_sys:logs' %}"><i class="bi bi-journal-text"></i> Nhật ký</a></li>
-                <li class="nav-item"><a class="nav-link {% if current == 'announcements' %}active{% endif %}" href="{% url 'manage_sys:announcements' %}"><i class="bi bi-megaphone"></i> Thông báo</a></li>
-                <li class="nav-item"><a class="nav-link {% if current == 'settings' %}active{% endif %}" href="{% url 'manage_sys:settings' %}"><i class="bi bi-gear"></i> Cài đặt</a></li>
-            </ul>
-            <div class="d-flex align-items-center gap-3">
-                <span class="text-white small"><i class="bi bi-person-badge"></i> {{ request.user.email }}</span>
-                <form method="post" action="{% url 'manage_sys:logout' %}" class="m-0">
-                    {% csrf_token %}
-                    <button class="btn btn-sm btn-outline-light"><i class="bi bi-box-arrow-right"></i></button>
-                </form>
+
+        <nav class="sb-nav">
+            <div class="sb-label">Tổng quan</div>
+            <a class="sb-link {% if u == 'dashboard' %}active{% endif %}" href="{% url 'manage_sys:dashboard' %}"><i class="fa-solid fa-gauge"></i> Tổng quan</a>
+
+            <div class="sb-label">Quản lý</div>
+            <a class="sb-link {% if u|slice:':4' == 'user' %}active{% endif %}" href="{% url 'manage_sys:users' %}"><i class="fa-solid fa-users"></i> Người dùng</a>
+            <a class="sb-link {% if u|slice:':6' == 'device' %}active{% endif %}" href="{% url 'manage_sys:devices' %}"><i class="fa-solid fa-plug"></i> Thiết bị</a>
+            <a class="sb-link {% if u|slice:':7' == 'support' %}active{% endif %}" href="{% url 'manage_sys:support' %}"><i class="fa-solid fa-headset"></i> Hỗ trợ</a>
+
+            <div class="sb-label">Hệ thống</div>
+            <a class="sb-link {% if u == 'logs' or u == 'login-attempts' %}active{% endif %}" href="{% url 'manage_sys:logs' %}"><i class="fa-solid fa-file-lines"></i> Nhật ký</a>
+            <a class="sb-link {% if u == 'announcements' %}active{% endif %}" href="{% url 'manage_sys:announcements' %}"><i class="fa-solid fa-bullhorn"></i> Thông báo</a>
+            <a class="sb-link {% if u == 'settings' %}active{% endif %}" href="{% url 'manage_sys:settings' %}"><i class="fa-solid fa-gear"></i> Cài đặt</a>
+        </nav>
+
+        <div class="sb-foot">
+            <div class="sb-user">
+                <div class="avatar-sm">{{ request.user.username|default:request.user.email|upper|slice:":1" }}</div>
+                <div class="text-truncate">
+                    <div class="name text-truncate">{{ request.user.full_name|default:request.user.username }}</div>
+                    <small class="text-truncate d-block">{{ request.user.email }}</small>
+                </div>
             </div>
+            <form method="post" action="{% url 'manage_sys:logout' %}" class="mb-0">
+                {% csrf_token %}
+                <button class="sb-logout"><i class="fa-solid fa-right-from-bracket me-2"></i>Đăng xuất</button>
+            </form>
         </div>
+    </aside>
+    <div class="sb-backdrop" onclick="document.body.classList.remove('sb-open')"></div>
+
+    <div class="content-wrap">
+        <header class="m-top d-lg-none">
+            <a class="m-brand" href="{% url 'manage_sys:dashboard' %}"><span class="brand-mark sm"><i class="fa-solid fa-shield-halved"></i></span><span>Manage Sys</span></a>
+            <button type="button" class="sb-toggle border-0 text-white bg-transparent" onclick="document.body.classList.toggle('sb-open')" aria-label="Menu"><i class="fa-solid fa-bars"></i></button>
+        </header>
+        <main class="main">
+            <div class="page-head">
+                <div class="page-head-l">
+                    <div class="min-w-0"><h4 class="page-title">{% block page_title %}{% endblock %}</h4>{% block page_sub %}{% endblock %}</div>
+                </div>
+                <div>{% block page_actions %}{% endblock %}</div>
+            </div>
+            {% for m in messages %}
+            <div class="alert alert-{% if m.tags == 'error' %}danger{% else %}{{ m.tags }}{% endif %} alert-dismissible fade show">{{ m }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+            {% endfor %}
+            {% block content %}{% endblock %}
+        </main>
     </div>
-</nav>
 
-<main class="container-fluid py-4">
-    {% for message in messages %}
-    <div class="alert alert-{% if message.level_tag == 'error' %}danger{% else %}{{ message.level_tag }}{% endif %} alert-dismissible fade show" role="alert">
-        {{ message }}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    </div>
-    {% endfor %}
-
-    {% block content %}{% endblock %}
-</main>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-{% block extra_js %}{% endblock %}
-</body>
-</html>
+    <nav class="bottom-nav d-lg-none" aria-label="Điều hướng nhanh">
+        <a class="bn-item {% if u == 'dashboard' %}active{% endif %}" href="{% url 'manage_sys:dashboard' %}"><i class="fa-solid fa-gauge"></i><span>Tổng quan</span></a>
+        <a class="bn-item {% if u|slice:':4' == 'user' %}active{% endif %}" href="{% url 'manage_sys:users' %}"><i class="fa-solid fa-users"></i><span>Người dùng</span></a>
+        <a class="bn-item {% if u|slice:':6' == 'device' %}active{% endif %}" href="{% url 'manage_sys:devices' %}"><i class="fa-solid fa-plug"></i><span>Thiết bị</span></a>
+        <a class="bn-item {% if u|slice:':7' == 'support' %}active{% endif %}" href="{% url 'manage_sys:support' %}"><i class="fa-solid fa-headset"></i><span>Hỗ trợ</span></a>
+        <button type="button" class="bn-item" onclick="document.body.classList.toggle('sb-open')" aria-label="Menu"><i class="fa-solid fa-bars"></i><span>Menu</span></button>
+    </nav>
+</div>
+{% endwith %}
+{% endblock %}

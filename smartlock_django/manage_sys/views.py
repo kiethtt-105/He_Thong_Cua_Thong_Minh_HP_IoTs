@@ -5,6 +5,7 @@ Chỉ dùng chung MODELS với app smartlock.
 """
 import logging
 import re
+import secrets
 import uuid
 from datetime import timedelta
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 from django.conf import settings as dj_settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
@@ -182,6 +184,8 @@ def users_list(request):
         qs = qs.filter(is_active=True)
     elif status == 'inactive':
         qs = qs.filter(is_active=False)
+    elif status == 'unverified':
+        qs = qs.filter(is_active=False, email_verified=False)
     elif status == 'locked':
         qs = qs.filter(login_locked_until__gt=now)
     elif status == 'admin':
@@ -274,6 +278,70 @@ def user_detail(request, user_id):
 
 
 # ====================== DEVICES ======================
+_DEVICE_CODE_RE = re.compile(r'^[A-Z0-9][A-Z0-9_-]{2,49}$')
+_MAC_RE = re.compile(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$')
+
+
+@manage_required
+@require_http_methods(['GET', 'POST'])
+def device_create(request):
+    """Admin thêm thiết bị + (tùy chọn) chỉ định chủ. Không can thiệp sâu hơn."""
+    if request.method == 'POST':
+        form = {k: (request.POST.get(k) or '').strip() for k in
+                ('device_code', 'name', 'device_mode', 'owner_email', 'mac_address')}
+    else:
+        form = {'device_mode': 'physical'}
+
+    if request.method == 'POST':
+        code = form['device_code'].upper()
+        mode = form['device_mode']
+        mac = form['mac_address'].upper().replace('-', ':')
+        owner = _find_user(form['owner_email']) if form['owner_email'] else None
+        error = None
+        if not _DEVICE_CODE_RE.match(code):
+            error = 'Mã thiết bị 3-50 ký tự (A-Z, 0-9, _ hoặc -).'
+        elif not form['name']:
+            error = 'Vui lòng nhập tên thiết bị.'
+        elif mode not in ('physical', 'simulated'):
+            error = 'Loại thiết bị không hợp lệ.'
+        elif mac and not _MAC_RE.match(mac):
+            error = 'Địa chỉ MAC không hợp lệ (dạng AA:BB:CC:DD:EE:FF).'
+        elif form['owner_email'] and not owner:
+            error = 'Không tìm thấy người dùng với email/username này.'
+        elif owner and not owner.is_active:
+            error = 'Tài khoản chủ sở hữu đang bị vô hiệu hóa.'
+        elif Device.objects.filter(device_code=code).exists():
+            error = 'Mã thiết bị đã tồn tại.'
+
+        if error:
+            messages.error(request, error)
+        else:
+            secret = secrets.token_urlsafe(24)
+            with transaction.atomic():
+                device = Device.objects.create(
+                    device_code=code, name=form['name'][:100], device_mode=mode,
+                    mac_address=mac or None, owner=owner,
+                    provisioning_secret_hash=make_password(secret),
+                    # Ràng buộc DB: có chủ -> không được ở 'provisioning'
+                    status='offline' if owner else 'provisioning',
+                )
+                if owner:
+                    device.mark_purchased()
+            audit(request, 'MANAGE_DEVICE_CREATED', device=device, target_user=owner, severity='warning',
+                  metadata={'device_code': code, 'mode': mode})
+            if owner:
+                notify(owner, 'Thiết bị mới được thêm',
+                       f'Quản trị viên đã thêm thiết bị "{device.name}" vào tài khoản của bạn.',
+                       device=device, type_='DEVICE')
+            # Secret chỉ hiển thị 1 lần (DB chỉ lưu hash) -> render thẳng, không redirect
+            return render(request, 'manage_sys/devices/created.html', {
+                'device': device, 'secret': secret,
+                'api_base': request.build_absolute_uri('/').rstrip('/'),
+            })
+
+    return render(request, 'manage_sys/devices/create.html', {'form': form})
+
+
 @manage_required
 def devices_list(request):
     qs = Device.objects.select_related('owner').order_by('name')
@@ -398,17 +466,19 @@ def support_detail(request, request_id):
         reason = (request.POST.get('reason') or '').strip()[:300]
         now = timezone.now()
 
+        effects = []  # audit/notify chạy SAU khi commit (chúng nuốt lỗi DB -> không được nằm trong atomic)
         with transaction.atomic():
             # khóa dòng để tránh 2 admin xử lý cùng lúc
-            sr = get_object_or_404(SupportRequest.objects.select_for_update(), id=request_id)
+            sr = get_object_or_404(SupportRequest.objects.select_for_update().select_related('device', 'requested_by'),
+                                   id=request_id)
             if sr.status != required:
                 messages.error(request, 'Trạng thái yêu cầu đã thay đổi, không thể thực hiện thao tác này.')
             elif sr.expires_at <= now:
                 sr.status = 'expired'
                 sr.completed_at = now
                 sr.save(update_fields=['status', 'completed_at'])
-                audit(request, 'MANAGE_SUPPORT_EXPIRED', device=sr.device, target_user=sr.requested_by,
-                      metadata={'request_id': str(sr.id)})
+                effects.append(lambda: audit(request, 'MANAGE_SUPPORT_EXPIRED', device=sr.device,
+                                             target_user=sr.requested_by, metadata={'request_id': str(sr.id)}))
                 messages.error(request, 'Yêu cầu đã hết hạn nên được chuyển sang "Hết hạn".')
             else:
                 sr.status = new_status
@@ -416,16 +486,20 @@ def support_detail(request, request_id):
                 if new_status in ('rejected', 'executed'):
                     sr.completed_at = now
                 sr.save(update_fields=['status', 'processed_by', 'completed_at'])
-                audit(request, f'MANAGE_SUPPORT_{action.upper()}', device=sr.device,
-                      target_user=sr.requested_by, severity=severity,
-                      metadata={'request_id': str(sr.id), 'reason': reason})
                 text = f'Yêu cầu hỗ trợ "{sr.get_action_display()}" cho "{sr.device.name}" đã được {label}.'
                 if reason:
                     text += f' Ghi chú: {reason}'
-                notify(sr.requested_by, 'Cập nhật yêu cầu hỗ trợ', text,
-                       severity='warning' if new_status == 'rejected' else 'info',
-                       device=sr.device, type_='SUPPORT')
+                effects.append(lambda: audit(
+                    request, f'MANAGE_SUPPORT_{action.upper()}', device=sr.device,
+                    target_user=sr.requested_by, severity=severity,
+                    metadata={'request_id': str(sr.id), 'reason': reason}))
+                effects.append(lambda: notify(
+                    sr.requested_by, 'Cập nhật yêu cầu hỗ trợ', text,
+                    severity='warning' if new_status == 'rejected' else 'info',
+                    device=sr.device, type_='SUPPORT'))
                 messages.success(request, f'Đã {label} yêu cầu.')
+        for fx in effects:
+            fx()
         return redirect('manage_sys:support-detail', request_id=request_id)
 
     sr = get_object_or_404(
@@ -436,7 +510,8 @@ def support_detail(request, request_id):
         'sr': sr,
         'is_overdue': sr.status in ('pending', 'approved') and sr.expires_at <= now,
         'is_sensitive': sr.action in RECOVERY_ACTIONS,
-        'logs': (AuditLog.objects.filter(device=sr.device, action__startswith='SUPPORT_')
+        'logs': (AuditLog.objects.filter(device=sr.device)
+                 .filter(Q(action__startswith='SUPPORT_') | Q(action__startswith='MANAGE_SUPPORT_'))
                  .order_by('-created_at')[:5]),
     }
     return render(request, 'manage_sys/support/detail.html', context)
