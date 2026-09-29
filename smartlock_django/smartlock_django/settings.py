@@ -124,7 +124,15 @@ INSTALLED_APPS = [
     'django_extensions',  
     'manage_sys'
 ]
-
+# 
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.SessionAuthentication'],  # session + CSRF
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
+    'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
+    'DEFAULT_PARSER_CLASSES': ['rest_framework.parsers.JSONParser'],
+    'DEFAULT_THROTTLE_CLASSES': ['rest_framework.throttling.UserRateThrottle'],
+    'DEFAULT_THROTTLE_RATES': {'user': '240/min', 'command': '30/min', 'redeem': '10/min'},
+}
 
 # ==================== MIDDLEWARE CONFIGURATION ====================
 MIDDLEWARE = [

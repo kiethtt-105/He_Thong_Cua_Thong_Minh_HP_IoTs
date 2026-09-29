@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path,include
 from . import views
 
 app_name = 'smartlock'
@@ -73,4 +73,6 @@ urlpatterns = [
     path('two-factor/passkey/register/', views.passkey_register, name='tf-passkey-register'),
     path('two-factor/passkey/<uuid:cred_id>/delete/', views.passkey_delete, name='tf-passkey-delete'),
     path('two-factor/remove/<str:method>/', views.remove_method, name='tf-remove-method'),
+
+    path('api/v1/', include('smartlock.api.urls')),
 ]
