@@ -77,4 +77,6 @@ urlpatterns = [
 
     # nhật ký
     path('audit-logs/', v.AuditLogListView.as_view(), name='audit-logs'),
+
+     path('login/', v.ApiLoginView.as_view(), name='login'),
 ]

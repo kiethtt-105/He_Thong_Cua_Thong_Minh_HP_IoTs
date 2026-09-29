@@ -41,6 +41,11 @@ from .common import (
     with_lock_state,
 )
 
+from django.contrib.auth import authenticate, login
+from rest_framework.permissions import AllowAny
+from rest_framework.views import APIView
+from rest_framework.response import Response
+
 FAILED_REDEEM_LIMIT = 5
 FAILED_REDEEM_WINDOW = timedelta(minutes=15)
 
@@ -1009,3 +1014,17 @@ class AuditLogListView(APIView):
         if q:
             qs = qs.filter(action__icontains=q)
         return paginate(request, qs, S.AuditLogSerializer)
+
+
+class ApiLoginView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        user = authenticate(request,
+                            username=request.data.get('username'),
+                            password=request.data.get('password'))
+        if not user:
+            return Response({'detail': 'Sai tài khoản hoặc mật khẩu.'}, status=400)
+        login(request, user)
+        return Response({'id': str(user.id), 'username': user.username, 'email': user.email})
