@@ -24,6 +24,7 @@ urlpatterns = [
 
     # ====================== MQTT (server-to-server, không phải route cho người dùng) ======================
     path('api/mqtt/auth/', views.mqtt_auth_webhook, name='mqtt-auth'),
+    path('api/mqtt/acl/', views.mqtt_acl_webhook, name='mqtt-acl'),
 
     path('nfc/tags/', views.nfc_tags, name='nfc-tags'),
     path('nfc/reader/', views.nfc_reader, name='nfc-reader'),

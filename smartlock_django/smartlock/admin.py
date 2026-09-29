@@ -5,7 +5,8 @@ from .models import (
     Permission, DeviceAccess, ShareAccessCode, NfcReader, NfcReaderConfig,
     NfcSession, AccessCard, CardDeviceAccess, NfcLog, SupportRequest,
     Notification, AuditLog, LoginAttemptLog, LoginLockout, EmailVerificationToken,
-    LoginIdentifier
+    LoginIdentifier, Announcement, AutomationRule, AutomationRuleLog,
+    DoorPinCode, FaceProfile, AccessEvent,
 )
 
 @admin.register(User)
@@ -113,6 +114,30 @@ class EmailVerificationTokenAdmin(admin.ModelAdmin):
     search_fields = ('user__email',)
 
 
+@admin.register(DoorPinCode)
+class DoorPinCodeAdmin(admin.ModelAdmin):
+    list_display = ('device', 'label', 'created_by', 'expires_at', 'use_count', 'max_uses', 'is_revoked')
+    list_filter = ('is_revoked',)
+    search_fields = ('device__name', 'label')
+    exclude = ('pin_hash',)          # không lộ hash PIN trong admin
+
+
+@admin.register(FaceProfile)
+class FaceProfileAdmin(admin.ModelAdmin):
+    list_display = ('user', 'device', 'name', 'is_active')
+    list_filter = ('is_active',)
+    exclude = ('embedding_encrypted',)   # không lộ dữ liệu sinh trắc học
+
+
+@admin.register(AccessEvent)
+class AccessEventAdmin(admin.ModelAdmin):
+    list_display = ('device', 'method', 'success', 'reason', 'user', 'created_at')
+    list_filter = ('method', 'success')
+
+
+admin.site.register(Announcement)
+admin.site.register(AutomationRule)
+admin.site.register(AutomationRuleLog)
 admin.site.register(DeviceStatusLog)
 admin.site.register(DeviceCommand)
 admin.site.register(Permission)

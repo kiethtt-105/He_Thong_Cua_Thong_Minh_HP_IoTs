@@ -31,7 +31,7 @@ from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count, Q
 from django.db.models.functions import TruncDate, TruncMinute
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
@@ -206,7 +206,13 @@ def _pick_device(queryset, raw_id, strict=False):
 def _default_permissions():
     # Suy ra danh sách quyền mặc định từ ALLOWED_COMMANDS.
     codes = sorted({c for c in ALLOWED_COMMANDS.values() if c})
-    return [(c, c.replace('_', ' ').title(), None, False) for c in codes]
+    perms = [(c, c.replace('_', ' ').title(), None, False) for c in codes]
+    # Quyền quản lý truy cập (PIN/khuôn mặt) - nhạy cảm, mặc định không ai ngoài chủ có.
+    perms += [
+        ('manage_pins', 'Quản lý mã PIN', 'Cấp/thu hồi mã PIN cho khách', True),
+        ('manage_face_profiles', 'Quản lý khuôn mặt', 'Đăng ký khuôn mặt được phép mở cửa', True),
+    ]
+    return perms
 
 def _ensure_default_permissions():
     existing = set(Permission.objects.values_list('code', flat=True))
@@ -252,7 +258,7 @@ def _parse_int(value):
 def _redirect_with(url_name, **params):
     url = reverse(url_name)
     if params:
-        url += '?' + '&'.join(f'{k}={v}' for k, v in params.items())
+        url += '?' + urlencode(params)
     return redirect(url)
 
 def _register_failure(user, ip):
@@ -388,7 +394,7 @@ def login_view(request):
         _audit(request, 'LOGIN', actor=auth_user)
         messages.success(request, 'Đăng nhập thành công!')
 
-        if next_url and url_has_allowed_host_and_scheme(next_url, {request.get_host()}):
+        if next_url and url_has_allowed_host_and_scheme(next_url, {request.get_host()}, require_https=request.is_secure()):
             return redirect(next_url)
 
         return redirect('smartlock:dashboard')
@@ -889,11 +895,14 @@ def device_command(request, device_id):
         return JsonResponse({'ok': False, 'message': 'Thiết bị đang không online.'}, status=409)
 
     now = timezone.now()
-    DeviceCommand.objects.filter(device=device, status='pending', expires_at__lte=now).update(status='expired')
-    if DeviceCommand.objects.filter(device=device, status='pending', command_type=command).exists():
+    # 'sent' cũng là trạng thái chưa xong (đã publish, chờ ack) -> phải tính vào hết hạn & chống trùng.
+    DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'),
+                                 expires_at__lte=now).update(status='expired')
+    if DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'), command_type=command,
+                                    created_at__gte=now - timedelta(seconds=10)).exists():
         _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
                metadata={'reason': 'duplicate_pending'})
-        return JsonResponse({'ok': False, 'message': 'Lệnh này đang chờ thiết bị xử lý.'}, status=429)
+        return JsonResponse({'ok': False, 'message': 'Lệnh này vừa được gửi, vui lòng chờ vài giây.'}, status=429)
 
     cmd = DeviceCommand.objects.create(
         device=device, issued_by=request.user, command_type=command, status='pending',
@@ -924,6 +933,16 @@ def device_command(request, device_id):
                          'message': f'Đã gửi lệnh {labels.get(command, command)} tới "{device.name}".'})
 
 
+def _mqtt_webhook_authorized(request) -> bool:
+    """Broker phải gửi header X-Webhook-Secret khớp settings.MQTT_WEBHOOK_SECRET.
+    Nếu chưa cấu hình secret thì bỏ qua kiểm tra (chỉ nên như vậy khi dev/test)."""
+    secret = getattr(dj_settings, 'MQTT_WEBHOOK_SECRET', None)
+    if not secret:
+        logger.warning('MQTT_WEBHOOK_SECRET chưa được đặt: webhook MQTT đang không được bảo vệ.')
+        return True
+    return hmac.compare_digest(str(request.META.get('HTTP_X_WEBHOOK_SECRET', '')), str(secret))
+
+
 # ====================== MQTT: WEBHOOK XÁC THỰC THIẾT BỊ (gọi bởi plugin auth của broker) ======================
 @csrf_exempt
 @require_POST
@@ -940,6 +959,8 @@ def mqtt_auth_webhook(request):
     người dùng đăng nhập) và bỏ qua CSRF (broker gọi server-to-server, không có session).
     Cần chặn endpoint này ở tầng mạng/tường lửa chỉ cho phép broker gọi vào, không public.
     """
+    if not _mqtt_webhook_authorized(request):
+        return JsonResponse({'ok': False}, status=403)
     username = (request.POST.get('username') or '').strip()
     password = request.POST.get('password') or ''
     if not username or not password:
@@ -952,6 +973,41 @@ def mqtt_auth_webhook(request):
         return JsonResponse({'ok': False}, status=401)
 
     return JsonResponse({'ok': True})
+
+
+@csrf_exempt
+@require_POST
+def mqtt_acl_webhook(request):
+    """ACL cho broker (mosquitto-go-auth: acc 1=read, 2=write, 3=readwrite, 4=subscribe).
+    Thiết bị chỉ được: đọc/subscribe smartlock/<device_code>/cmd và ghi vào
+    smartlock/<device_code>/{status,ack,event}. Không được đụng topic của thiết bị khác.
+    Các tài khoản tin cậy (publisher/subscriber của server) khai báo trong MQTT_TRUSTED_USERNAMES."""
+    if not _mqtt_webhook_authorized(request):
+        return JsonResponse({'ok': False}, status=403)
+    username = (request.POST.get('username') or '').strip()
+    topic = (request.POST.get('topic') or '').strip()
+    try:
+        acc = int(request.POST.get('acc') or 0)
+    except ValueError:
+        acc = 0
+    if not username or not topic:
+        return JsonResponse({'ok': False}, status=403)
+
+    if username in getattr(dj_settings, 'MQTT_TRUSTED_USERNAMES', []):
+        return JsonResponse({'ok': True})
+
+    if not Device.objects.filter(device_code=username).exists():
+        return JsonResponse({'ok': False}, status=403)
+
+    parts = topic.split('/')
+    if len(parts) != 3 or parts[0] != 'smartlock' or parts[1] != username:
+        return JsonResponse({'ok': False}, status=403)
+    channel = parts[2]
+    can_read = acc in (1, 3, 4) and channel == 'cmd'
+    can_write = acc in (2, 3) and channel in ('status', 'ack', 'event')
+    if (acc in (1, 4) and can_read) or (acc == 2 and can_write):
+        return JsonResponse({'ok': True})
+    return JsonResponse({'ok': False}, status=403)
 
 
 # ====================== NFC ======================
@@ -1722,7 +1778,7 @@ def notifications_list(request):
         elif action == 'delete_all_read':
             Notification.objects.filter(user=user, is_read=True).delete()
         nxt = request.META.get('HTTP_REFERER')
-        if nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}):
+        if nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}, require_https=request.is_secure()):
             return redirect(nxt)
         return redirect('smartlock:notifications')
 
@@ -1865,9 +1921,16 @@ def _bucketed_avg(queryset, dt_field, value_field, minutes=20):
     return labels, data
 
 
+def _require_demo_logs():
+    """Trang log công khai chỉ bật khi settings.DEMO_LOGS_ENABLED = True (mặc định = DEBUG)."""
+    if not getattr(dj_settings, 'DEMO_LOGS_ENABLED', False):
+        raise Http404()
+
+
 def public_system_logs(request):
     """Trang khung (shell) - không truyền dữ liệu log qua context. Toàn bộ số liệu/log/
     biểu đồ được JS nạp qua public_system_logs_api() và tự làm mới liên tục."""
+    _require_demo_logs()
     return render(request, 'public/system_logs.html', {})
 
 
@@ -1877,6 +1940,7 @@ LOG_ROW_LIMIT = 100  # số dòng gần nhất trả về mỗi loại log (tăn
 def public_system_logs_api(request):
     """JSON snapshot mới nhất của TOÀN BỘ log trong hệ thống - client gọi lại mỗi 2s.
     Chỉ đọc (GET), không có tham số nào làm thay đổi dữ liệu."""
+    _require_demo_logs()
     devices = Device.objects.select_related('owner').order_by('name')
     device_rows = []
     for d in devices:
@@ -2239,7 +2303,7 @@ def _complete(request, p, user, method):
         _audit(request, 'LOGIN', actor=user, metadata={'two_factor': method})
         messages.success(request, 'Đăng nhập thành công!')
         nxt = p.get('next') or ''
-        if nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}):
+        if nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}, require_https=request.is_secure()):
             return nxt
         return reverse('smartlock:dashboard')
 
@@ -2740,7 +2804,7 @@ def door_pins(request):
                 return _redirect_with('smartlock:door-pins', device=device.id)
  
             label = (request.POST.get('label') or '').strip()[:100]
-            plain_pin = ''.join(random.choices(string.digits, k=6))
+            plain_pin = access_control.generate_unique_pin(device)
             pin = access_control.issue_door_pin(
                 device=device, created_by=request.user, plain_pin=plain_pin,
                 ttl_minutes=ttl_minutes, label=label, max_uses=max_uses,
@@ -2814,13 +2878,18 @@ def face_profiles(request):
  
         if action == 'toggle':
             profile = FaceProfile.objects.filter(
-                id=_parse_uuid(request.POST.get('profile_id')), device=device, user=request.user
+                id=_parse_uuid(request.POST.get('profile_id')), device=device
             ).first()
+            # Chủ thiết bị bật/tắt được hồ sơ của mọi người; người khác chỉ hồ sơ của chính mình.
+            if profile and profile.user_id != request.user.id and device.owner_id != request.user.id:
+                profile = None
             if not profile:
                 messages.error(request, 'Không tìm thấy hồ sơ khuôn mặt.')
             else:
                 profile.is_active = not profile.is_active
                 profile.save(update_fields=['is_active', 'updated_at'])
+                _audit(request, 'FACE_PROFILE_TOGGLED', device=device, target_user=profile.user,
+                       metadata={'face_profile_id': str(profile.id), 'is_active': profile.is_active})
                 messages.success(request, 'Đã cập nhật trạng thái.')
             return _redirect_with('smartlock:face-profiles', device=device.id)
  

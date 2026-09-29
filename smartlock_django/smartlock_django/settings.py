@@ -58,6 +58,16 @@ WEBAUTHN_RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "Smart Lock")
 MQTT_HOST = os.environ.get("MQTT_HOST")
 MQTT_PORT = env_int("MQTT_PORT", 1883)
 MQTT_TOPIC_PREFIX = os.environ.get("MQTT_TOPIC_PREFIX", "")
+# Bí mật chung broker <-> Django cho webhook auth/ACL (broker gửi header X-Webhook-Secret).
+MQTT_WEBHOOK_SECRET = os.environ.get("MQTT_WEBHOOK_SECRET") or None
+# Tài khoản MQTT của server (publisher/subscriber) được bỏ qua ACL theo thiết bị.
+MQTT_TRUSTED_USERNAMES = env_list("MQTT_TRUSTED_USERNAMES", os.environ.get("MQTT_PUBLISHER_USERNAME", ""))
+
+# Trang log công khai /demo/system-logs/: chỉ bật khi DEBUG hoặc khi đặt DEMO_LOGS_ENABLED=True.
+DEMO_LOGS_ENABLED = env_bool("DEMO_LOGS_ENABLED", DEBUG)
+
+# Lưu messages trong session (không đi qua cookie) - PIN cấp cho khách hiển thị qua messages.
+MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 
 
 # ==================== HOST CONFIGURATION (100% từ .env) ====================

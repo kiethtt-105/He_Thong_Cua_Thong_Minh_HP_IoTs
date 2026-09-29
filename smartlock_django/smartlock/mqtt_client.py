@@ -2,11 +2,17 @@
 import os
 import json
 import logging
+import uuid
 
 logger = logging.getLogger('smartlock.mqtt')
 
-MQTT_BROKER_HOST = os.environ.get('MQTT_BROKER_HOST', 'localhost')
-MQTT_BROKER_PORT = int(os.environ.get('MQTT_BROKER_PORT', '1883'))
+# Chấp nhận cả MQTT_BROKER_* (tên gốc) lẫn MQTT_HOST/MQTT_PORT (tên trong settings.py)
+# để .env đặt tên nào cũng có tác dụng.
+MQTT_BROKER_HOST = os.environ.get('MQTT_BROKER_HOST') or os.environ.get('MQTT_HOST') or 'localhost'
+try:
+    MQTT_BROKER_PORT = int(os.environ.get('MQTT_BROKER_PORT') or os.environ.get('MQTT_PORT') or '1883')
+except ValueError:
+    MQTT_BROKER_PORT = 1883
 MQTT_USE_TLS = os.environ.get('MQTT_BROKER_USE_TLS', '').lower() in ('1', 'true', 'yes')
 MQTT_PUBLISHER_USERNAME = os.environ.get('MQTT_PUBLISHER_USERNAME', '')
 MQTT_PUBLISHER_PASSWORD = os.environ.get('MQTT_PUBLISHER_PASSWORD', '')
@@ -56,7 +62,7 @@ def publish_command(device_code: str, payload: dict) -> None:
             port=MQTT_BROKER_PORT,
             auth=auth,
             tls={'ca_certs': None} if MQTT_USE_TLS else None,
-            client_id=f'django-pub-{os.getpid()}',
+            client_id=f'django-pub-{uuid.uuid4().hex[:16]}',  # unique mỗi lần publish: tránh broker đá kết nối trùng client_id
         )
     except Exception as e:
         logger.warning('MQTT publish thất bại tới %s: %s', device_code, e)

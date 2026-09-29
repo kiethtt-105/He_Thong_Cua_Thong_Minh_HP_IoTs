@@ -8,6 +8,7 @@ import secrets
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from .models import (
@@ -24,6 +25,9 @@ logger = logging.getLogger('smartlock.access_control')
 BURST_FAIL_THRESHOLD = 3
 BURST_FAIL_WINDOW_SECONDS = 60
 BURST_LOCKOUT_SECONDS = 60
+# Các lý do KHÔNG tính vào bộ đếm thất bại: bị chặn do đang khoá (nếu tính sẽ tự gia hạn
+# khoá mãi mãi + spam thông báo) và lỗi hạ tầng MQTT (không phải người dùng nhập sai).
+_NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED')
 
 
 def _hash(value: str) -> str:
@@ -56,7 +60,8 @@ def _send_unlock_command(device: Device, source: str, extra: dict) -> bool:
 
 def _recent_fail_count(device: Device) -> int:
     since = timezone.now() - timedelta(seconds=BURST_FAIL_WINDOW_SECONDS)
-    return AccessEvent.objects.filter(device=device, success=False, created_at__gte=since).count()
+    return (AccessEvent.objects.filter(device=device, success=False, created_at__gte=since)
+            .exclude(reason__in=_NON_COUNTED_REASONS).count())
 
 
 def _is_in_burst_lockout(device: Device) -> bool:
@@ -72,6 +77,8 @@ def _is_in_burst_lockout(device: Device) -> bool:
 def _handle_burst_if_needed(device: Device):
     """Sau mỗi lần thất bại: nếu vượt ngưỡng trong cửa sổ thời gian thì khoá tạm +
     báo còi (qua lệnh MQTT riêng cho firmware) + thông báo cho chủ nhà."""
+    if _is_in_burst_lockout(device):
+        return  # đã khoá rồi: không tạo thêm lockout/còi/thông báo
     if _recent_fail_count(device) < BURST_FAIL_THRESHOLD:
         return
     AuditLog.objects.create(
@@ -93,7 +100,7 @@ def _handle_burst_if_needed(device: Device):
 
 def _log_event(**kwargs) -> AccessEvent:
     event = AccessEvent.objects.create(**kwargs)
-    if not event.success:
+    if not event.success and event.reason not in _NON_COUNTED_REASONS:
         _handle_burst_if_needed(event.device)
     return event
 
@@ -141,9 +148,24 @@ def verify_door_pin(device: Device, raw_pin: str, ip_address=None) -> AccessEven
         matched.register_use()
 
     ok = _send_unlock_command(device, source='pin', extra={'pin_id': str(matched.id)})
+    if not ok:
+        # Cửa chưa mở -> hoàn lại lượt dùng để PIN dùng-một-lần không bị "cháy" oan.
+        DoorPinCode.objects.filter(pk=matched.pk, use_count__gt=0).update(use_count=F('use_count') - 1)
     return _log_event(device=device, method=AccessEvent.METHOD_PIN, success=ok,
                        reason=None if ok else 'MQTT_PUBLISH_FAILED',
                        door_pin=matched, user=matched.created_by, ip_address=ip_address)
+
+
+def generate_unique_pin(device: Device, digits: int = 6, attempts: int = 20) -> str:
+    """Sinh PIN ngẫu nhiên (secrets) không trùng với PIN đang hiệu lực của cùng thiết bị,
+    tránh trường hợp 2 PIN giống nhau làm verify_door_pin khớp nhầm mã."""
+    now = timezone.now()
+    active = list(DoorPinCode.objects.filter(device=device, is_revoked=False, expires_at__gt=now))
+    for _ in range(attempts):
+        pin = ''.join(secrets.choice('0123456789') for _ in range(digits))
+        if not any(p.check_pin(pin) for p in active):
+            return pin
+    raise RuntimeError('Không sinh được PIN không trùng, hãy thu hồi bớt PIN cũ.')
 
 
 def issue_door_pin(device: Device, created_by: User, plain_pin: str, ttl_minutes: int,

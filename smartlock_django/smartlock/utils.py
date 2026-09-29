@@ -17,6 +17,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
+from .email_templates import render_email
 from .models import (
     AccessCard, AuditLog, Device, DeviceAccess, EmailVerificationToken,
     LoginAttemptLog, LoginLockout, NfcLog, NfcReader, Notification,
@@ -25,6 +26,13 @@ from .models import (
 )
 
 logger = logging.getLogger('smartlock.utils')
+
+DEFAULT_PERMISSIONS = [
+    ('LOCK', 'Lock', None, False),
+    ('UNLOCK', 'Unlock', None, False),
+    ('manage_pins', 'Quản lý mã PIN', 'Cấp/thu hồi mã PIN cho khách', True),
+    ('manage_face_profiles', 'Quản lý khuôn mặt', 'Đăng ký khuôn mặt được phép mở cửa', True),
+]
 
 
 class SmartlockUtils:
@@ -41,7 +49,7 @@ class SmartlockUtils:
         logger.info("send_mail: to=%s subject=%r", to, subject)
         try:
             from django.core.mail import send_mail
-            n = send_mail(subject, plain, settings.FROM_EMAIL, [to], html_message=html)
+            n = send_mail(subject, plain, None, [to], html_message=html)
             logger.info("send_mail: OK (%s mail) -> %s", n, to)
             return True
         except Exception:
@@ -54,8 +62,17 @@ class SmartlockUtils:
 
     @staticmethod
     def client_ip(request: HttpRequest) -> str:
-        xff = request.META.get('HTTP_X_FORWARDED_FOR')
-        return xff.split(',')[0].strip() if xff else request.META.get('REMOTE_ADDR') or '0.0.0.0'
+        import ipaddress
+
+        def _valid(v):
+            try:
+                return str(ipaddress.ip_address((v or '').strip()))
+            except ValueError:
+                return None
+        ip = None
+        if getattr(settings, 'TRUST_PROXY_HEADERS', False):
+            ip = _valid((request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0])
+        return ip or _valid(request.META.get('REMOTE_ADDR')) or '0.0.0.0'
 
     @staticmethod
     def user_agent(request: HttpRequest) -> str:
@@ -140,9 +157,11 @@ class SmartlockUtils:
         ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)).exists()
 
     @staticmethod
-    def pick_device(queryset, raw_id: str):
+    def pick_device(queryset, raw_id: str, strict: bool = False):
         dev_id = SmartlockUtils.parse_uuid(raw_id)
         device = queryset.filter(id=dev_id).first() if dev_id else None
+        if strict:
+            return device
         return device or queryset.first()
 
     @staticmethod
@@ -156,22 +175,27 @@ class SmartlockUtils:
 
     @staticmethod
     def register_failure(user: User, ip: str):
+        from django.db import transaction
         st = SmartlockUtils.settings()
         stages = st.login_lockout_stage_minutes or [5, 10, 30]
         now = timezone.now()
-        lock, _ = LoginLockout.objects.get_or_create(user=user)
-        lock.failed_attempts += 1
-        lock.last_failed_at = now
-        lock.last_failed_ip = ip
-        if lock.failed_attempts >= MAX_FAILED_ATTEMPTS:
-            minutes = stages[min(lock.stage, len(stages) - 1)]
-            lock.locked_until = now + timedelta(minutes=minutes)
-            lock.stage += 1
-            lock.failed_attempts = 0
+        locked_minutes = None
+        with transaction.atomic():
+            lock, _ = LoginLockout.objects.select_for_update().get_or_create(user=user)
+            lock.failed_attempts += 1
+            lock.last_failed_at = now
+            lock.last_failed_ip = ip
+            if lock.failed_attempts >= SmartlockUtils.MAX_FAILED_ATTEMPTS:
+                locked_minutes = stages[min(lock.stage, len(stages) - 1)]
+                lock.locked_until = now + timedelta(minutes=locked_minutes)
+                lock.stage += 1
+                lock.failed_attempts = 0
+            lock.save()
+        if locked_minutes:
             SmartlockUtils.notify(user, 'Tài khoản bị khóa tạm thời',
-                                  f'Đăng nhập sai nhiều lần từ IP {ip}. Tài khoản bị khóa {minutes} phút.',
+                                  f'Đăng nhập sai nhiều lần từ IP {ip}. Tài khoản bị khóa {locked_minutes} phút.',
                                   severity='critical', type_='LOGIN_LOCKOUT')
-        lock.save()
+        return locked_minutes
 
     @staticmethod
     def reset_lockout(user: User):
@@ -205,4 +229,4 @@ class SmartlockUtils:
     @staticmethod
     def page(request, queryset):
         from django.core.paginator import Paginator
-        return Paginator(queryset, PAGE_SIZE).get_page(request.GET.get('page'))
+        return Paginator(queryset, SmartlockUtils.PAGE_SIZE).get_page(request.GET.get('page'))
