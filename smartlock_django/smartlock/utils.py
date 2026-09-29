@@ -19,8 +19,8 @@ from django.utils import timezone
 
 from .email_templates import render_email
 from .models import (
-    AccessCard, AuditLog, Device, DeviceAccess, EmailVerificationToken,
-    LoginAttemptLog, LoginLockout, NfcLog, NfcReader, Notification,
+    AccessCard, AuditLog, Device, DeviceAccess, OneTimeCode,
+    NfcLog, NfcReader, Notification,
     Permission, ShareAccessCode, SupportRequest, SystemSettings, User,
     DeviceCommand, DeviceStatusLog, fernet,
 )
@@ -181,16 +181,17 @@ class SmartlockUtils:
         now = timezone.now()
         locked_minutes = None
         with transaction.atomic():
-            lock, _ = LoginLockout.objects.select_for_update().get_or_create(user=user)
-            lock.failed_attempts += 1
-            lock.last_failed_at = now
-            lock.last_failed_ip = ip
-            if lock.failed_attempts >= SmartlockUtils.MAX_FAILED_ATTEMPTS:
-                locked_minutes = stages[min(lock.stage, len(stages) - 1)]
-                lock.locked_until = now + timedelta(minutes=locked_minutes)
-                lock.stage += 1
-                lock.failed_attempts = 0
-            lock.save()
+            lock = User.objects.select_for_update().get(pk=user.pk)
+            lock.login_failed_attempts += 1
+            lock.login_last_failed_at = now
+            lock.login_last_failed_ip = ip
+            if lock.login_failed_attempts >= SmartlockUtils.MAX_FAILED_ATTEMPTS:
+                locked_minutes = stages[min(lock.login_lock_stage, len(stages) - 1)]
+                lock.login_locked_until = now + timedelta(minutes=locked_minutes)
+                lock.login_lock_stage += 1
+                lock.login_failed_attempts = 0
+            lock.save(update_fields=['login_failed_attempts', 'login_last_failed_at', 'login_last_failed_ip',
+                                     'login_locked_until', 'login_lock_stage', 'updated_at'])
         if locked_minutes:
             SmartlockUtils.notify(user, 'Tài khoản bị khóa tạm thời',
                                   f'Đăng nhập sai nhiều lần từ IP {ip}. Tài khoản bị khóa {locked_minutes} phút.',
@@ -199,20 +200,20 @@ class SmartlockUtils:
 
     @staticmethod
     def reset_lockout(user: User):
-        LoginLockout.objects.filter(user=user).update(
-            failed_attempts=0, stage=0, locked_until=None,
+        User.objects.filter(pk=user.pk).update(
+            login_failed_attempts=0, login_lock_stage=0, login_locked_until=None,
         )
 
     @staticmethod
     def send_verification(request, user: User):
         st = SmartlockUtils.settings()
         minutes = st.verification_token_expiry_minutes
-        EmailVerificationToken.objects.filter(
+        OneTimeCode.objects.filter(
             user=user, purpose='EMAIL_VERIFY', is_used=False,
         ).update(is_used=True, used_at=timezone.now())
 
         token = uuid.uuid4()
-        EmailVerificationToken.objects.create(
+        OneTimeCode.objects.create(
             user=user, purpose='EMAIL_VERIFY', token_hash=SmartlockUtils.hash_token(token),
             expires_at=timezone.now() + timedelta(minutes=minutes),
         )

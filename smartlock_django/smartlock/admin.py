@@ -2,10 +2,10 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import (
     User, SystemSettings, Device, DeviceStatusLog, DeviceCommand,
-    Permission, DeviceAccess, ShareAccessCode, NfcReader, NfcReaderConfig,
-    NfcSession, AccessCard, CardDeviceAccess, NfcLog, SupportRequest,
-    Notification, AuditLog, LoginAttemptLog, LoginLockout, EmailVerificationToken,
-    LoginIdentifier, Announcement, AutomationRule, AutomationRuleLog,
+    Permission, DeviceAccess, ShareAccessCode, NfcReader,
+    AccessCard, CardDeviceAccess, NfcLog, SupportRequest,
+    Notification, AuditLog, OneTimeCode,
+    Announcement, AutomationRule, AutomationRuleLog,
     DoorPinCode, FaceProfile, AccessEvent,
 )
 
@@ -16,6 +16,7 @@ class CustomUserAdmin(UserAdmin):
         ('Personal info', {'fields': ('full_name', 'phone', 'avatar_url')}),
         ('Permissions', {'fields': ('is_active', 'email_verified', 'is_staff',
                                     'is_superuser', 'is_admin', 'groups', 'user_permissions')}),
+        ('Khoá đăng nhập tạm', {'fields': ('login_failed_attempts', 'login_lock_stage', 'login_locked_until')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
     )
     list_display = ('email', 'username', 'is_active', 'is_admin', 'is_superuser')
@@ -48,14 +49,8 @@ class AuditLogAdmin(admin.ModelAdmin):
 
 @admin.register(NfcReader)
 class NfcReaderAdmin(admin.ModelAdmin):
-    list_display = ('device', 'name', 'is_active', 'reader_mode')
-    list_filter = ('is_active', 'reader_mode')
-
-
-@admin.register(NfcReaderConfig)
-class NfcReaderConfigAdmin(admin.ModelAdmin):
-    list_display = ('reader', 'auto_register', 'grant_permission')
-    list_filter = ('auto_register',)
+    list_display = ('device', 'name', 'is_active', 'reader_mode', 'auto_register')
+    list_filter = ('is_active', 'reader_mode', 'auto_register')
 
 
 @admin.register(AccessCard)
@@ -93,25 +88,12 @@ class ShareAccessCodeAdmin(admin.ModelAdmin):
     search_fields = ('device__name',)
 
 
-@admin.register(LoginAttemptLog)
-class LoginAttemptLogAdmin(admin.ModelAdmin):
-    list_display = ('identifier', 'user', 'ip_address', 'success', 'created_at')
-    list_filter = ('success', 'created_at')
-    search_fields = ('identifier',)
-
-
-@admin.register(LoginLockout)
-class LoginLockoutAdmin(admin.ModelAdmin):
-    list_display = ('user', 'failed_attempts', 'locked_until', 'stage')
-    list_filter = ('stage',)
-    search_fields = ('user__email',)
-
-
-@admin.register(EmailVerificationToken)
-class EmailVerificationTokenAdmin(admin.ModelAdmin):
+@admin.register(OneTimeCode)
+class OneTimeCodeAdmin(admin.ModelAdmin):
     list_display = ('user', 'purpose', 'is_used', 'expires_at', 'created_at')
-    list_filter = ('is_used',)
+    list_filter = ('purpose', 'is_used')
     search_fields = ('user__email',)
+    exclude = ('token_hash',)
 
 
 @admin.register(DoorPinCode)
@@ -141,6 +123,5 @@ admin.site.register(AutomationRuleLog)
 admin.site.register(DeviceStatusLog)
 admin.site.register(DeviceCommand)
 admin.site.register(Permission)
-admin.site.register(NfcSession)
 admin.site.register(CardDeviceAccess)
 admin.site.register(NfcLog)

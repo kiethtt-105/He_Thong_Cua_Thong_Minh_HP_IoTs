@@ -42,7 +42,7 @@ _MASKED_FIELDS = {
 }
 # Thay đổi các trường này được đánh dấu severity=warning.
 _SENSITIVE_FIELDS = {'is_active', 'is_admin', 'is_staff', 'is_superuser', 'password',
-                     'email', 'username', 'owner_id', 'status'}
+                     'email', 'username', 'owner_id', 'status', 'login_locked_until'}
 
 
 class AuditRequestMiddleware:
@@ -179,10 +179,10 @@ def _on_post_delete(sender, instance, **kwargs):
 
 def register_signals():
     """Gọi 1 lần trong AppConfig.ready()."""
-    from .models import (AccessCard, Announcement, Device, DeviceAccess, LoginLockout,
+    from .models import (AccessCard, Announcement, Device, DeviceAccess,
                          ShareAccessCode, SupportRequest, SystemSettings, User)
     tracked = (User, Device, DeviceAccess, AccessCard, ShareAccessCode, SupportRequest,
-               Announcement, SystemSettings, LoginLockout)
+               Announcement, SystemSettings)
     for model in tracked:
         name = model.__name__
         pre_save.connect(_on_pre_save, sender=model, dispatch_uid=f'audit_pre_{name}')

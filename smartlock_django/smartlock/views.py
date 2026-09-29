@@ -59,10 +59,10 @@ from webauthn.helpers.structs import (
 from .email_templates import render_email
 from .models import (
     AccessCard, Announcement, AuditLog, AutomationRule, AutomationRuleLog, CardDeviceAccess,
-    Device, DeviceAccess, DeviceCommand, DeviceStatusLog, EmailVerificationToken, Fido2Credential,
-    LoginAttemptLog, LoginLockout, NfcLog, NfcReader, NfcReaderConfig, Notification, Permission,
+    Device, DeviceAccess, DeviceCommand, DeviceStatusLog, OneTimeCode, Fido2Credential,
+    NfcLog, NfcReader, Notification, Permission,
     ShareAccessCode, SupportRequest, SystemSettings, TwoFactorConfig,
-    TwoFactorEmailCode, User, fernet, sync_two_fa_flag,
+    User, fernet, sync_two_fa_flag,
 )
 from .mqtt_client import publish_command, MqttPublishError
 
@@ -268,16 +268,17 @@ def _register_failure(user, ip):
     now = timezone.now()
     locked_minutes = None
     with transaction.atomic():
-        lock, _ = LoginLockout.objects.select_for_update().get_or_create(user=user)
-        lock.failed_attempts += 1
-        lock.last_failed_at = now
-        lock.last_failed_ip = ip
-        if lock.failed_attempts >= MAX_FAILED_ATTEMPTS:
-            locked_minutes = stages[min(lock.stage, len(stages) - 1)]
-            lock.locked_until = now + timedelta(minutes=locked_minutes)
-            lock.stage += 1
-            lock.failed_attempts = 0
-        lock.save()
+        lock = User.objects.select_for_update().get(pk=user.pk)
+        lock.login_failed_attempts += 1
+        lock.login_last_failed_at = now
+        lock.login_last_failed_ip = ip
+        if lock.login_failed_attempts >= MAX_FAILED_ATTEMPTS:
+            locked_minutes = stages[min(lock.login_lock_stage, len(stages) - 1)]
+            lock.login_locked_until = now + timedelta(minutes=locked_minutes)
+            lock.login_lock_stage += 1
+            lock.login_failed_attempts = 0
+        lock.save(update_fields=['login_failed_attempts', 'login_last_failed_at', 'login_last_failed_ip',
+                                 'login_locked_until', 'login_lock_stage', 'updated_at'])
     if locked_minutes:
         _notify(user, 'Tài khoản bị khóa tạm thời',
                 f'Đăng nhập sai nhiều lần từ IP {ip}. Tài khoản bị khóa {locked_minutes} phút.',
@@ -285,8 +286,8 @@ def _register_failure(user, ip):
     return locked_minutes
 
 def _reset_lockout(user):
-    LoginLockout.objects.filter(user=user).update(
-        failed_attempts=0, stage=0, locked_until=None,
+    User.objects.filter(pk=user.pk).update(
+        login_failed_attempts=0, login_lock_stage=0, login_locked_until=None,
     )
 
 def _ensure_sync_key(request):
@@ -299,12 +300,12 @@ def _ensure_sync_key(request):
 def _send_verification(request, user):
     st = _settings()
     minutes = st.verification_token_expiry_minutes
-    EmailVerificationToken.objects.filter(
+    OneTimeCode.objects.filter(
         user=user, purpose='EMAIL_VERIFY', is_used=False,
     ).update(is_used=True, used_at=timezone.now())
 
     token = uuid.uuid4()
-    EmailVerificationToken.objects.create(
+    OneTimeCode.objects.create(
         user=user, purpose='EMAIL_VERIFY', token_hash=_hash_token(token),
         expires_at=timezone.now() + timedelta(minutes=minutes),
     )
@@ -350,9 +351,8 @@ def login_view(request):
     now = timezone.now()
 
     if user:
-        lock = LoginLockout.objects.filter(user=user).first()
-        if lock and lock.locked_until and lock.locked_until > now:
-            remaining = math.ceil((lock.locked_until - now).total_seconds() / 60)
+        if user.login_locked_until and user.login_locked_until > now:
+            remaining = math.ceil((user.login_locked_until - now).total_seconds() / 60)
             messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {remaining} phút.')
             _audit(request, 'LOGIN_LOCKED', success=False, severity='warning',
                    actor=None, target_user=user, username_attempt=identifier[:150])
@@ -362,19 +362,10 @@ def login_view(request):
 
     # Tài khoản quản trị chỉ được đăng nhập ở cổng quản trị riêng (app manage_sys).
     if auth_user and _is_admin(auth_user):
-        LoginAttemptLog.objects.create(
-            identifier=identifier[:255], user=user, ip_address=ip,
-            user_agent=_user_agent(request), success=False,
-        )
         _audit(request, 'LOGIN_ADMIN_REJECTED', success=False, severity='warning',
                actor=None, target_user=user, username_attempt=identifier[:150])
         messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
         return render(request, 'account/base/login.html', ctx)
-
-    LoginAttemptLog.objects.create(
-        identifier=identifier[:255], user=user, ip_address=ip,
-        user_agent=_user_agent(request), success=bool(auth_user),
-    )
 
     if auth_user:
         # ---- 2FA: mật khẩu đúng nhưng chưa đăng nhập, chuyển sang bước xác thực 2 lớp ----
@@ -474,7 +465,7 @@ def register(request):
             # Email đã đăng ký nhưng CHƯA xác thực (có thể do lần trước gửi mail xác thực bị lỗi,
             # hoặc người dùng bỏ dở) -> đừng để họ kẹt vĩnh viễn (không tạo được tài khoản mới,
             # cũng không biết cách kích hoạt tài khoản cũ) -> tự động gửi lại email xác thực.
-            recent = EmailVerificationToken.objects.filter(
+            recent = OneTimeCode.objects.filter(
                 user=existing_email_user, purpose='EMAIL_VERIFY',
                 created_at__gt=timezone.now() - timedelta(seconds=60)).exists()
             if not recent:
@@ -518,11 +509,11 @@ def register(request):
 
 def verify_email(request, token):
     try:
-        vt = EmailVerificationToken.objects.select_related('user').get(
+        vt = OneTimeCode.objects.select_related('user').get(
             token_hash=_hash_token(token), purpose='EMAIL_VERIFY',
             is_used=False, expires_at__gt=timezone.now(),
         )
-    except EmailVerificationToken.DoesNotExist:
+    except OneTimeCode.DoesNotExist:
         _audit(request, 'EMAIL_VERIFY_FAILED', actor=None, success=False, severity='warning')
         messages.error(request, 'Link xác thực không hợp lệ hoặc đã hết hạn.')
         return redirect('smartlock:login')
@@ -546,7 +537,7 @@ def resend_verification(request):
     email = (request.POST.get('email') or '').strip()
     user = User.objects.filter(email__iexact=email, is_active=False, email_verified=False).first()
     if user:
-        recent = EmailVerificationToken.objects.filter(
+        recent = OneTimeCode.objects.filter(
             user=user, purpose='EMAIL_VERIFY',
             created_at__gt=timezone.now() - timedelta(seconds=60),
         ).exists()
@@ -1069,7 +1060,6 @@ def nfc_reader(request):
             with transaction.atomic():
                 reader = NfcReader.objects.create(device=device, reader_mode='simulated',
                                                   name=name, is_active=True)
-                NfcReaderConfig.objects.create(reader=reader)
                 NfcLog.objects.create(reader=reader, device=device, user=request.user,
                                       event_type='READER_CONNECTED', ip_address=_client_ip(request),
                                       user_agent=_user_agent(request))
@@ -1091,7 +1081,7 @@ def nfc_reader(request):
                 event = 'READER_CONNECTED' if reader.is_active else 'READER_DISCONNECTED'
                 audit_action = 'NFC_READER_ENABLED' if reader.is_active else 'NFC_READER_DISABLED'
             else:
-                cfg, _ = NfcReaderConfig.objects.get_or_create(reader=reader)
+                cfg = reader  # cấu hình đầu đọc nay nằm ngay trên NfcReader
                 cfg.auto_register = not cfg.auto_register
                 cfg.save()
                 event = 'CONFIG_UPDATED'
@@ -1143,7 +1133,7 @@ def nfc_reader(request):
     context = {
         'device_list': devices,
         'device': device,
-        'readers': NfcReader.objects.filter(device=device).select_related('config').order_by('-created_at') if device else [],
+        'readers': NfcReader.objects.filter(device=device).order_by('-created_at') if device else [],
         'nfc_logs': NfcLog.objects.filter(device=device).select_related('nfc_tag', 'reader')
                     .order_by('-created_at')[:10] if device else [],
     }
@@ -1934,6 +1924,15 @@ def public_system_logs(request):
     return render(request, 'public/system_logs.html', {})
 
 
+_LOGIN_OK_ACTIONS = ('LOGIN',)
+_LOGIN_FAIL_ACTIONS = ('LOGIN_FAILED', 'LOGIN_ADMIN_REJECTED')
+
+
+def _login_attempts():
+    """Lượt đăng nhập lấy từ AuditLog (bảng LoginAttemptLog cũ đã gộp vào AuditLog)."""
+    return AuditLog.objects.filter(action__in=_LOGIN_OK_ACTIONS + _LOGIN_FAIL_ACTIONS)
+
+
 LOG_ROW_LIMIT = 100  # số dòng gần nhất trả về mỗi loại log (tăng từ 40 -> 100 để trang demo hiển thị nhiều hơn)
 
 
@@ -2002,11 +2001,17 @@ def public_system_logs_api(request):
         'severity': a.severity, 'success': a.success, 'ip': a.ip_address,
     } for a in audit_logs]
 
-    login_attempts = LoginAttemptLog.objects.select_related('user').order_by('-created_at')[:LOG_ROW_LIMIT]
-    login_rows = [{
-        'time': la.created_at.isoformat(), 'identifier': la.identifier,
-        'user': la.user.username if la.user else '—', 'success': la.success, 'ip': la.ip_address,
-    } for la in login_attempts]
+    login_attempts = (_login_attempts().select_related('actor_user', 'target_user')
+                      .order_by('-created_at')[:LOG_ROW_LIMIT])
+    login_rows = []
+    for la in login_attempts:
+        who = la.target_user or la.actor_user
+        login_rows.append({
+            'time': la.created_at.isoformat(),
+            'identifier': la.username_attempt or (who.email if who else '—'),
+            'user': who.username if who else '—', 'success': la.action in _LOGIN_OK_ACTIONS,
+            'ip': la.ip_address,
+        })
 
     labels, lock_series = _bucketed_counts(DeviceCommand.objects.filter(command_type='LOCK'), 'created_at')
     _, unlock_series = _bucketed_counts(DeviceCommand.objects.filter(command_type='UNLOCK'), 'created_at')
@@ -2014,8 +2019,8 @@ def public_system_logs_api(request):
     _, nfc_fail_series = _bucketed_counts(NfcLog.objects.filter(success=False), 'created_at')
     _, audit_total_series = _bucketed_counts(AuditLog.objects.all(), 'created_at')
     _, audit_fail_series = _bucketed_counts(AuditLog.objects.filter(success=False), 'created_at')
-    _, login_ok_series = _bucketed_counts(LoginAttemptLog.objects.filter(success=True), 'created_at')
-    _, login_fail_series = _bucketed_counts(LoginAttemptLog.objects.filter(success=False), 'created_at')
+    _, login_ok_series = _bucketed_counts(AuditLog.objects.filter(action__in=_LOGIN_OK_ACTIONS), 'created_at')
+    _, login_fail_series = _bucketed_counts(AuditLog.objects.filter(action__in=_LOGIN_FAIL_ACTIONS), 'created_at')
     _, rule_fire_series = _bucketed_counts(AutomationRuleLog.objects.all(), 'triggered_at')
     _, status_report_series = _bucketed_counts(DeviceStatusLog.objects.all(), 'recorded_at')
     _, tamper_series = _bucketed_counts(DeviceStatusLog.objects.filter(tamper_detected=True), 'recorded_at')
@@ -2032,10 +2037,10 @@ def public_system_logs_api(request):
         'total_nfc_logs': NfcLog.objects.count(),
         'total_rule_logs': AutomationRuleLog.objects.count(),
         'total_audit_logs': AuditLog.objects.count(),
-        'total_login_attempts': LoginAttemptLog.objects.count(),
+        'total_login_attempts': _login_attempts().count(),
         'failed_audit_24h': AuditLog.objects.filter(success=False, created_at__gte=since_24h).count(),
         'failed_nfc_24h': NfcLog.objects.filter(success=False, created_at__gte=since_24h).count(),
-        'failed_login_24h': LoginAttemptLog.objects.filter(success=False, created_at__gte=since_24h).count(),
+        'failed_login_24h': AuditLog.objects.filter(action__in=_LOGIN_FAIL_ACTIONS, created_at__gte=since_24h).count(),
     }
 
     return JsonResponse({
@@ -2131,13 +2136,15 @@ def _send_email_code(user, purpose):
     """purpose: 'SETUP' (thiết lập Email OTP) hoặc 'VERIFY' (login/enable/disable).
     Trả về 'sent' | 'cooldown' | 'failed'."""
     now = timezone.now()
-    if TwoFactorEmailCode.objects.filter(
-            user=user, created_at__gt=now - timedelta(seconds=EMAIL_CODE_COOLDOWN)).exists():
+    if OneTimeCode.objects.filter(
+            user=user, purpose__in=('TF_SETUP', 'TF_VERIFY'),
+            created_at__gt=now - timedelta(seconds=EMAIL_CODE_COOLDOWN)).exists():
         return 'cooldown'
     code = f'{secrets.randbelow(10 ** 6):06d}'
-    TwoFactorEmailCode.objects.filter(user=user, is_used=False).update(is_used=True)
-    TwoFactorEmailCode.objects.create(
-        user=user, purpose=purpose, code_hash=_pepper_hash(user, 'em:' + code),
+    OneTimeCode.objects.filter(user=user, purpose__in=('TF_SETUP', 'TF_VERIFY'),
+                               is_used=False).update(is_used=True)
+    OneTimeCode.objects.create(
+        user=user, purpose='TF_' + purpose, token_hash=_pepper_hash(user, 'em:' + code),
         expires_at=now + timedelta(minutes=EMAIL_CODE_TTL_MIN),
     )
     subject, html, plain = render_email('two_factor_code.html', {
@@ -2153,8 +2160,8 @@ def _verify_email_code(user, code, purpose) -> bool:
     if len(code) != 6:
         return False
     with transaction.atomic():
-        rec = TwoFactorEmailCode.objects.select_for_update().filter(
-            user=user, purpose=purpose, is_used=False, expires_at__gt=timezone.now(),
+        rec = OneTimeCode.objects.select_for_update().filter(
+            user=user, purpose='TF_' + purpose, is_used=False, expires_at__gt=timezone.now(),
         ).order_by('-created_at').first()
         if not rec:
             return False
@@ -2163,7 +2170,7 @@ def _verify_email_code(user, code, purpose) -> bool:
             rec.is_used = True
             rec.save(update_fields=['attempts', 'is_used'])
             return False
-        ok = hmac.compare_digest(rec.code_hash, _pepper_hash(user, 'em:' + code))
+        ok = hmac.compare_digest(rec.token_hash, _pepper_hash(user, 'em:' + code))
         if ok:
             rec.is_used = True
         rec.save(update_fields=['attempts', 'is_used'])
@@ -2257,10 +2264,10 @@ def _pending_exit_url(p):
 
 
 def _lock_minutes(user) -> int:
-    lock = LoginLockout.objects.filter(user=user).first()
+    locked_until = User.objects.filter(pk=user.pk).values_list('login_locked_until', flat=True).first()
     now = timezone.now()
-    if lock and lock.locked_until and lock.locked_until > now:
-        return math.ceil((lock.locked_until - now).total_seconds() / 60)
+    if locked_until and locked_until > now:
+        return math.ceil((locked_until - now).total_seconds() / 60)
     return 0
 
 

@@ -85,6 +85,13 @@ class User(AbstractBaseUser, PermissionsMixin):
                    'Được đồng bộ tự động bởi sync_two_fa_flag(), KHÔNG set tay.'
     )
 
+    # --- Khoá đăng nhập tạm thời (trước đây là bảng LoginLockout, gộp vào User) ---
+    login_failed_attempts = models.IntegerField(default=0)
+    login_lock_stage = models.IntegerField(default=0)
+    login_locked_until = models.DateTimeField(null=True, blank=True)
+    login_last_failed_at = models.DateTimeField(null=True, blank=True)
+    login_last_failed_ip = models.GenericIPAddressField(null=True, blank=True)
+
     objects = UserManager()
 
     USERNAME_FIELD = 'email'
@@ -104,69 +111,30 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.email
 
 
-class LoginIdentifier(models.Model):
+class OneTimeCode(models.Model):
+    """Mã/token dùng một lần có hạn. Gộp 2 bảng cũ EmailVerificationToken (link xác thực email...)
+    và TwoFactorEmailCode (OTP 6 số của 2FA) - chỉ khác nhau ở cột `purpose`. Chỉ lưu hash."""
+    PURPOSE_CHOICES = [
+        ('EMAIL_VERIFY', 'Verify email'),
+        ('PASSWORD_RESET', 'Password reset'),
+        ('SUPPORT_AUTH', 'Support auth'),
+        ('RECOVERY_CONFIRM', 'Recovery confirm'),
+        ('UPDATE_INFO', 'Update info'),
+        ('TF_SETUP', '2FA email - thiết lập'),
+        ('TF_VERIFY', '2FA email - xác thực'),
+    ]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='login_identifiers')
-    kind = models.CharField(max_length=10, choices=[('EMAIL', 'Email'), ('USERNAME', 'Username')])
-    value = models.CharField(max_length=255, unique=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=['user', 'kind'], name='uniq_identifier_per_user_kind')
-        ]
-
-
-class EmailVerificationToken(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='verification_tokens')
-    purpose = models.CharField(
-        max_length=50,
-        choices=[
-            ('EMAIL_VERIFY', 'Verify email'),
-            ('PASSWORD_RESET', 'Password reset'),
-            ('SUPPORT_AUTH', 'Support auth'),
-            ('RECOVERY_CONFIRM', 'Recovery confirm'),
-            ('UPDATE_INFO', 'Update info'),
-        ]
-    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='one_time_codes')
+    purpose = models.CharField(max_length=50, choices=PURPOSE_CHOICES)
     token_hash = models.CharField(max_length=255)
+    attempts = models.IntegerField(default=0)
     is_used = models.BooleanField(default=False)
     used_at = models.DateTimeField(null=True, blank=True)
     expires_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        indexes = [models.Index(fields=['user', 'purpose', 'created_at'], name='idx_evt_user_purpose')]
-
-
-class LoginAttemptLog(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    identifier = models.CharField(max_length=255)
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
-    ip_address = models.GenericIPAddressField()
-    user_agent = models.TextField(blank=True, null=True)
-    success = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['identifier', 'created_at'], name='idx_loginattempt_id_time'),
-            models.Index(fields=['ip_address', 'created_at'], name='idx_loginattempt_ip_time'),
-        ]
-
-
-class LoginLockout(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='login_lockout')
-    failed_attempts = models.IntegerField(default=0)
-    stage = models.IntegerField(default=0)
-    locked_until = models.DateTimeField(null=True, blank=True)
-    last_failed_at = models.DateTimeField(null=True, blank=True)
-    last_failed_ip = models.GenericIPAddressField(null=True, blank=True)
-    warning_sent_at = models.DateTimeField(null=True, blank=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
+        indexes = [models.Index(fields=['user', 'purpose', 'created_at'], name='idx_otc_user_purpose')]
 
 class SystemSettings(models.Model):
     id = models.SmallIntegerField(primary_key=True, default=1)
@@ -388,15 +356,7 @@ class NfcReader(models.Model):
     name = models.CharField(max_length=100, blank=True, null=True)
     is_active = models.BooleanField(default=False)           
     last_seen_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    class Meta:
-        indexes = [models.Index(fields=['device', 'created_at'], name='idx_nfcreader_dev_time')]
-
-
-class NfcReaderConfig(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    reader = models.OneToOneField(NfcReader, on_delete=models.CASCADE, related_name='config')
+    # --- Cấu hình đầu đọc (trước đây là bảng NfcReaderConfig, gộp vào đây) ---
     auto_register = models.BooleanField(default=False)
     grant_permission = models.JSONField(default=list)
     valid_from = models.DateTimeField(default=timezone.now)
@@ -404,18 +364,13 @@ class NfcReaderConfig(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        indexes = [models.Index(fields=['device', 'created_at'], name='idx_nfcreader_dev_time')]
 
-class NfcSession(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    reader = models.ForeignKey(NfcReader, on_delete=models.CASCADE)
-    nfc_tag = models.ForeignKey('AccessCard', on_delete=models.SET_NULL, null=True, blank=True)
-    device = models.ForeignKey(Device, on_delete=models.SET_NULL, null=True, blank=True)
-    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
-    session_token = models.CharField(max_length=255, unique=True)
-    started_at = models.DateTimeField(default=timezone.now)
-    ended_at = models.DateTimeField(null=True, blank=True)
-    success = models.BooleanField(default=False)
-    payload = models.JSONField(null=True, blank=True)
+    @property
+    def config(self):
+        """Tương thích template cũ (reader.config.auto_register ...): cấu hình nay nằm ngay trên reader."""
+        return self
 
 
 class AccessCard(models.Model):
@@ -718,35 +673,10 @@ class Fido2Credential(models.Model):
     last_used_at = models.DateTimeField(null=True, blank=True)
 
 
-class TwoFactorEmailCode(models.Model):
-    """Mã OTP 6 số gửi qua email (chỉ lưu hash)."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='two_factor_email_codes')
-    purpose = models.CharField(max_length=10, choices=[('SETUP', 'Setup'), ('VERIFY', 'Verify')])
-    code_hash = models.CharField(max_length=64)
-    attempts = models.IntegerField(default=0)
-    is_used = models.BooleanField(default=False)
-    expires_at = models.DateTimeField()
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [models.Index(fields=['user', 'created_at'], name='idx_tfemail_user_time')]
-
-
 # ==================== SIGNALS ====================
 @receiver(pre_save, sender=User)
 def set_updated_at_user(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
-
-
-@receiver(post_save, sender=User)
-def sync_login_identifiers(sender, instance, **kwargs):
-    LoginIdentifier.objects.update_or_create(
-        user=instance, kind='EMAIL', defaults={'value': instance.email.lower()}
-    )
-    LoginIdentifier.objects.update_or_create(
-        user=instance, kind='USERNAME', defaults={'value': instance.username.lower()}
-    )
 
 
 @receiver(pre_save, sender=Device)
