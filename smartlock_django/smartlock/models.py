@@ -13,7 +13,6 @@ import hmac
 import json  
 import hashlib
 from cryptography.fernet import Fernet
-from .models_mobile import MobileSession  
 
 # ==================== CẤU HÌNH BÍ MẬT (FERNET) ====================
 FERNET_KEY = os.environ.get("FERNET_KEY")
@@ -855,3 +854,41 @@ class AccessEvent(models.Model):
 
     def __str__(self):
         return f'{self.get_method_display()} - {"OK" if self.success else "FAIL"} @ {self.device_id}'
+
+# ==================== PHIÊN ĐĂNG NHẬP APP DI ĐỘNG ====================
+class MobileSession(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='mobile_sessions')
+
+    refresh_hash = models.CharField(max_length=64, unique=True)
+    prev_refresh_hash = models.CharField(max_length=64, blank=True, default='', db_index=True)
+
+    device_name = models.CharField(max_length=100, blank=True, default='')
+    platform = models.CharField(max_length=20, default='android')
+    app_version = models.CharField(max_length=30, blank=True, default='')
+
+    fcm_token = models.CharField(max_length=512, blank=True, default='', db_index=True)
+    push_enabled = models.BooleanField(default=True)
+
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['user', 'revoked_at'], name='idx_mobsess_user_rev')]
+        ordering = ['-created_at']
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None and self.expires_at > timezone.now()
+
+    def revoke(self):
+        if self.revoked_at is None:
+            self.revoked_at = timezone.now()
+            self.fcm_token = ''
+            self.save(update_fields=['revoked_at', 'fcm_token'])
+
+    def __str__(self):
+        return f'MobileSession({self.user_id}, {self.device_name or self.platform})'

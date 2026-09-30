@@ -1,75 +1,131 @@
 # smartlock/api/serializers.py
-from django.utils import timezone
+import math
+
 from rest_framework import serializers
 
 from ..models import (
-    AccessCard, AccessEvent, Announcement, AuditLog, AutomationRule, AutomationRuleLog, Device,
-    DeviceAccess, DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, NfcLog, NfcReader,
-    Notification, Permission, ShareAccessCode, SupportRequest, User,
+    AccessCard, AccessEvent, Announcement, AuditLog, AutomationRule, AutomationRuleLog,
+    Device, DeviceAccess, DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile,
+    MobileSession, Notification, Permission, ShareAccessCode, User,
 )
 from ..utils import SmartlockUtils as U
 
-
-class PermissionCodesField(serializers.ListField):
-    """Danh sách mã quyền, vd ["LOCK", "UNLOCK", "manage_pins"]."""
-    def __init__(self, **kwargs):
-        kwargs.setdefault('child', serializers.CharField(max_length=50))
-        kwargs.setdefault('allow_empty', True)
-        super().__init__(**kwargs)
+PERMISSION_CODES = ('LOCK', 'UNLOCK', 'manage_pins', 'manage_face_profiles')
 
 
-def _user_brief(u):
-    return None if u is None else {'id': str(u.id), 'username': u.username, 'full_name': u.full_name}
+# ============================== AUTH ==============================
+class DeviceInfoMixin(serializers.Serializer):
+    device_name = serializers.CharField(max_length=100, required=False, allow_blank=True, default='')
+    platform = serializers.CharField(max_length=20, required=False, default='android')
+    app_version = serializers.CharField(max_length=30, required=False, allow_blank=True, default='')
+    fcm_token = serializers.CharField(max_length=512, required=False, allow_blank=True, default='')
 
 
-# ------------------------------------------------------------------ tài khoản
-class MeSerializer(serializers.ModelSerializer):
-    device_count = serializers.SerializerMethodField()
-    card_count = serializers.SerializerMethodField()
+class RegisterSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    username = serializers.CharField(max_length=50, min_length=3)
+    password = serializers.CharField(write_only=True, max_length=128)
+    full_name = serializers.CharField(max_length=100, required=False, allow_blank=True, default='')
 
-    class Meta:
-        model = User
-        fields = ('id', 'email', 'username', 'full_name', 'phone', 'avatar_url', 'email_verified',
-                  'two_fa_enabled', 'created_at', 'device_count', 'card_count')
-        read_only_fields = fields
-
-    def get_device_count(self, obj):
-        return Device.objects.filter(owner=obj).count()
-
-    def get_card_count(self, obj):
-        return AccessCard.objects.filter(user=obj).count()
+    def validate_username(self, v):
+        v = v.strip()
+        if '@' in v:
+            raise serializers.ValidationError('Tên đăng nhập không được chứa ký tự @.')
+        return v
 
 
-class ProfileUpdateSerializer(serializers.Serializer):
-    full_name = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
-    phone = serializers.CharField(max_length=20, required=False, allow_blank=True, allow_null=True)
+class LoginSerializer(DeviceInfoMixin):
+    identifier = serializers.CharField(max_length=150)   # email hoặc username
+    password = serializers.CharField(max_length=128, trim_whitespace=False)
+
+
+class TwoFactorVerifySerializer(serializers.Serializer):
+    challenge_token = serializers.CharField()
+    method = serializers.ChoiceField(choices=['totp', 'email'])
+    code = serializers.CharField(max_length=12)
+
+
+class ChallengeSerializer(serializers.Serializer):
+    challenge_token = serializers.CharField()
+
+
+class RefreshSerializer(serializers.Serializer):
+    refresh_token = serializers.CharField()
+
+
+class EmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
 
 
 class ChangePasswordSerializer(serializers.Serializer):
-    old_password = serializers.CharField(write_only=True, trim_whitespace=False)
-    new_password1 = serializers.CharField(write_only=True, trim_whitespace=False)
-    new_password2 = serializers.CharField(write_only=True, trim_whitespace=False)
+    old_password = serializers.CharField(max_length=128, trim_whitespace=False)
+    new_password = serializers.CharField(max_length=128, trim_whitespace=False)
 
 
-# ------------------------------------------------------------------ thiết bị
+class PushTokenSerializer(serializers.Serializer):
+    fcm_token = serializers.CharField(max_length=512, required=False, allow_blank=True)
+    push_enabled = serializers.BooleanField(required=False)
+
+
+# ============================== USER ==============================
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ('id', 'email', 'username', 'full_name', 'phone', 'avatar_url',
+                  'email_verified', 'two_fa_enabled', 'created_at')
+        read_only_fields = fields
+
+
+class ProfileUpdateSerializer(serializers.Serializer):
+    full_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
+
+
+class MobileSessionSerializer(serializers.ModelSerializer):
+    is_current = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MobileSession
+        fields = ('id', 'device_name', 'platform', 'app_version', 'push_enabled', 'ip_address',
+                  'created_at', 'last_used_at', 'expires_at', 'is_current')
+
+    def get_is_current(self, obj):
+        return str(obj.pk) == str(self.context.get('current_session_id'))
+
+
+# ============================== DEVICE ==============================
 class DeviceSerializer(serializers.ModelSerializer):
-    status_display = serializers.CharField(source='get_status_display', read_only=True)
     lock_state = serializers.SerializerMethodField()
+    last_status_at = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = Device
-        fields = ('id', 'name', 'device_code', 'device_mode', 'status', 'status_display',
-                  'battery_level', 'location', 'firmware_version', 'last_seen_at',
-                  'wifi_enabled', 'bluetooth_enabled', 'nfc_enabled',
-                  'lock_state', 'is_owner', 'created_at', 'updated_at')
+        fields = ('id', 'name', 'device_code', 'status', 'battery_level', 'location', 'firmware_version',
+                  'last_seen_at', 'wifi_enabled', 'bluetooth_enabled', 'nfc_enabled',
+                  'lock_state', 'last_status_at', 'is_owner', 'permissions', 'updated_at')
         read_only_fields = fields
 
+    def _log(self, obj):
+        return self.context.get('last_logs', {}).get(obj.id)
+
     def get_lock_state(self, obj):
-        return getattr(obj, 'lock_state', None) or 'unknown'
+        log = self._log(obj)
+        return log.lock_state if log else 'unknown'
+
+    def get_last_status_at(self, obj):
+        log = self._log(obj)
+        return log.recorded_at if log else None
 
     def get_is_owner(self, obj):
-        return obj.owner_id == self.context['request'].user.id
+        user = self.context.get('user')
+        return bool(user and obj.owner_id == user.id)
+
+    def get_permissions(self, obj):
+        if self.get_is_owner(obj):
+            return list(PERMISSION_CODES) + ['REBOOT', 'MANAGE_DEVICE']
+        return sorted(self.context.get('perm_map', {}).get(obj.id, []))
 
 
 class DeviceCreateSerializer(serializers.Serializer):
@@ -78,10 +134,31 @@ class DeviceCreateSerializer(serializers.Serializer):
 
 class DeviceUpdateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100, required=False)
-    location = serializers.CharField(max_length=255, required=False, allow_blank=True, allow_null=True)
+    location = serializers.CharField(max_length=255, required=False, allow_blank=True)
     wifi_enabled = serializers.BooleanField(required=False)
     bluetooth_enabled = serializers.BooleanField(required=False)
     nfc_enabled = serializers.BooleanField(required=False)
+
+    def validate_name(self, v):
+        v = v.strip()
+        if not v:
+            raise serializers.ValidationError('Tên thiết bị không được để trống.')
+        return v
+
+
+class CommandRequestSerializer(serializers.Serializer):
+    command = serializers.ChoiceField(choices=list(U.ALLOWED_COMMANDS.keys()))
+
+    def validate_command(self, v):
+        return v.upper()
+
+
+class DeviceCommandSerializer(serializers.ModelSerializer):
+    issued_by = serializers.CharField(source='issued_by.username', read_only=True)
+
+    class Meta:
+        model = DeviceCommand
+        fields = ('id', 'command_type', 'status', 'issued_by', 'created_at', 'expires_at', 'acknowledged_at')
 
 
 class StatusLogSerializer(serializers.ModelSerializer):
@@ -89,351 +166,202 @@ class StatusLogSerializer(serializers.ModelSerializer):
         model = DeviceStatusLog
         fields = ('id', 'battery_level', 'signal_strength', 'lock_state', 'tamper_detected',
                   'temperature', 'recorded_at')
-        read_only_fields = fields
 
 
-class DeviceCommandSerializer(serializers.ModelSerializer):
-    issued_by = serializers.SerializerMethodField()
-
-    class Meta:
-        model = DeviceCommand
-        fields = ('id', 'command_type', 'status', 'issued_by', 'created_at', 'expires_at', 'acknowledged_at')
-        read_only_fields = fields
-
-    def get_issued_by(self, obj):
-        return obj.issued_by.username
-
-
-# ------------------------------------------------------------------ quyền & chia sẻ
+# ============================== ACCESS / SHARE ==============================
 class PermissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Permission
         fields = ('code', 'name', 'description', 'is_sensitive')
-        read_only_fields = fields
 
 
 class DeviceAccessSerializer(serializers.ModelSerializer):
-    """Quyền của NGƯỜI KHÁC trên thiết bị của mình (chủ thiết bị xem)."""
-    user = serializers.SerializerMethodField()
-    permissions = serializers.SerializerMethodField()
+    user = serializers.CharField(source='user.username', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    device_name = serializers.CharField(source='device.name', read_only=True)
+    permissions = serializers.SlugRelatedField(many=True, read_only=True, slug_field='code')
 
     class Meta:
         model = DeviceAccess
-        fields = ('id', 'user', 'permissions', 'source', 'valid_from', 'expires_at',
-                  'accepted', 'is_active', 'created_at')
-        read_only_fields = fields
-
-    def get_user(self, obj):
-        return {**_user_brief(obj.user), 'email': obj.user.email}
-
-    def get_permissions(self, obj):
-        return sorted(p.code for p in obj.permissions.all())
+        fields = ('id', 'device', 'device_name', 'user', 'user_email', 'permissions', 'source',
+                  'valid_from', 'expires_at', 'is_active', 'created_at')
 
 
-class MyAccessSerializer(serializers.ModelSerializer):
-    """Quyền MÌNH được người khác cấp."""
-    device = serializers.SerializerMethodField()
-    permissions = serializers.SerializerMethodField()
-
-    class Meta:
-        model = DeviceAccess
-        fields = ('id', 'device', 'permissions', 'source', 'valid_from', 'expires_at', 'created_at')
-        read_only_fields = fields
-
-    def get_device(self, obj):
-        return {'id': str(obj.device_id), 'name': obj.device.name}
-
-    def get_permissions(self, obj):
-        return sorted(p.code for p in obj.permissions.all())
-
-
-class AccessGrantSerializer(serializers.Serializer):
-    identifier = serializers.CharField(max_length=150)          # email hoặc username
-    permissions = PermissionCodesField(required=False)
+class DeviceAccessUpdateSerializer(serializers.Serializer):
+    permissions = serializers.ListField(child=serializers.ChoiceField(choices=PERMISSION_CODES),
+                                        required=False)
     expires_at = serializers.DateTimeField(required=False, allow_null=True)
-
-
-class AccessUpdateSerializer(serializers.Serializer):
-    permissions = PermissionCodesField(required=False)
-    expires_at = serializers.DateTimeField(required=False, allow_null=True)
-
-
-class ShareCodeSerializer(serializers.ModelSerializer):
-    device = serializers.SerializerMethodField()
-    permissions = serializers.SerializerMethodField()
-    is_expired = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ShareAccessCode
-        fields = ('id', 'device', 'permissions', 'expires_at', 'created_at', 'is_expired')
-        read_only_fields = fields
-
-    def get_device(self, obj):
-        return {'id': str(obj.device_id), 'name': obj.device.name}
-
-    def get_permissions(self, obj):
-        return sorted(p.code for p in obj.permissions.all())
-
-    def get_is_expired(self, obj):
-        return obj.expires_at <= timezone.now()
 
 
 class ShareCodeCreateSerializer(serializers.Serializer):
     device_id = serializers.UUIDField()
     minutes = serializers.IntegerField(min_value=1, max_value=1440, required=False)
-    permissions = PermissionCodesField(required=False)
-    recipient = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    permissions = serializers.ListField(child=serializers.ChoiceField(choices=PERMISSION_CODES),
+                                        required=False, default=list)
+    recipient = serializers.CharField(max_length=150, required=False, allow_blank=True, default='')
 
 
-class ShareCodeRedeemSerializer(serializers.Serializer):
-    code = serializers.CharField(max_length=20)
+class ShareCodeSerializer(serializers.ModelSerializer):
+    device_name = serializers.CharField(source='device.name', read_only=True)
+    permissions = serializers.SlugRelatedField(many=True, read_only=True, slug_field='code')
+    is_expired = serializers.SerializerMethodField()
 
-
-# ------------------------------------------------------------------ NFC
-class NfcReaderSerializer(serializers.ModelSerializer):
     class Meta:
-        model = NfcReader
-        fields = ('id', 'name', 'reader_mode', 'is_active', 'auto_register', 'last_seen_at', 'created_at')
-        read_only_fields = fields
+        model = ShareAccessCode
+        fields = ('id', 'device', 'device_name', 'permissions', 'expires_at', 'created_at', 'is_expired')
+
+    def get_is_expired(self, obj):
+        from django.utils import timezone
+        return obj.expires_at <= timezone.now()
 
 
-class NfcReaderCreateSerializer(serializers.Serializer):
+class RedeemSerializer(serializers.Serializer):
+    code = serializers.CharField(max_length=12)
+
+
+# ============================== PIN / FACE / CARD ==============================
+class DoorPinCreateSerializer(serializers.Serializer):
+    ttl_minutes = serializers.IntegerField(min_value=1, max_value=43200, default=1440)   # tối đa 30 ngày
+    max_uses = serializers.IntegerField(min_value=0, max_value=1000, default=1)           # 0 = không giới hạn
+    label = serializers.CharField(max_length=100, required=False, allow_blank=True, default='')
+
+
+class DoorPinSerializer(serializers.ModelSerializer):
+    created_by = serializers.CharField(source='created_by.username', read_only=True)
+    is_valid_now = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DoorPinCode
+        fields = ('id', 'label', 'created_by', 'valid_from', 'expires_at', 'max_uses', 'use_count',
+                  'is_revoked', 'is_valid_now', 'created_at')
+
+    def get_is_valid_now(self, obj):
+        return obj.is_valid_now()
+
+
+class FaceRegisterSerializer(serializers.Serializer):
+    embedding = serializers.ListField(child=serializers.FloatField(), min_length=32, max_length=1024)
+    name = serializers.CharField(max_length=100, required=False, allow_blank=True, default='')
+    consent_confirmed = serializers.BooleanField()
+
+    def validate_embedding(self, v):
+        if not all(math.isfinite(x) for x in v):
+            raise serializers.ValidationError('Vector chứa giá trị không hợp lệ.')
+        return v
+
+    def validate_consent_confirmed(self, v):
+        if not v:
+            raise serializers.ValidationError(
+                'Cần xác nhận người được đăng ký đã đồng ý thu thập dữ liệu khuôn mặt.')
+        return v
+
+
+class FaceProfileSerializer(serializers.ModelSerializer):   # KHÔNG bao giờ trả embedding
+    username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = FaceProfile
+        fields = ('id', 'user', 'username', 'name', 'is_active', 'consent_confirmed', 'created_at')
+
+
+class CardRegisterSerializer(serializers.Serializer):
+    device_id = serializers.UUIDField()
+    uid = serializers.CharField(max_length=40)
+    name = serializers.CharField(max_length=100, required=False, allow_blank=True, default='')
+
+
+class CardUpdateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100, required=False, allow_blank=True)
-
-
-class NfcReaderUpdateSerializer(serializers.Serializer):
     is_active = serializers.BooleanField(required=False)
-    auto_register = serializers.BooleanField(required=False)
 
 
-class NfcLogSerializer(serializers.ModelSerializer):
-    card_name = serializers.SerializerMethodField()
-    reader_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = NfcLog
-        fields = ('id', 'event_type', 'success', 'card_name', 'reader_name', 'created_at')
-        read_only_fields = fields
-
-    def get_card_name(self, obj):
-        return obj.nfc_tag.name if obj.nfc_tag_id else None
-
-    def get_reader_name(self, obj):
-        return obj.reader.name if obj.reader_id else None
-
-
-class AccessCardSerializer(serializers.ModelSerializer):
+class AccessCardSerializer(serializers.ModelSerializer):   # không trả card_uid_hash
     devices = serializers.SerializerMethodField()
 
     class Meta:
         model = AccessCard
-        fields = ('id', 'name', 'is_active', 'devices', 'created_at')   # KHÔNG trả card_uid_hash
-        read_only_fields = fields
+        fields = ('id', 'name', 'is_active', 'devices', 'created_at')
 
     def get_devices(self, obj):
-        return [{'id': str(a.device_id), 'name': a.device.name, 'is_active': a.is_active}
-                for a in obj.carddeviceaccess_set.all()]
-
-
-class CardRegisterSerializer(serializers.Serializer):
-    uid = serializers.CharField(max_length=64)
-    name = serializers.CharField(max_length=100, required=False, allow_blank=True)
-
-
-class CardUpdateSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
-    is_active = serializers.BooleanField(required=False)
-
-
-# ------------------------------------------------------------------ PIN / khuôn mặt / lịch sử ra vào
-class DoorPinSerializer(serializers.ModelSerializer):
-    created_by = serializers.SerializerMethodField()
-    state = serializers.SerializerMethodField()
-
-    class Meta:
-        model = DoorPinCode
-        fields = ('id', 'label', 'valid_from', 'expires_at', 'max_uses', 'use_count',
-                  'is_revoked', 'revoked_at', 'state', 'created_by', 'created_at')   # KHÔNG trả pin_hash
-        read_only_fields = fields
-
-    def get_created_by(self, obj):
-        return obj.created_by.username
-
-    def get_state(self, obj):
-        now = timezone.now()
-        if obj.is_revoked:
-            return 'revoked'
-        if obj.expires_at <= now:
-            return 'expired'
-        if obj.valid_from > now:
-            return 'scheduled'
-        if obj.max_uses and obj.use_count >= obj.max_uses:
-            return 'used_up'
-        return 'active'
-
-
-class DoorPinIssueSerializer(serializers.Serializer):
-    ttl_minutes = serializers.IntegerField(min_value=1, max_value=43200, default=1440)   # tối đa 30 ngày
-    max_uses = serializers.IntegerField(min_value=0, max_value=1000, default=1)          # 0 = không giới hạn
-    label = serializers.CharField(max_length=100, required=False, allow_blank=True)
-
-
-class FaceProfileSerializer(serializers.ModelSerializer):
-    user = serializers.SerializerMethodField()
-
-    class Meta:
-        model = FaceProfile
-        fields = ('id', 'user', 'name', 'is_active', 'consent_confirmed', 'created_at', 'updated_at')
-        read_only_fields = fields      # KHÔNG bao giờ trả embedding (dữ liệu sinh trắc học)
-
-    def get_user(self, obj):
-        return _user_brief(obj.user)
-
-
-class FaceRegisterSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=100, required=False, allow_blank=True)
-    embedding = serializers.ListField(child=serializers.FloatField(), min_length=32, max_length=2048)
-    consent_confirmed = serializers.BooleanField()
-
-    def validate_consent_confirmed(self, value):
-        if not value:
-            raise serializers.ValidationError(
-                'Cần xác nhận người được đăng ký đã đồng ý thu thập dữ liệu khuôn mặt.')
-        return value
-
-
-class FaceProfileUpdateSerializer(serializers.Serializer):
-    is_active = serializers.BooleanField()
+        return [str(c.device_id) for c in obj.carddeviceaccess_set.all()]
 
 
 class AccessEventSerializer(serializers.ModelSerializer):
-    device = serializers.SerializerMethodField()
-    user = serializers.SerializerMethodField()
-    method_display = serializers.CharField(source='get_method_display', read_only=True)
+    device_name = serializers.CharField(source='device.name', read_only=True)
+    username = serializers.SerializerMethodField()
 
     class Meta:
         model = AccessEvent
-        fields = ('id', 'device', 'method', 'method_display', 'success', 'reason', 'user',
+        fields = ('id', 'device', 'device_name', 'method', 'success', 'reason', 'username',
                   'confidence', 'snapshot_url', 'created_at')
-        read_only_fields = fields
 
-    def get_device(self, obj):
-        return {'id': str(obj.device_id), 'name': obj.device.name}
-
-    def get_user(self, obj):
-        return _user_brief(obj.user) if obj.user_id else None
+    def get_username(self, obj):
+        return obj.user.username if obj.user_id else None
 
 
-# ------------------------------------------------------------------ hỗ trợ
-class SupportRequestSerializer(serializers.ModelSerializer):
-    device = serializers.SerializerMethodField()
-    action_display = serializers.CharField(source='get_action_display', read_only=True)
-    status_display = serializers.CharField(source='get_status_display', read_only=True)
-
-    class Meta:
-        model = SupportRequest
-        fields = ('id', 'device', 'action', 'action_display', 'scope', 'status', 'status_display',
-                  'expires_at', 'created_at', 'completed_at')
-        read_only_fields = fields    # KHÔNG trả authorization_code_hash / recovery_code_hash
-
-    def get_device(self, obj):
-        return {'id': str(obj.device_id), 'name': obj.device.name}
-
-
-class SupportRequestCreateSerializer(serializers.Serializer):
-    device_id = serializers.UUIDField()
-    action = serializers.ChoiceField(choices=SupportRequest._meta.get_field('action').choices)
-    scope = serializers.CharField(max_length=100, required=False, allow_blank=True)
-
-
-# ------------------------------------------------------------------ thông báo / log / thông báo hệ thống
+# ============================== NOTIFICATION / AUDIT / RULES ==============================
 class NotificationSerializer(serializers.ModelSerializer):
-    device = serializers.SerializerMethodField()
-
     class Meta:
         model = Notification
-        fields = ('id', 'type', 'title', 'message', 'severity', 'is_read', 'device', 'created_at', 'read_at')
-        read_only_fields = fields
-
-    def get_device(self, obj):
-        return {'id': str(obj.device_id), 'name': obj.device.name} if obj.device_id else None
+        fields = ('id', 'type', 'title', 'message', 'severity', 'device', 'is_read', 'created_at', 'read_at')
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
-    device = serializers.SerializerMethodField()
     actor = serializers.SerializerMethodField()
-    target = serializers.SerializerMethodField()
+    device_name = serializers.SerializerMethodField()
 
     class Meta:
         model = AuditLog
-        fields = ('id', 'action', 'severity', 'success', 'device', 'actor', 'target', 'created_at')
-        read_only_fields = fields
-
-    def get_device(self, obj):
-        return {'id': str(obj.device_id), 'name': obj.device.name} if obj.device_id else None
+        fields = ('id', 'action', 'actor', 'device', 'device_name', 'severity', 'success',
+                  'ip_address', 'created_at')
 
     def get_actor(self, obj):
         return obj.actor_user.username if obj.actor_user_id else None
 
-    def get_target(self, obj):
-        return obj.target_user.username if obj.target_user_id else None
+    def get_device_name(self, obj):
+        return obj.device.name if obj.device_id else None
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):
     class Meta:
         model = Announcement
         fields = ('id', 'title', 'body', 'level', 'created_at')
-        read_only_fields = fields
 
 
-# ------------------------------------------------------------------ luật tự động hoá
 class AutomationRuleSerializer(serializers.ModelSerializer):
-    device = serializers.PrimaryKeyRelatedField(
-        queryset=Device.objects.none(), required=False, allow_null=True)   # null = mọi thiết bị của mình
-    device_name = serializers.SerializerMethodField()
-
     class Meta:
         model = AutomationRule
-        fields = ('id', 'name', 'device', 'device_name', 'trigger_type', 'threshold_value',
-                  'threshold_window_seconds', 'action_type', 'notify_severity', 'cooldown_seconds',
-                  'is_active', 'last_triggered_at', 'created_at', 'updated_at')
-        read_only_fields = ('id', 'last_triggered_at', 'created_at', 'updated_at')
-        extra_kwargs = {
-            'cooldown_seconds': {'min_value': 0, 'max_value': 7 * 24 * 3600},
-            'threshold_window_seconds': {'min_value': 1, 'max_value': 86400},
-        }
+        fields = ('id', 'name', 'device', 'trigger_type', 'threshold_value', 'threshold_window_seconds',
+                  'action_type', 'notify_severity', 'cooldown_seconds', 'is_active',
+                  'last_triggered_at', 'created_at')
+        read_only_fields = ('id', 'last_triggered_at', 'created_at')
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        request = self.context.get('request')
-        if request is not None:     # chỉ cho chọn thiết bị của chính mình
-            self.fields['device'].queryset = Device.objects.filter(owner=request.user)
+    def validate_device(self, device):
+        user = self.context['request'].user
+        if device is not None and device.owner_id != user.id:
+            raise serializers.ValidationError('Bạn không phải chủ thiết bị này.')
+        return device
 
-    def get_device_name(self, obj):
-        return obj.device.name if obj.device_id else None
+    def validate_cooldown_seconds(self, v):
+        if v < 0 or v > 86400:
+            raise serializers.ValidationError('Cooldown phải từ 0 đến 86400 giây.')
+        return v
 
     def validate(self, attrs):
         inst = self.instance
         trigger = attrs.get('trigger_type', inst.trigger_type if inst else None)
-        threshold = attrs['threshold_value'] if 'threshold_value' in attrs else (
-            inst.threshold_value if inst else None)
+        threshold = attrs.get('threshold_value', inst.threshold_value if inst else None)
         if trigger != AutomationRule.TRIGGER_TAMPER_DETECTED and threshold is None:
-            raise serializers.ValidationError(
-                {'threshold_value': 'Bắt buộc với loại điều kiện này.'})
-        if threshold is not None and threshold < 0:
-            raise serializers.ValidationError({'threshold_value': 'Không được âm.'})
-        if trigger == AutomationRule.TRIGGER_BATTERY_LOW and threshold is not None and threshold > 100:
-            raise serializers.ValidationError({'threshold_value': 'Ngưỡng pin phải từ 0 đến 100.'})
+            raise serializers.ValidationError({'threshold_value': 'Luật này cần ngưỡng (threshold_value).'})
+        if trigger == AutomationRule.TRIGGER_FAILED_ACCESS_BURST:
+            window = attrs.get('threshold_window_seconds', inst.threshold_window_seconds if inst else None)
+            if not window:
+                raise serializers.ValidationError(
+                    {'threshold_window_seconds': 'Luật "N lần thất bại" cần khoảng thời gian (giây).'})
         return attrs
 
 
 class AutomationRuleLogSerializer(serializers.ModelSerializer):
-    device = serializers.SerializerMethodField()
-
     class Meta:
         model = AutomationRuleLog
-        fields = ('id', 'device', 'measured_value', 'action_taken', 'triggered_at')
-        read_only_fields = fields
-
-    def get_device(self, obj):
-        return {'id': str(obj.device_id), 'name': obj.device.name} if obj.device_id else None
+        fields = ('id', 'device', 'measured_value', 'action_taken', 'notification', 'triggered_at')

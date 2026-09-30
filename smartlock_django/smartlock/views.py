@@ -635,6 +635,8 @@ def reset_password(request, uidb64, token):
             return render(request, 'account/base/reset_password.html', ctx)
         user.set_password(p1)
         user.save()
+        from .api.mobile_auth import revoke_all_sessions
+        revoke_all_sessions(user)
         _reset_lockout(user)
         _audit(request, 'PASSWORD_RESET_DONE', actor=user, target_user=user)
         _notify(user, 'Mật khẩu đã thay đổi', 'Mật khẩu tài khoản vừa được đặt lại.',

@@ -311,8 +311,9 @@ REST_FRAMEWORK = {
         'auth_reset': '5/min',
         'auth_refresh': '30/min',
     },
-    # Số reverse proxy đứng trước Django (Vercel = 1) để throttle lấy đúng IP client.
     'NUM_PROXIES': env_int('DRF_NUM_PROXIES', 1),
+    'EXCEPTION_HANDLER': 'smartlock.api.common.api_exception_handler',
+    'DEFAULT_PAGINATION_CLASS': 'smartlock.api.common.StandardPagination',  
 }
 
 # ---- tuỳ chọn cho app di động ----
