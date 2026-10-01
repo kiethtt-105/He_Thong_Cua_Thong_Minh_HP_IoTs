@@ -44,6 +44,32 @@ SESSION_SECONDS = getattr(dj_settings, 'MANAGE_SYS_SESSION_SECONDS', 2 * 3600)
 URL_PREFIX = getattr(dj_settings, 'MANAGE_SYS_URL_PREFIX', '/manage-sys/')
 
 
+# Mỗi nhóm trang gộp 1 template, chọn trang bằng biến `page`.
+PAGE_TEMPLATE = {
+    "user_list": "users",
+    "user_detail": "users",
+    "device_list": "devices",
+    "device_create": "devices",
+    "device_created": "devices",
+    "device_detail": "devices",
+    "dashboard": "ops",
+    "support_list": "ops",
+    "support_detail": "ops",
+    "audit_logs": "ops",
+    "audit_logins": "ops",
+    "announcements": "ops",
+    "settings": "ops",
+    "login": "base"
+}
+
+
+def _render(request, page, context=None, **kwargs):
+    """_render(request, 'user_list', ctx) -> manage_sys/users.html với page='user_list'."""
+    ctx = dict(context or {})
+    ctx['page'] = page
+    return render(request, f'manage_sys/{PAGE_TEMPLATE[page]}.html', ctx, **kwargs)
+
+
 def _parse_uuid(value):
     try:
         return uuid.UUID(str(value))
@@ -68,20 +94,20 @@ def login_view(request):
     ctx = {'next': next_url}
 
     if request.method != 'POST':
-        return render(request, 'manage_sys/login/login.html', ctx)
+        return _render(request, 'login', ctx)
 
     identifier = (request.POST.get('identifier') or '').strip()
     password = request.POST.get('password') or ''
     if not identifier or not password:
         messages.error(request, 'Vui lòng điền đầy đủ thông tin.')
-        return render(request, 'manage_sys/login/login.html', ctx)
+        return _render(request, 'login', ctx)
 
     ip = client_ip(request)
     if ip_blacklisted(get_settings(), ip):
         audit(request, 'MANAGE_LOGIN_BLOCKED_IP', actor=None, success=False,
               severity='warning', username_attempt=identifier[:150])
         messages.error(request, 'Địa chỉ IP của bạn đã bị chặn.')
-        return render(request, 'manage_sys/login/login.html', ctx)
+        return _render(request, 'login', ctx)
 
     user = _find_user(identifier)
     is_manager_account = bool(user and has_manage_role(user))
@@ -92,7 +118,7 @@ def login_view(request):
             messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {remaining} phút.')
             audit(request, 'MANAGE_LOGIN_LOCKED', actor=None, target_user=user, success=False,
                   severity='warning', username_attempt=identifier[:150])
-            return render(request, 'manage_sys/login/login.html', ctx)
+            return _render(request, 'login', ctx)
 
     auth_user = authenticate(request, username=user.email, password=password) if user else None
     ok = bool(auth_user and has_manage_role(auth_user))
@@ -117,7 +143,7 @@ def login_view(request):
     audit(request, action, actor=None, target_user=user, success=False,
           severity='warning', username_attempt=identifier[:150])
     messages.error(request, LOGIN_ERROR)
-    return render(request, 'manage_sys/login/login.html', ctx)
+    return _render(request, 'login', ctx)
 
 
 @require_POST
@@ -167,7 +193,7 @@ def dashboard(request):
         'alert_logs': (AuditLog.objects.filter(severity__in=['warning', 'critical'])
                        .select_related('actor_user', 'device').order_by('-created_at')[:8]),
     }
-    return render(request, 'manage_sys/dashboard/dashboard.html', context)
+    return _render(request, 'dashboard', context)
 
 
 # ====================== USERS ======================
@@ -200,7 +226,7 @@ def users_list(request):
         u.is_locked = u.pk in locked_ids
         u.is_manager_role = has_manage_role(u)
 
-    return render(request, 'manage_sys/users/list.html', {
+    return _render(request, 'user_list', {
         'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status,
     })
 
@@ -277,7 +303,7 @@ def user_detail(request, user_id):
         'logs': (AuditLog.objects.filter(Q(actor_user=target) | Q(target_user=target))
                  .select_related('device').order_by('-created_at')[:10]),
     }
-    return render(request, 'manage_sys/users/detail.html', context)
+    return _render(request, 'user_detail', context)
 
 
 # ====================== DEVICES ======================
@@ -331,13 +357,13 @@ def device_create(request):
             audit(request, 'MANAGE_DEVICE_CREATED', device=device, severity='warning',
                   metadata={'device_code': code, 'mode': mode, 'pending_owner': owner.email if owner else None})
             # Secret chỉ hiển thị 1 lần (DB chỉ lưu hash) -> render thẳng, không redirect
-            return render(request, 'manage_sys/devices/created.html', {
+            return _render(request, 'device_created', {
                 'device': device, 'secret': secret, 'pending_owner': owner,
                 'claim_url': reverse('manage_sys:device-detail', args=[device.id]),
                 'api_base': request.build_absolute_uri('/').rstrip('/'),
             })
 
-    return render(request, 'manage_sys/devices/create.html', {'form': form})
+    return _render(request, 'device_create', {'form': form})
 
 
 @manage_required
@@ -357,7 +383,7 @@ def devices_list(request):
         qs = qs.filter(device_mode=mode)
 
     page_obj, qs_str = paginate(request, qs)
-    return render(request, 'manage_sys/devices/list.html', {
+    return _render(request, 'device_list', {
         'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status, 'mode': mode,
         'status_choices': Device._meta.get_field('status').choices,
     })
@@ -446,7 +472,7 @@ def _device_actions(request, device):
             notify(dev.owner, 'Secret thiết bị đã được đổi',
                    f'Quản trị viên đã đổi secret kết nối của "{dev.name}". Thiết bị cần được nạp lại secret mới.',
                    severity='warning', device=dev, type_='DEVICE')
-        return render(request, 'manage_sys/devices/created.html', {
+        return _render(request, 'device_created', {
             'device': dev, 'secret': secret, 'rotated': True,
             'claim_url': reverse('manage_sys:device-detail', args=[dev.id]),
             'api_base': request.build_absolute_uri('/').rstrip('/'),
@@ -491,7 +517,7 @@ def device_detail(request, device_id):
         'logs': (AuditLog.objects.filter(device=device)
                  .select_related('actor_user').order_by('-created_at')[:10]),
     }
-    return render(request, 'manage_sys/devices/detail.html', context)
+    return _render(request, 'device_detail', context)
 
 
 @manage_required
@@ -540,7 +566,7 @@ def support_list(request):
         sr.is_overdue = sr.status in ('pending', 'approved') and sr.expires_at <= now
         sr.is_sensitive = sr.action in RECOVERY_ACTIONS
 
-    return render(request, 'manage_sys/support/list.html', {
+    return _render(request, 'support_list', {
         'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status, 'action': action,
         'status_choices': SupportRequest._meta.get_field('status').choices,
         'action_choices': SupportRequest._meta.get_field('action').choices,
@@ -609,7 +635,7 @@ def support_detail(request, request_id):
                  .filter(Q(action__startswith='SUPPORT_') | Q(action__startswith='MANAGE_SUPPORT_'))
                  .order_by('-created_at')[:5]),
     }
-    return render(request, 'manage_sys/support/detail.html', context)
+    return _render(request, 'support_detail', context)
 
 
 # ====================== AUDIT ======================
@@ -636,7 +662,7 @@ def audit_logs(request):
 
     audit(request, 'MANAGE_VIEW_AUDIT_LOGS', metadata={'q': q[:80], 'status': status, 'severity': severity})
     page_obj, qs_str = paginate(request, qs)
-    return render(request, 'manage_sys/audit/logs.html', {
+    return _render(request, 'audit_logs', {
         'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status,
         'severity': severity, 'scope': scope,
     })
@@ -657,7 +683,7 @@ def login_attempts(request):
     page_obj, qs_str = paginate(request, qs)
     for a in page_obj:
         decorate_login_attempt(a)
-    return render(request, 'manage_sys/audit/logins.html', {
+    return _render(request, 'audit_logins', {
         'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status,
     })
 
@@ -701,7 +727,7 @@ def announcements(request):
 
     qs = Announcement.objects.select_related('created_by').order_by('-created_at')
     page_obj, qs_str = paginate(request, qs, per_page=10)
-    return render(request, 'manage_sys/announcements/announcements.html', {'page_obj': page_obj, 'qs': qs_str})
+    return _render(request, 'announcements', {'page_obj': page_obj, 'qs': qs_str})
 
 
 # ====================== SETTINGS ======================
@@ -763,7 +789,7 @@ def settings_system(request):
         messages.success(request, 'Đã lưu cài đặt hệ thống.')
         return redirect('manage_sys:settings')
 
-    return render(request, 'manage_sys/settings/settings.html', {
+    return _render(request, 'settings', {
         'st': st,
         'stages_text': ', '.join(str(x) for x in (st.login_lockout_stage_minutes or [])),
     })

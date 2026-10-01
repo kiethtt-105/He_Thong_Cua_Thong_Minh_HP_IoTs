@@ -1,14 +1,84 @@
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
-{% block title %}Người dùng{% endblock %}
-{% block page_title %}<span class="text-break">{{ target.email }}</span>
+{# Gộp: user_list, user_detail. View truyền biến `page`. #}
+{% block title %}
+{% if page == 'user_list' %}
+Người dùng
+{% elif page == 'user_detail' %}
+Người dùng
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block page_title %}
+{% if page == 'user_list' %}
+Quản lý Người dùng
+{% elif page == 'user_detail' %}
+<span class="text-break">{{ target.email }}</span>
     {% if target_is_manager %}<span class="badge text-bg-dark align-middle">Admin</span>{% endif %}
     {% if target.is_active %}<span class="badge text-bg-success align-middle">Hoạt động</span>{% else %}<span class="badge text-bg-secondary align-middle">Không hoạt động</span>{% endif %}
     {% if is_locked %}<span class="badge text-bg-danger align-middle">Bị khóa</span>{% endif %}
+{% else %}{{ block.super }}{% endif %}
 {% endblock %}
-{% block page_actions %}<a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>{% endblock %}
-
 {% block content %}
+{% if page == 'user_list' %}
+<form method="get" class="filter-bar">
+    <input type="search" name="q" value="{{ q }}" class="form-control" style="flex:2 1 260px" placeholder="Tìm email, username, họ tên, SĐT...">
+    <select name="status" class="form-select" style="flex:1 1 200px">
+        <option value="">Tất cả trạng thái</option>
+        <option value="active" {% if status == 'active' %}selected{% endif %}>Đang hoạt động</option>
+        <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Chưa kích hoạt / vô hiệu</option>
+        <option value="unverified" {% if status == 'unverified' %}selected{% endif %}>Chưa xác thực email</option>
+        <option value="locked" {% if status == 'locked' %}selected{% endif %}>Đang bị khóa đăng nhập</option>
+        <option value="admin" {% if status == 'admin' %}selected{% endif %}>Quản trị viên</option>
+    </select>
+    <div class="d-flex gap-2">
+        <button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button>
+        <a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary">Xóa lọc</a>
+    </div>
+</form>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead><tr><th>Email</th><th>Username</th><th>Họ tên</th><th class="text-center">Thiết bị</th><th>Đăng ký</th><th>Trạng thái</th><th class="text-end"></th></tr></thead>
+            <tbody>
+            {% for u in page_obj %}
+                <tr>
+                    <td class="text-break">{{ u.email }} {% if u.is_manager_role %}<span class="badge text-bg-dark">Admin</span>{% endif %}</td>
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.full_name|default:"—" }}</td>
+                    <td class="text-center">{{ u.device_count }}</td>
+                    <td>{{ u.created_at|date:"d/m/Y H:i" }}</td>
+                    <td>
+                        {% if u.is_active %}<span class="badge text-bg-success">Hoạt động</span>
+                        {% elif u.email_verified %}<span class="badge text-bg-secondary">Vô hiệu</span>
+                        {% else %}<span class="badge text-bg-warning">Chưa xác thực</span>{% endif %}
+                        {% if u.is_locked %}<span class="badge text-bg-danger">Bị khóa</span>{% endif %}
+                    </td>
+                    <td class="text-end"><a href="{% url 'manage_sys:user-detail' u.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7"><div class="empty-state"><div class="ei"><i class="fa-solid fa-users"></i></div><h6>Không tìm thấy người dùng nào</h6><div class="small">Thử đổi từ khóa hoặc bỏ bộ lọc.</div></div></td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% if page_obj.paginator.num_pages > 1 %}
+<nav class="mt-3" aria-label="Phân trang">
+    <ul class="pagination pagination-sm justify-content-center mb-0">
+        {% if page_obj.has_previous %}
+        <li class="page-item"><a class="page-link" href="?page=1{{ qs }}" aria-label="Trang đầu">«</a></li>
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{{ qs }}" aria-label="Trang trước">‹</a></li>
+        {% endif %}
+        <li class="page-item disabled"><span class="page-link">Trang {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} ({{ page_obj.paginator.count }} mục)</span></li>
+        {% if page_obj.has_next %}
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{{ qs }}" aria-label="Trang sau">›</a></li>
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{{ qs }}" aria-label="Trang cuối">»</a></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% elif page == 'user_detail' %}
 <div class="row g-4">
     <div class="col-lg-4">
         <div class="card mb-4">
@@ -119,4 +189,10 @@
         </div>
     </div>
 </div>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block page_actions %}
+{% if page == 'user_detail' %}
+<a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>
+{% else %}{{ block.super }}{% endif %}
 {% endblock %}

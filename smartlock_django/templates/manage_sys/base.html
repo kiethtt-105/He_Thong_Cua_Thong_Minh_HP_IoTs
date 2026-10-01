@@ -1,12 +1,12 @@
-{% extends 'account/base/layout.html' %}
+{% extends 'account/layout.html' %}
 {% comment %}
     Manage Sys dùng chung layout.html của project (CSS, token, script, WebView helper).
     Chỉ override block `shell` để thay sidebar/bottom-nav bằng menu quản trị.
     Các trang con dùng: title, page_title, page_sub, page_actions, content, scripts.
 {% endcomment %}
-{% block title %}Quản trị{% endblock %}
+{% block title %}{% if page == 'login' %}Đăng nhập quản trị{% else %}Quản trị{% endif %}{% endblock %}
 
-{% block extra_head %}
+{% block extra_head %}{% if page == 'login' %}<meta name="robots" content="noindex,nofollow">{% else %}
 <style>
     .mono { font-family: var(--font-mono); font-size: .88em; }
     a.stat-card { color: inherit; display: block; transition: transform .15s, box-shadow .15s; }
@@ -19,9 +19,42 @@
     .pagination { flex-wrap: wrap; }
     @media (hover: none) { a.stat-card:hover { transform: none; box-shadow: var(--shadow); } }
 </style>
-{% endblock %}
+{% endif %}{% endblock %}
 
 {% block shell %}
+{% if page == 'login' %}
+<div class="auth-bg">
+    <div class="container px-3 py-4">
+        <div class="mx-auto" style="max-width:440px">
+            <div class="text-center text-white mb-4">
+                <div class="brand-icon mx-auto mb-3"><i class="fa-solid fa-shield-halved"></i></div>
+                <h4 class="mb-1">Manage Sys</h4>
+                <div class="small" style="color:var(--sb-text)">Khu vực dành riêng cho quản trị viên</div>
+            </div>
+            <div class="card auth-card mx-auto">
+                <div class="card-body p-4">
+                    {% for m in messages %}
+                    <div class="alert alert-{% if m.tags == 'error' %}danger{% else %}{{ m.tags }}{% endif %} py-2">{{ m }}</div>
+                    {% endfor %}
+                    <form method="post" autocomplete="off">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ next }}">
+                        <div class="mb-3">
+                            <label class="form-label">Email hoặc Username</label>
+                            <input type="text" name="identifier" class="form-control" required autofocus autocapitalize="none" autocorrect="off">
+                        </div>
+                        <div class="mb-4">
+                            <label class="form-label">Mật khẩu</label>
+                            <input type="password" name="password" class="form-control" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-right-to-bracket me-2"></i>Đăng nhập</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
 {% with u=request.resolver_match.url_name %}
 <div class="app">
     <aside class="sidebar" id="sidebar">
@@ -89,4 +122,5 @@
     </nav>
 </div>
 {% endwith %}
+{% endif %}
 {% endblock %}

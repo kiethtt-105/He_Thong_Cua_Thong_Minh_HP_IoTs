@@ -1,0 +1,240 @@
+{% extends 'manage_sys/base.html' %}
+{% load manage_sys_tags %}
+{# Gộp: device_list, device_create, device_created, device_detail. View truyền biến `page`. #}
+{% block title %}
+{% if page == 'device_list' %}
+Thiết bị
+{% elif page == 'device_create' %}
+Thêm thiết bị
+{% elif page == 'device_created' %}
+Đã tạo thiết bị
+{% elif page == 'device_detail' %}
+Thiết bị
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block page_title %}
+{% if page == 'device_list' %}
+Quản lý Thiết bị
+{% elif page == 'device_create' %}
+Thêm thiết bị
+{% elif page == 'device_created' %}
+Đã tạo thiết bị
+{% elif page == 'device_detail' %}
+{{ device.name }} <span class="badge text-bg-{{ device.status|badge }} align-middle">{{ device.status|vi }}</span>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block page_actions %}
+{% if page == 'device_list' %}
+<a href="{% url 'manage_sys:device-create' %}" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus me-1"></i> Thêm thiết bị</a>
+{% elif page == 'device_create' %}
+<a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>
+{% elif page == 'device_created' %}
+<a href="{% url 'manage_sys:device-detail' device.id %}" class="btn btn-outline-primary btn-sm">Xem chi tiết</a>
+{% elif page == 'device_detail' %}
+<a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block content %}
+{% if page == 'device_list' %}
+<form method="get" class="filter-bar">
+    <input type="search" name="q" value="{{ q }}" class="form-control" style="flex:2 1 260px" placeholder="Tìm tên, mã thiết bị, MAC, chủ sở hữu...">
+    <select name="status" class="form-select" style="flex:1 1 170px">
+        <option value="">Mọi trạng thái</option>
+        {% for value, label in status_choices %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ value|vi }}</option>{% endfor %}
+    </select>
+    <select name="mode" class="form-select" style="flex:1 1 170px">
+        <option value="">Thật + mô phỏng</option>
+        <option value="physical" {% if mode == 'physical' %}selected{% endif %}>Thiết bị thật</option>
+        <option value="simulated" {% if mode == 'simulated' %}selected{% endif %}>Mô phỏng</option>
+    </select>
+    <div class="d-flex gap-2">
+        <button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button>
+        <a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary">Xóa lọc</a>
+    </div>
+</form>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead><tr><th>Mã thiết bị</th><th>Tên</th><th>Loại</th><th>Chủ sở hữu</th><th>Trạng thái</th><th>Pin</th><th>Thấy lần cuối</th><th class="text-end"></th></tr></thead>
+            <tbody>
+            {% for d in page_obj %}
+                <tr>
+                    <td class="mono fw-bold">{{ d.device_code }}</td>
+                    <td>{{ d.name }}</td>
+                    <td>{{ d.device_mode|vi }}</td>
+                    <td class="text-break">{{ d.owner.email|default:"—" }}</td>
+                    <td><span class="badge text-bg-{{ d.status|badge }}">{{ d.status|vi }}</span></td>
+                    <td>{{ d.battery_level }}%</td>
+                    <td>{{ d.last_seen_at|date:"d/m H:i"|default:"—" }}</td>
+                    <td class="text-end"><a href="{% url 'manage_sys:device-detail' d.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="8"><div class="empty-state"><div class="ei"><i class="fa-solid fa-plug"></i></div><h6>Không có thiết bị nào</h6><div class="small">Thử đổi từ khóa hoặc bỏ bộ lọc.</div></div></td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% if page_obj.paginator.num_pages > 1 %}
+<nav class="mt-3" aria-label="Phân trang">
+    <ul class="pagination pagination-sm justify-content-center mb-0">
+        {% if page_obj.has_previous %}
+        <li class="page-item"><a class="page-link" href="?page=1{{ qs }}" aria-label="Trang đầu">«</a></li>
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{{ qs }}" aria-label="Trang trước">‹</a></li>
+        {% endif %}
+        <li class="page-item disabled"><span class="page-link">Trang {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} ({{ page_obj.paginator.count }} mục)</span></li>
+        {% if page_obj.has_next %}
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{{ qs }}" aria-label="Trang sau">›</a></li>
+        <li class="page-item"><a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{{ qs }}" aria-label="Trang cuối">»</a></li>
+        {% endif %}
+    </ul>
+</nav>
+{% endif %}
+{% elif page == 'device_create' %}
+<div class="row">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">Thông tin thiết bị</div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label">Mã thiết bị <span class="text-danger">*</span></label>
+                        <input type="text" name="device_code" class="form-control mono" value="{{ form.device_code }}" maxlength="50" required placeholder="LOCK-0001" autocapitalize="characters">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tên thiết bị <span class="text-danger">*</span></label>
+                        <input type="text" name="name" class="form-control" value="{{ form.name }}" maxlength="100" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Loại</label>
+                        <select name="device_mode" class="form-select">
+                            <option value="physical" {% if form.device_mode != 'simulated' %}selected{% endif %}>Thiết bị thật</option>
+                            <option value="simulated" {% if form.device_mode == 'simulated' %}selected{% endif %}>Mô phỏng</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">MAC (tùy chọn)</label>
+                        <input type="text" name="mac_address" class="form-control mono" value="{{ form.mac_address }}" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17">
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label">Chủ sở hữu (email hoặc username)</label>
+                        <input type="text" name="owner_email" class="form-control" value="{{ form.owner_email }}" autocapitalize="none">
+                        <div class="form-text">Để trống: thiết bị ở trạng thái "chờ cấu hình", người dùng tự nhận sau. Có chủ: thiết bị vào ngay tài khoản đó và được tính là đã mua.</div>
+                    </div>
+                    <button class="btn btn-primary w-100"><i class="fa-solid fa-plus me-2"></i>Tạo thiết bị</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% elif page == 'device_created' %}
+<div class="alert alert-warning">
+    <i class="fa-solid fa-triangle-exclamation me-2"></i>
+    <strong>Secret chỉ hiển thị một lần.</strong> Hãy chép vào firmware / file cấu hình của thiết bị ngay. Nếu mất phải tạo lại thiết bị.
+</div>
+<div class="card">
+    <div class="card-header">Thông tin kết nối</div>
+    <div class="card-body">
+        <dl class="kv">
+            <dt>Server</dt><dd class="mono text-break">{{ api_base }}</dd>
+            <dt>Mã thiết bị</dt><dd class="mono">{{ device.device_code }}</dd>
+            <dt>Secret</dt>
+            <dd><span class="mono text-break" id="sec">{{ secret }}</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
+                    onclick="navigator.clipboard.writeText(document.getElementById('sec').textContent);this.textContent='Đã chép'">Chép</button></dd>
+            <dt>Chủ sở hữu</dt><dd>{{ device.owner.email|default:"— (chờ cấu hình)" }}</dd>
+        </dl>
+        <div class="small text-muted">Thiết bị gọi <span class="mono">POST {{ api_base }}/api/device/heartbeat/</span> mỗi 10-30 giây với <span class="mono">device_code</span> và <span class="mono">secret</span>.</div>
+    </div>
+</div>
+{% elif page == 'device_detail' %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">Thông tin thiết bị</div>
+            <div class="card-body">
+                <dl class="kv">
+                    <dt>Mã thiết bị</dt><dd class="mono">{{ device.device_code }}</dd>
+                    <dt>Loại</dt><dd>{{ device.device_mode|vi }}</dd>
+                    <dt>Chủ sở hữu</dt><dd>{% if device.owner %}<a href="{% url 'manage_sys:user-detail' device.owner.id %}">{{ device.owner.email }}</a>{% else %}—{% endif %}</dd>
+                    <dt>MAC</dt><dd class="mono">{{ device.mac_address|default:"—" }}</dd>
+                    <dt>Firmware</dt><dd>{{ device.firmware_version|default:"—" }}</dd>
+                    <dt>Vị trí</dt><dd>{{ device.location|default:"—" }}</dd>
+                    <dt>Pin</dt><dd>{{ device.battery_level }}%</dd>
+                    <dt>Kết nối</dt><dd>{% if device.wifi_enabled %}<i class="fa-solid fa-wifi me-1"></i>{% endif %}{% if device.bluetooth_enabled %}<i class="fa-brands fa-bluetooth-b me-1"></i>{% endif %}{% if device.nfc_enabled %}NFC{% endif %}{% if not device.wifi_enabled and not device.bluetooth_enabled and not device.nfc_enabled %}—{% endif %}</dd>
+                    <dt>Thấy lần cuối</dt><dd>{{ device.last_seen_at|date:"d/m/Y H:i"|default:"—" }}</dd>
+                    <dt>Tạo lúc</dt><dd>{{ device.created_at|date:"d/m/Y H:i" }}</dd>
+                    {% if last_log %}
+                    <dt>Trạng thái khóa</dt><dd>{{ last_log.lock_state }}{% if last_log.tamper_detected %} <span class="badge text-bg-danger">Bị phá</span>{% endif %}</dd>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Thao tác</div>
+            <div class="card-body">
+                {% if not device.owner %}
+                    <div class="alert alert-secondary small mb-0">Thiết bị chưa có chủ sở hữu (đang chờ cấu hình) nên chưa thể đổi trạng thái.</div>
+                {% elif device.status == 'maintenance' %}
+                    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="maintenance_off">
+                        <button class="btn btn-outline-success w-100"><i class="fa-solid fa-circle-check me-2"></i>Kết thúc bảo trì</button></form>
+                {% else %}
+                    <form method="post" onsubmit="return confirm('Đặt thiết bị vào chế độ bảo trì? Chủ sở hữu sẽ được thông báo.')">{% csrf_token %}<input type="hidden" name="action" value="maintenance_on">
+                        <button class="btn btn-outline-warning w-100"><i class="fa-solid fa-screwdriver-wrench me-2"></i>Đặt chế độ bảo trì</button></form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header">Người được cấp quyền ({{ accesses|length }})</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Người dùng</th><th>Quyền</th><th>Nguồn</th><th>Hết hạn</th></tr></thead>
+                <tbody>
+                {% for a in accesses %}<tr><td class="text-break">{{ a.user.email }}</td><td>{% for p in a.permissions.all %}<span class="badge text-bg-light border">{{ p.code }}</span> {% empty %}—{% endfor %}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
+                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa chia sẻ cho ai</td></tr>{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Đầu đọc NFC ({{ readers|length }})</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Tên</th><th>Loại</th><th>Hoạt động</th><th>Thấy lần cuối</th></tr></thead>
+                <tbody>
+                {% for r in readers %}<tr><td>{{ r.name|default:"—" }}</td><td>{{ r.reader_mode|vi }}</td><td>{{ r.is_active|yesno:"Có,Không" }}</td><td>{{ r.last_seen_at|date:"d/m H:i"|default:"—" }}</td></tr>
+                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có đầu đọc</td></tr>{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Lệnh gần đây</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Thời gian</th><th>Lệnh</th><th>Người gửi</th><th>Trạng thái</th></tr></thead>
+                <tbody>
+                {% for c in commands %}<tr><td>{{ c.created_at|date:"d/m H:i" }}</td><td>{{ c.command_type }}</td><td class="text-break">{{ c.issued_by.email }}</td><td>{{ c.status }}</td></tr>
+                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có lệnh</td></tr>{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-xl-6"><div class="card h-100">
+                <div class="card-header">Yêu cầu hỗ trợ</div>
+                <div class="list-group list-group-flush">
+                    {% for s in support_reqs %}<a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="{% url 'manage_sys:support-detail' s.id %}"><span>{{ s.get_action_display }}</span><span class="badge text-bg-{{ s.status|badge }}">{{ s.status|vi }}</span></a>
+                    {% empty %}<div class="list-group-item text-center text-muted">Không có</div>{% endfor %}
+                </div></div></div>
+            <div class="col-xl-6"><div class="card h-100">
+                <div class="card-header">Nhật ký thiết bị</div>
+                <div class="list-group list-group-flush">
+                    {% for l in logs %}<div class="list-group-item d-flex justify-content-between align-items-center gap-2"><span class="mono text-break">{{ l.action }}</span><small class="text-muted text-nowrap">{{ l.created_at|date:"d/m H:i" }}</small></div>
+                    {% empty %}<div class="list-group-item text-center text-muted">Không có</div>{% endfor %}
+                </div></div></div>
+        </div>
+    </div>
+</div>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
