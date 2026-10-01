@@ -36,9 +36,9 @@ from django.utils import timezone
 from django.utils.html import linebreaks, strip_tags, urlize
 
 from .models import (
-    AccessCard, AccessEvent, AuditLog, AutomationRule, AutomationRuleLog, Device, DeviceAccess,
-    DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, Notification, OneTimeCode,
-    SystemSettings, User, hash_card_uid,
+    AccessCard, AccessEvent, AuditLog, AutomationRule, AutomationRuleLog, CardDeviceAccess, Device,
+    DeviceAccess, DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, NfcLog, NfcReader,
+    Notification, OneTimeCode, ShareAccessCode, SystemSettings, User, hash_card_uid,
 )
 
 logger = logging.getLogger('smartlock.services')
@@ -133,12 +133,19 @@ def audit(request, action, *, device=None, target_user=None, success=True,
           severity='info', metadata=None, actor='auto', username_attempt=None):
     if actor == 'auto':
         actor = request.user if request.user.is_authenticated else None
+    snapshot = dict(metadata or {})
+    if actor is not None:
+        snapshot.setdefault('actor_email', actor.email)
+    if target_user is not None:
+        snapshot.setdefault('target_email', target_user.email)
+    if device is not None:
+        snapshot.setdefault('device_code', device.device_code)
     try:
         with transaction.atomic():  # savepoint: lỗi ghi log không làm hỏng transaction bên ngoài
             AuditLog.objects.create(
                 actor_user=actor, target_user=target_user, device=device, action=action[:50],
                 username_attempt=username_attempt, severity=severity, success=success,
-                ip_address=client_ip(request), user_agent=user_agent(request), metadata=metadata,
+                ip_address=client_ip(request), user_agent=user_agent(request), metadata=snapshot or None,
             )
     except Exception:
         logger.exception('audit: không ghi được log %s', action)
@@ -389,7 +396,7 @@ BURST_STAGE_WINDOW_SECONDS = 24 * 3600     # số lần khoá trong 24h quyết 
 BURST_NOTIFY_COOLDOWN_SECONDS = 600        # tối đa 1 thông báo ACCESS_BURST / 10 phút / thiết bị
 LOCKOUT_ACTION = 'ACCESS_BURST_LOCKOUT'
 # Không tính vào bộ đếm: bị chặn do đang khoá (nếu tính sẽ tự gia hạn khoá mãi) và lỗi MQTT.
-NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED')
+NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED', 'CARD_REGISTERED')
 
 
 def normalize_uid(raw_uid: str) -> str:
@@ -462,6 +469,52 @@ def _log_event(occurred_at=None, **kwargs) -> AccessEvent:
 
 
 # ---------------------------------------------------------------- RFID
+def _auto_register_card(device, raw_uid, ip_address=None):
+    """Đầu đọc của khoá đang trong cửa sổ đăng ký (auto_register_until còn hạn) + có chủ:
+    thẻ lạ quẹt vào sẽ được gắn cho CHỦ khoá, KHÔNG cần admin duyệt. Trả về AccessEvent nếu đã
+    xử lý (đăng ký xong), None nếu không áp dụng. Việc này không mở cửa và không tính vào bộ đếm sai."""
+    if not device.owner_id:
+        return None
+    now = timezone.now()
+    reader = NfcReader.objects.filter(device=device, is_active=True, auto_register=True,
+                                      auto_register_until__gt=now).first()
+    if not reader:
+        return None
+    uid = normalize_uid(raw_uid)
+    if len(uid) < 4:
+        return None
+    uid_hashes = [hash_card_uid(uid), hash_token(uid)]
+    card = AccessCard.objects.filter(card_uid_hash__in=uid_hashes).first()
+    if card and card.user_id != device.owner_id:
+        AuditLog.objects.create(device=device, action='CARD_AUTO_REGISTER_FAILED', success=False,
+                                severity='warning', ip_address=ip_address,
+                                metadata={'reason': 'owned_by_other_user', 'reader_id': str(reader.id)})
+        return None
+    with transaction.atomic():
+        if not card:
+            card = AccessCard.objects.create(card_uid_hash=hash_card_uid(uid), user=device.owner,
+                                             name='Thẻ đăng ký tại đầu đọc', is_active=True)
+        link, _ = CardDeviceAccess.objects.get_or_create(access_card=card, device=device)
+        if not link.is_active:
+            link.is_active = True
+            link.save(update_fields=['is_active'])
+        NfcLog.objects.create(reader=reader, nfc_tag=card, device=device, user=device.owner,
+                              event_type='CARD_REGISTER', ip_address=ip_address,
+                              metadata={'via': 'reader_tap', 'auto_register': True})
+        AuditLog.objects.create(actor_user=None, target_user=device.owner, device=device,
+                                action='CARD_AUTO_REGISTERED', ip_address=ip_address,
+                                metadata={'card_id': str(card.id), 'reader_id': str(reader.id),
+                                          'device_code': device.device_code})
+    Notification.objects.create(
+        user=device.owner, device=device, type='CARD', severity='info',
+        title='Đã thêm thẻ mới tại đầu đọc'[:150],
+        message=f'Một thẻ vừa được đăng ký tại đầu đọc của khoá \"{device.name}\". '
+                'Nếu không phải bạn, hãy vô hiệu hoá thẻ trong mục Thẻ NFC.')
+    return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
+                      reason='CARD_REGISTERED', user=device.owner, access_card=card,
+                      ip_address=ip_address)
+
+
 def verify_rfid_tap(device, raw_uid: str, ip_address=None) -> AccessEvent:
     """ESP32 đọc UID thẻ (RC522) và publish lên MQTT; server chỉ so khớp UID (đã hash) rồi ra lệnh mở."""
     with transaction.atomic():
@@ -475,6 +528,9 @@ def verify_rfid_tap(device, raw_uid: str, ip_address=None) -> AccessEvent:
             carddeviceaccess__device=device, carddeviceaccess__is_active=True,
         ).first()
         if not card:
+            registered = _auto_register_card(device, raw_uid, ip_address)
+            if registered:
+                return registered
             return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
                               reason='UNKNOWN_CARD', ip_address=ip_address)
 
@@ -582,15 +638,24 @@ def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None
                       snapshot_url=snapshot_url, ip_address=ip_address)
 
 
-def register_face(device, user, embedding: list, name: str = '', consent_confirmed: bool = False) -> FaceProfile:
+def register_face(device, user, embedding: list, name: str = '', consent_confirmed: bool = False,
+                  request=None) -> FaceProfile:
+    """CHỈ được gọi từ giao diện app/web của chủ/người có quyền. Không được gọi từ subscriber MQTT
+    (khoá/camera không có đường đăng ký khuôn mặt)."""
+    if not consent_confirmed:
+        raise ValueError('Cần xác nhận đồng ý thu thập dữ liệu khuôn mặt.')
     profile, _created = FaceProfile.objects.update_or_create(
         user=user, device=device,
         defaults={'name': name, 'consent_confirmed': consent_confirmed, 'is_active': True},
     )
     profile.set_embedding(embedding)
     profile.save()
-    AuditLog.objects.create(actor_user=user, device=device, action='FACE_PROFILE_REGISTERED',
-                            metadata={'face_profile_id': str(profile.id)})
+    meta = {'face_profile_id': str(profile.id)}
+    if request is not None:
+        audit(request, 'FACE_PROFILE_REGISTERED', device=device, target_user=user, metadata=meta)
+    else:
+        AuditLog.objects.create(actor_user=user, device=device, action='FACE_PROFILE_REGISTERED',
+                                metadata=meta)
     return profile
 
 
@@ -874,3 +939,143 @@ def _on_notification_saved(sender, instance, created, **kwargs):
 def register_signals():
     """Gọi 1 lần trong AppConfig.ready()."""
     post_save.connect(_on_notification_saved, sender=Notification, dispatch_uid='push_on_notification')
+
+# ============================================================================
+# 7. VÒNG ĐỜI KHOÁ: KẾT NỐI / CLAIM / GỠ CHỦ / XOAY SECRET
+# ============================================================================
+# Quy tắc nghiệp vụ:
+#   - 'provisioning' = khoá mới, chưa từng có chủ  -> ADMIN hoặc USER đều gán/claim được.
+#   - 'revoked'      = đã bị gỡ chủ (factory_reset) -> CHỈ USER tự claim (kể cả chủ cũ); admin KHÔNG gán lại.
+#   - Mọi lần claim đều yêu cầu khoá ĐANG kết nối thật (có status/ack gần đây), kể cả khoá giả lập.
+ONLINE_WINDOW_SECONDS = 120        # status/ack trong vòng 2 phút => coi là đang kết nối
+CLAIM_MAX_FAILS = 5                # sai secret quá số lần này trong cửa sổ => tạm chặn user đó
+CLAIM_FAIL_WINDOW_SECONDS = 600
+
+
+class ClaimError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def touch_device(device, *, firmware=None, battery=None) -> None:
+    """SUBSCRIBER MQTT phải gọi hàm này mỗi khi nhận status/ack/event từ thiết bị.
+    Dùng queryset.update() nên KHÔNG vi phạm chk_devices_owner_vs_status: khoá chưa có chủ chỉ
+    được cập nhật last_seen_at, không bao giờ bị đặt 'online'."""
+    now = timezone.now()
+    fields = {'last_seen_at': now, 'updated_at': now}
+    if firmware:
+        fields['firmware_version'] = str(firmware)[:30]
+    if battery is not None:
+        try:
+            fields['battery_level'] = max(0, min(100, int(battery)))
+        except (TypeError, ValueError):
+            pass
+    Device.objects.filter(pk=device.pk).update(**fields)
+    Device.objects.filter(pk=device.pk, owner__isnull=False, status='offline').update(status='online')
+
+
+def link_status(device, window: int = ONLINE_WINDOW_SECONDS) -> dict:
+    """Bằng chứng khoá đang nối với hệ thống: lần nhận tin MỚI NHẤT (last_seen_at hoặc
+    DeviceStatusLog) còn trong cửa sổ `window` giây. Kèm kết quả PING gần nhất (vòng hai chiều)."""
+    device = Device.objects.get(pk=device.pk)
+    last_log = (DeviceStatusLog.objects.filter(device=device).order_by('-recorded_at')
+                .values_list('recorded_at', flat=True).first())
+    seen = [t for t in (device.last_seen_at, last_log) if t]
+    last = max(seen) if seen else None
+    age = (timezone.now() - last).total_seconds() if last else None
+    ping = DeviceCommand.objects.filter(device=device, command_type='PING').order_by('-created_at').first()
+    return {
+        'connected': bool(last is not None and age <= window),
+        'last_seen_at': last,
+        'seconds_ago': int(age) if age is not None else None,
+        'firmware': device.firmware_version, 'battery': device.battery_level,
+        'mac': device.mac_address, 'status': device.status, 'has_owner': bool(device.owner_id),
+        'ping_status': ping.status if ping else None,
+        'ping_at': ping.created_at if ping else None,
+    }
+
+
+def ping_device(device, issued_by) -> DeviceCommand:
+    """Gửi PING (hai chiều: thiết bị phải ack). issued_by bắt buộc vì khoá chưa có chủ."""
+    return dispatch_command(device, 'PING', source='admin', issued_by=issued_by, ttl=15)
+
+
+def claim_device(device_id, new_owner, *, by_admin: bool) -> Device:
+    """Gán chủ cho khoá. Dùng chung cho admin và user (người gọi tự ghi audit)."""
+    with transaction.atomic():
+        device = Device.objects.select_for_update().get(pk=device_id)
+        if device.owner_id:
+            raise ClaimError('ALREADY_OWNED', 'Thiết bị đã có chủ sở hữu.')
+        if device.status not in Device.NO_OWNER_STATUSES:
+            raise ClaimError('BAD_STATE', 'Trạng thái thiết bị không cho phép gán chủ.')
+        if not new_owner.is_active:
+            raise ClaimError('OWNER_INACTIVE', 'Tài khoản chủ sở hữu đang bị vô hiệu hoá.')
+        if by_admin and device.status != 'provisioning':
+            raise ClaimError('ADMIN_CANNOT_REASSIGN',
+                             'Khoá đã bị gỡ chủ (revoked): quản trị viên không được gán lại. '
+                             'Người dùng phải tự thêm khoá bằng mã thiết bị + secret.')
+        if not link_status(device)['connected']:
+            raise ClaimError('NOT_CONNECTED',
+                             'Khoá chưa kết nối với hệ thống (chưa nhận được tín hiệu gần đây). '
+                             'Hãy cấp nguồn/kết nối mạng cho khoá rồi thử lại.')
+        device.owner = new_owner
+        device.status = 'online'
+        fields = ['owner', 'status', 'updated_at']
+        if not device.is_purchased:
+            device.is_purchased = True
+            device.purchased_at = timezone.now()
+            fields += ['is_purchased', 'purchased_at']
+        device.save(update_fields=fields)
+        return device
+
+
+def user_claim_device(user, device_code: str, secret: str, request=None) -> Device:
+    """User tự claim khoá bằng device_code + provisioning secret (kể cả chủ cũ). Có giới hạn thử sai."""
+    since = timezone.now() - timedelta(seconds=CLAIM_FAIL_WINDOW_SECONDS)
+    fails = AuditLog.objects.filter(actor_user=user, action='DEVICE_CLAIM_FAILED',
+                                    created_at__gte=since).count()
+    if fails >= CLAIM_MAX_FAILS:
+        raise ClaimError('RATE_LIMITED', 'Bạn đã thử sai quá nhiều lần. Vui lòng thử lại sau ít phút.')
+    code = (device_code or '').strip().upper()
+    device = Device.objects.filter(device_code=code).first()
+    ok = bool(device and secret and hmac.compare_digest(device.provisioning_secret_hash, hash_token(secret)))
+    if not ok:
+        raise ClaimError('BAD_CREDENTIALS', 'Mã thiết bị hoặc secret không đúng.')   # không lộ cái nào sai
+    return claim_device(device.pk, user, by_admin=False)
+
+
+def release_device(device_id):
+    """Gỡ chủ: factory_reset (status=revoked, owner=None) + thu hồi mọi quyền truy cập cũ.
+    Trả về (device, chủ_cũ, số_lượng_đã_thu_hồi). Người gọi ghi audit + thông báo."""
+    with transaction.atomic():
+        device = Device.objects.select_for_update().select_related('owner').get(pk=device_id)
+        if not device.owner_id:
+            raise ClaimError('NO_OWNER', 'Thiết bị hiện không có chủ.')
+        previous = device.owner
+        now = timezone.now()
+        counts = {
+            'accesses': DeviceAccess.objects.filter(device=device, is_active=True)
+                        .update(is_active=False, revoked_at=now),
+            'cards': CardDeviceAccess.objects.filter(device=device, is_active=True).update(is_active=False),
+            'pins': DoorPinCode.objects.filter(device=device, is_revoked=False)
+                    .update(is_revoked=True, revoked_at=now),
+            'faces': FaceProfile.objects.filter(device=device, is_active=True).update(is_active=False),
+            'share_codes': ShareAccessCode.objects.filter(device=device).delete()[0],
+            'commands': DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'))
+                        .update(status='expired'),
+        }
+        device.factory_reset()
+        return device, previous, counts
+
+
+def rotate_secret(device_id) -> tuple:
+    """Xoay provisioning secret. Trả về (device, secret_gốc). Thiết bị phải nạp lại secret mới;
+    vé BLE đã cấp (ký bằng secret cũ) cũng mất hiệu lực."""
+    with transaction.atomic():
+        device = Device.objects.select_for_update().get(pk=device_id)
+        secret = secrets.token_hex(16)
+        device.provisioning_secret_hash = hash_token(secret)
+        device.save(update_fields=['provisioning_secret_hash', 'updated_at'])
+        return device, secret

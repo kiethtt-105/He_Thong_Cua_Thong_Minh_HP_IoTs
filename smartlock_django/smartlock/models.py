@@ -264,7 +264,8 @@ class DeviceCommand(models.Model):
     command_type = models.CharField(
         max_length=50,
         choices=[('UNLOCK', 'Unlock'), ('LOCK', 'Lock'), ('ADD_CARD', 'Add Card'), ('REMOVE_CARD', 'Remove Card'),
-                 ('RESET', 'Reset'), ('OTA_UPDATE', 'OTA Update'), ('REBOOT', 'Reboot')]
+                 ('RESET', 'Reset'), ('OTA_UPDATE', 'OTA Update'), ('REBOOT', 'Reboot'),
+                 ('PING', 'Ping (kiểm tra kết nối)')]
     )
     payload = models.JSONField(null=True, blank=True)
     status = models.CharField(max_length=20, default='pending', choices=[('pending', 'Pending'), ('sent', 'Sent'), ('acknowledged', 'Acknowledged'), ('failed', 'Failed'), ('expired', 'Expired')])
@@ -373,6 +374,8 @@ class NfcReader(models.Model):
     last_seen_at = models.DateTimeField(null=True, blank=True)
     # --- Cấu hình đầu đọc (trước đây là bảng NfcReaderConfig, gộp vào đây) ---
     auto_register = models.BooleanField(default=False)
+    # Đăng ký thẻ bằng cách quẹt tại đầu đọc chỉ có hiệu lực trong cửa sổ ngắn (tự tắt khi hết hạn).
+    auto_register_until = models.DateTimeField(null=True, blank=True)
     grant_permission = models.JSONField(default=list)
     valid_from = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField(null=True, blank=True)
@@ -381,6 +384,11 @@ class NfcReader(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['device', 'created_at'], name='idx_nfcreader_dev_time')]
+
+    @property
+    def auto_register_active(self) -> bool:
+        return bool(self.auto_register and self.auto_register_until
+                    and self.auto_register_until > timezone.now())
 
     @property
     def config(self):
@@ -695,9 +703,23 @@ def set_updated_at_device(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
 
 
+AUTO_REGISTER_WINDOW_SECONDS = 60
+
+
 @receiver(pre_save, sender=NfcReader)
 def set_updated_at_nfc_reader(sender, instance, **kwargs):
-    instance.updated_at = timezone.now()
+    from datetime import timedelta
+    now = timezone.now()
+    instance.updated_at = now
+    # Bật auto_register => mở cửa sổ 60s; hết cửa sổ mà còn lưu lại => tự tắt.
+    if instance.auto_register:
+        if instance.auto_register_until is None:
+            instance.auto_register_until = now + timedelta(seconds=AUTO_REGISTER_WINDOW_SECONDS)
+        elif instance.auto_register_until <= now:
+            instance.auto_register = False
+            instance.auto_register_until = None
+    else:
+        instance.auto_register_until = None
 
 
 @receiver(pre_save, sender=SystemSettings)

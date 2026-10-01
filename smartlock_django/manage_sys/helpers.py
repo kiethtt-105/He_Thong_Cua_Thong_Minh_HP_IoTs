@@ -70,9 +70,10 @@ def client_ip(request):
     ip = None
     if getattr(dj_settings, 'TRUST_PROXY_HEADERS', False):
         # Phần tử ĐẦU của X-Forwarded-For do client tự gửi -> giả mạo được. Lấy phần tử do
-        # proxy của mình thêm vào: đếm từ cuối (TRUSTED_PROXY_COUNT = số proxy phía trước app, mặc định 1).
+        # proxy của mình thêm vào: đếm từ cuối (settings.TRUST_PROXY_COUNT = số proxy phía trước app, mặc định 1).
         parts = [p for p in (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',') if p.strip()]
-        n = max(1, int(getattr(dj_settings, 'TRUSTED_PROXY_COUNT', 1)))
+        n = max(1, int(getattr(dj_settings, 'TRUST_PROXY_COUNT',
+                               getattr(dj_settings, 'TRUSTED_PROXY_COUNT', 1)) or 1))
         if len(parts) >= n:
             ip = _valid(parts[-n])
     return ip or _valid(request.META.get('REMOTE_ADDR')) or '0.0.0.0'
@@ -110,12 +111,21 @@ def audit(request, action, *, device=None, target_user=None, success=True,
           severity='info', metadata=None, actor='auto', username_attempt=None):
     if actor == 'auto':
         actor = request.user if request.user.is_authenticated else None
+    # Snapshot danh tính vào metadata: log vẫn đọc được dù user/thiết bị sau này bị xoá (FK SET_NULL).
+    snapshot = dict(metadata or {})
+    if actor is not None:
+        snapshot.setdefault('actor_email', actor.email)
+    if target_user is not None:
+        snapshot.setdefault('target_email', target_user.email)
+    if device is not None:
+        snapshot.setdefault('device_code', device.device_code)
     try:
-        AuditLog.objects.create(
-            actor_user=actor, target_user=target_user, device=device, action=action[:50],
-            username_attempt=username_attempt, severity=severity, success=success,
-            ip_address=client_ip(request), user_agent=user_agent(request), metadata=metadata,
-        )
+        with transaction.atomic():   # savepoint: lỗi ghi log không làm hỏng transaction bên ngoài
+            AuditLog.objects.create(
+                actor_user=actor, target_user=target_user, device=device, action=action[:50],
+                username_attempt=username_attempt, severity=severity, success=success,
+                ip_address=client_ip(request), user_agent=user_agent(request), metadata=snapshot or None,
+            )
     except Exception:
         logger.exception('manage_sys audit: không ghi được log %s', action)
 

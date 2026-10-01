@@ -13,16 +13,18 @@ from types import SimpleNamespace
 from django.conf import settings as dj_settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
+from smartlock import services
 from smartlock.models import (
     Announcement, AuditLog, Device, DeviceAccess, DeviceCommand, DeviceStatusLog,
     NfcReader, SupportRequest, User,
@@ -252,6 +254,7 @@ def user_detail(request, user_id):
             messages.error(request, 'Hành động không hợp lệ.')
         return back
 
+    audit(request, 'MANAGE_VIEW_USER', target_user=target)   # admin xem hồ sơ user cũng được ghi
     now = timezone.now()
     # Giữ nguyên tên thuộc tính cũ (failed_attempts, stage, locked_until...) cho template.
     lock = SimpleNamespace(
@@ -285,7 +288,8 @@ _MAC_RE = re.compile(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$')
 @manage_required
 @require_http_methods(['GET', 'POST'])
 def device_create(request):
-    """Admin thêm thiết bị + (tùy chọn) chỉ định chủ. Không can thiệp sâu hơn."""
+    """Admin thêm thiết bị MỚI. Khoá luôn được tạo ở trạng thái 'provisioning' (chưa có chủ);
+    việc gán chủ làm sau ở trang chi tiết (nút Claim) và CHỈ được khi khoá đã kết nối thật."""
     if request.method == 'POST':
         form = {k: (request.POST.get(k) or '').strip() for k in
                 ('device_code', 'name', 'device_mode', 'owner_email', 'mac_address')}
@@ -317,25 +321,19 @@ def device_create(request):
             messages.error(request, error)
         else:
             secret = secrets.token_urlsafe(24)
-            with transaction.atomic():
-                device = Device.objects.create(
-                    device_code=code, name=form['name'][:100], device_mode=mode,
-                    mac_address=mac or None, owner=owner,
-                    provisioning_secret_hash=make_password(secret),
-                    # Ràng buộc DB: có chủ -> không được ở 'provisioning'
-                    status='offline' if owner else 'provisioning',
-                )
-                if owner:
-                    device.mark_purchased()
-            audit(request, 'MANAGE_DEVICE_CREATED', device=device, target_user=owner, severity='warning',
-                  metadata={'device_code': code, 'mode': mode})
-            if owner:
-                notify(owner, 'Thiết bị mới được thêm',
-                       f'Quản trị viên đã thêm thiết bị "{device.name}" vào tài khoản của bạn.',
-                       device=device, type_='DEVICE')
+            device = Device.objects.create(
+                device_code=code, name=form['name'][:100], device_mode=mode,
+                mac_address=mac or None, owner=None, status='provisioning',
+                # PHẢI cùng kiểu hash với mqtt_auth_webhook/BLE (SHA-256). Trước đây dùng make_password
+                # nên thiết bị do admin tạo không bao giờ đăng nhập được broker.
+                provisioning_secret_hash=services.hash_token(secret),
+            )
+            audit(request, 'MANAGE_DEVICE_CREATED', device=device, severity='warning',
+                  metadata={'device_code': code, 'mode': mode, 'pending_owner': owner.email if owner else None})
             # Secret chỉ hiển thị 1 lần (DB chỉ lưu hash) -> render thẳng, không redirect
             return render(request, 'manage_sys/devices/created.html', {
-                'device': device, 'secret': secret,
+                'device': device, 'secret': secret, 'pending_owner': owner,
+                'claim_url': reverse('manage_sys:device-detail', args=[device.id]),
                 'api_base': request.build_absolute_uri('/').rstrip('/'),
             })
 
@@ -365,22 +363,16 @@ def devices_list(request):
     })
 
 
-@manage_required
-@require_http_methods(['GET', 'POST'])
-def device_detail(request, device_id):
-    device = get_object_or_404(Device.objects.select_related('owner'), id=device_id)
+def _device_actions(request, device):
+    """Xử lý POST ở trang chi tiết thiết bị. Trả về response (redirect/render) hoặc None."""
     back = redirect('manage_sys:device-detail', device_id=device.id)
+    action = request.POST.get('action')
+    confirm = (request.POST.get('confirm') or '').strip().upper()
 
-    if request.method == 'POST':
-        action = request.POST.get('action')
-        if action not in ('maintenance_on', 'maintenance_off'):
-            messages.error(request, 'Hành động không hợp lệ.')
-            return back
+    if action in ('maintenance_on', 'maintenance_off'):
         if not device.owner_id:
-            # Ràng buộc DB: chưa có chủ thì phải ở trạng thái 'provisioning'
             messages.error(request, 'Thiết bị chưa có chủ sở hữu nên không thể đổi trạng thái.')
             return back
-
         if action == 'maintenance_on' and device.status != 'maintenance':
             device.status = 'maintenance'
             title, msg = 'Thiết bị vào chế độ bảo trì', f'Thiết bị "{device.name}" đang được quản trị viên đặt ở chế độ bảo trì.'
@@ -392,15 +384,102 @@ def device_detail(request, device_id):
         else:
             messages.info(request, 'Trạng thái không thay đổi.')
             return back
-
         device.save(update_fields=['status', 'updated_at'])
         audit(request, log_action, device=device, target_user=device.owner, severity='warning')
         notify(device.owner, title, msg, severity='warning', device=device, type_='DEVICE')
         messages.success(request, 'Đã cập nhật trạng thái thiết bị.')
         return back
 
+    if action == 'ping':
+        cmd = services.ping_device(device, issued_by=request.user)
+        ok = cmd.status == 'sent'
+        audit(request, 'MANAGE_DEVICE_PING', device=device, success=ok,
+              metadata={'command_id': str(cmd.id), 'error': getattr(cmd, 'publish_error', '') or None})
+        messages.success(request, 'Đã gửi PING, chờ thiết bị phản hồi (xem chỉ báo kết nối).') if ok else \
+            messages.error(request, 'Không gửi được PING tới broker MQTT.')
+        return back
+
+    if action == 'claim':
+        owner = _find_user(request.POST.get('owner'))
+        if not owner:
+            messages.error(request, 'Không tìm thấy người dùng để gán làm chủ.')
+            return back
+        try:
+            services.claim_device(device.id, owner, by_admin=True)
+        except services.ClaimError as exc:
+            audit(request, 'MANAGE_DEVICE_CLAIM_FAILED', device=device, target_user=owner, success=False,
+                  severity='warning', metadata={'code': exc.code})
+            messages.error(request, exc.message)
+            return back
+        audit(request, 'MANAGE_DEVICE_CLAIMED', device=device, target_user=owner, severity='critical',
+              metadata={'owner_email': owner.email})
+        notify(owner, 'Bạn đã trở thành chủ khoá',
+               f'Quản trị viên đã gán khoá "{device.name}" cho tài khoản của bạn.', device=device, type_='DEVICE')
+        messages.success(request, f'Đã gán khoá cho {owner.email}.')
+        return back
+
+    if action == 'remove_owner':
+        if confirm != device.device_code:
+            messages.error(request, 'Nhập đúng mã thiết bị vào ô xác nhận để gỡ chủ.')
+            return back
+        try:
+            _dev, previous, counts = services.release_device(device.id)
+        except services.ClaimError as exc:
+            messages.error(request, exc.message)
+            return back
+        audit(request, 'MANAGE_DEVICE_OWNER_REMOVED', device=device, target_user=previous, severity='critical',
+              metadata={'previous_owner': previous.email, 'revoked': counts})
+        notify(previous, 'Khoá đã bị gỡ khỏi tài khoản của bạn',
+               f'Quản trị viên đã gỡ chủ sở hữu khoá "{device.name}". Mọi quyền truy cập, thẻ, mã PIN và '
+               'khuôn mặt của khoá đã bị vô hiệu hoá. Bạn có thể tự thêm lại bằng mã thiết bị + secret.',
+               severity='critical', device=device, type_='DEVICE')
+        messages.success(request, 'Đã gỡ chủ. Chỉ người dùng mới tự thêm lại được khoá này (admin không gán lại).')
+        return back
+
+    if action == 'rotate_secret':
+        if confirm != device.device_code:
+            messages.error(request, 'Nhập đúng mã thiết bị vào ô xác nhận để xoay secret.')
+            return back
+        dev, secret = services.rotate_secret(device.id)
+        audit(request, 'MANAGE_DEVICE_SECRET_ROTATED', device=dev, target_user=dev.owner, severity='critical')
+        if dev.owner_id:
+            notify(dev.owner, 'Secret thiết bị đã được đổi',
+                   f'Quản trị viên đã đổi secret kết nối của "{dev.name}". Thiết bị cần được nạp lại secret mới.',
+                   severity='warning', device=dev, type_='DEVICE')
+        return render(request, 'manage_sys/devices/created.html', {
+            'device': dev, 'secret': secret, 'rotated': True,
+            'claim_url': reverse('manage_sys:device-detail', args=[dev.id]),
+            'api_base': request.build_absolute_uri('/').rstrip('/'),
+        })
+
+    messages.error(request, 'Hành động không hợp lệ.')
+    return back
+
+
+@manage_required
+@require_http_methods(['GET', 'POST'])
+def device_detail(request, device_id):
+    device = get_object_or_404(Device.objects.select_related('owner'), id=device_id)
+
+    if request.method == 'POST':
+        return _device_actions(request, device)
+
+    audit(request, 'MANAGE_VIEW_DEVICE', device=device, target_user=device.owner)   # admin xem dữ liệu cũng được ghi
+    link = services.link_status(device)
     context = {
         'device': device,
+        'link': link,
+        # Toàn bộ thông tin thiết lập khoá để admin xem (secret gốc không lưu, chỉ có dấu vân tay hash).
+        'setup': {
+            'device_code': device.device_code, 'mqtt_username': device.device_code,
+            'secret_fingerprint': (device.provisioning_secret_hash or '')[:8],
+            'mac': device.mac_address, 'firmware': device.firmware_version, 'mode': device.device_mode,
+            'cmd_topic': f'smartlock/{device.device_code}/cmd',
+            'publish_topics': [f'smartlock/{device.device_code}/{c}' for c in ('status', 'ack', 'event')],
+        },
+        # Admin chỉ được gán chủ cho khoá MỚI (provisioning). Khoá revoked => chỉ user tự thêm.
+        'admin_can_claim': (not device.owner_id) and device.status == 'provisioning',
+        'user_must_claim': (not device.owner_id) and device.status == 'revoked',
         'last_log': DeviceStatusLog.objects.filter(device=device).order_by('-recorded_at').first(),
         'commands': (DeviceCommand.objects.filter(device=device)
                      .select_related('issued_by').order_by('-created_at')[:10]),
@@ -413,6 +492,22 @@ def device_detail(request, device_id):
                  .select_related('actor_user').order_by('-created_at')[:10]),
     }
     return render(request, 'manage_sys/devices/detail.html', context)
+
+
+@manage_required
+def device_link_status(request, device_id):
+    """JSON cho chỉ báo 'đã kết nối?' ở trang chi tiết (trang tự gọi lặp mỗi vài giây). Chỉ đọc."""
+    device = get_object_or_404(Device, id=device_id)
+    st = services.link_status(device)
+    resp = JsonResponse({
+        'connected': st['connected'], 'seconds_ago': st['seconds_ago'],
+        'last_seen_at': st['last_seen_at'].isoformat() if st['last_seen_at'] else None,
+        'firmware': st['firmware'], 'battery': st['battery'], 'status': st['status'],
+        'has_owner': st['has_owner'], 'ping_status': st['ping_status'],
+        'ping_at': st['ping_at'].isoformat() if st['ping_at'] else None,
+    })
+    resp['Cache-Control'] = 'no-store'
+    return resp
 
 
 # ====================== SUPPORT ======================
@@ -539,6 +634,7 @@ def audit_logs(request):
     if scope == 'manage':
         qs = qs.filter(action__startswith='MANAGE_')
 
+    audit(request, 'MANAGE_VIEW_AUDIT_LOGS', metadata={'q': q[:80], 'status': status, 'severity': severity})
     page_obj, qs_str = paginate(request, qs)
     return render(request, 'manage_sys/audit/logs.html', {
         'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status,
@@ -647,6 +743,8 @@ def settings_system(request):
                 messages.error(request, e)
             return redirect('manage_sys:settings')
 
+        before = {'expiry': st.verification_token_expiry_minutes, 'share': st.share_code_expiry_minutes,
+                  'timeout': st.session_timeout_hours, 'stages': st.login_lockout_stage_minutes}
         was_registration = st.registration_enabled
         st.registration_enabled = 'registration_enabled' in request.POST
         st.verification_token_expiry_minutes = expiry
@@ -659,7 +757,9 @@ def settings_system(request):
         st.save()
         audit(request, 'MANAGE_SETTINGS_UPDATED', severity='warning',
               metadata={'registration_enabled': [was_registration, st.registration_enabled],
-                        'blacklist_count': len(blacklist)})
+                        'blacklist_count': len(blacklist),
+                        'before': before,
+                        'after': {'expiry': expiry, 'share': share, 'timeout': timeout, 'stages': stages}})
         messages.success(request, 'Đã lưu cài đặt hệ thống.')
         return redirect('manage_sys:settings')
 

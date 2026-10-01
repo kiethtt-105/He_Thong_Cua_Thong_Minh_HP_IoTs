@@ -6,7 +6,11 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from smartlock.models import AuditLog, Device, Notification, SupportRequest, User
+from smartlock import services
+from smartlock.models import (
+    AccessCard, AuditLog, CardDeviceAccess, Device, DeviceStatusLog, NfcReader, Notification,
+    SupportRequest, User,
+)
 
 PREFIX = getattr(settings, 'MANAGE_SYS_URL_PREFIX', '/manage-sys/')
 ADMIN_COOKIE = getattr(settings, 'MANAGE_SYS_SESSION_COOKIE_NAME', 'manage_sys_sessionid')
@@ -142,3 +146,133 @@ class ActionTests(ManageSysBase):
         self.assertEqual(r.status_code, 302)
         from smartlock.models import SystemSettings
         self.assertEqual(SystemSettings.objects.get(pk=1).ip_blacklist, '')
+
+
+class DeviceLifecycleTests(ManageSysBase):
+    """Quy tắc: admin chỉ gán chủ cho khoá MỚI (provisioning) và chỉ khi khoá đang kết nối;
+    khoá bị gỡ chủ (revoked) chỉ user tự claim (kể cả chủ cũ); mọi thao tác đều có AuditLog."""
+    SECRET = 's3cret-value'
+
+    def setUp(self):
+        super().setUp()
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        self.device = Device.objects.create(
+            device_code='DEV-LIFE0001', provisioning_secret_hash=services.hash_token(self.SECRET),
+            name='Khoá thử', status='provisioning', owner=None)
+        self.url = reverse('manage_sys:device-detail', args=[self.device.id])
+
+    def _connect(self):
+        DeviceStatusLog.objects.create(device=self.device, battery_level=90, lock_state='locked')
+
+    def _claim(self, who=None):
+        return self.client.post(self.url, {'action': 'claim', 'owner': (who or self.user).email})
+
+    def test_admin_created_device_uses_sha256_secret_and_has_no_owner(self):
+        r = self.client.post(reverse('manage_sys:device-create'), {
+            'device_code': 'DEV-NEW0001', 'name': 'Mới', 'device_mode': 'simulated',
+            'owner_email': '', 'mac_address': ''})
+        d = Device.objects.get(device_code='DEV-NEW0001')
+        self.assertIsNone(d.owner)
+        self.assertEqual(d.status, 'provisioning')
+        # đúng kiểu hash mà mqtt_auth_webhook so sánh => thiết bị đăng nhập được broker
+        self.assertEqual(d.provisioning_secret_hash, services.hash_token(r.context['secret']))
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_DEVICE_CREATED', device=d).exists())
+
+    def test_claim_denied_when_not_connected(self):
+        self._claim()
+        self.device.refresh_from_db()
+        self.assertIsNone(self.device.owner)
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_DEVICE_CLAIM_FAILED', success=False,
+                                                metadata__code='NOT_CONNECTED').exists())
+
+    def test_claim_ok_when_connected(self):
+        self._connect()
+        self._claim()
+        self.device.refresh_from_db()
+        self.assertEqual((self.device.owner_id, self.device.status), (self.user.id, 'online'))
+        self.assertTrue(self.device.is_purchased)
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_DEVICE_CLAIMED', device=self.device,
+                                                actor_user=self.admin, target_user=self.user).exists())
+
+    def test_stale_signal_is_not_connected(self):
+        self._connect()
+        DeviceStatusLog.objects.filter(device=self.device).update(
+            recorded_at=timezone.now() - timedelta(seconds=services.ONLINE_WINDOW_SECONDS + 30))
+        self.assertFalse(services.link_status(self.device)['connected'])
+
+    def test_touch_device_never_violates_owner_constraint(self):
+        services.touch_device(self.device, firmware='1.2.3')
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'provisioning')   # khoá chưa chủ không bị đặt online
+        self.assertIsNotNone(self.device.last_seen_at)
+        self.assertTrue(services.link_status(self.device)['connected'])
+
+    def test_remove_owner_requires_confirm_then_revokes_everything(self):
+        self._connect()
+        self._claim()
+        self.client.post(self.url, {'action': 'remove_owner', 'confirm': 'sai'})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.owner_id, self.user.id)
+        self.client.post(self.url, {'action': 'remove_owner', 'confirm': self.device.device_code})
+        self.device.refresh_from_db()
+        self.assertEqual((self.device.owner_id, self.device.status), (None, 'revoked'))
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_DEVICE_OWNER_REMOVED', severity='critical').exists())
+        self.assertTrue(Notification.objects.filter(user=self.user, type='DEVICE', severity='critical').exists())
+
+    def test_admin_cannot_reassign_revoked_but_user_can_reclaim(self):
+        self._connect()
+        self._claim()
+        self.client.post(self.url, {'action': 'remove_owner', 'confirm': self.device.device_code})
+        self._connect()
+        self._claim(self.user)                                    # admin thử gán lại -> bị từ chối
+        self.device.refresh_from_db()
+        self.assertIsNone(self.device.owner)
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_DEVICE_CLAIM_FAILED',
+                                                metadata__code='ADMIN_CANNOT_REASSIGN').exists())
+        # chủ cũ tự thêm lại bằng code + secret -> được
+        services.user_claim_device(self.user, self.device.device_code, self.SECRET)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.owner_id, self.user.id)
+
+    def test_user_claim_wrong_secret_is_rate_limited(self):
+        self._connect()
+        for _ in range(services.CLAIM_MAX_FAILS):
+            AuditLog.objects.create(actor_user=self.user, action='DEVICE_CLAIM_FAILED', success=False)
+        with self.assertRaises(services.ClaimError) as ctx:
+            services.user_claim_device(self.user, self.device.device_code, self.SECRET)
+        self.assertEqual(ctx.exception.code, 'RATE_LIMITED')
+
+    def test_user_claim_wrong_secret_rejected(self):
+        self._connect()
+        with self.assertRaises(services.ClaimError) as ctx:
+            services.user_claim_device(self.user, self.device.device_code, 'sai')
+        self.assertEqual(ctx.exception.code, 'BAD_CREDENTIALS')
+
+    def test_rotate_secret_changes_hash_and_is_logged(self):
+        old = self.device.provisioning_secret_hash
+        self.client.post(self.url, {'action': 'rotate_secret', 'confirm': self.device.device_code})
+        self.device.refresh_from_db()
+        self.assertNotEqual(self.device.provisioning_secret_hash, old)
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_DEVICE_SECRET_ROTATED').exists())
+
+    def test_link_endpoint_and_view_audit(self):
+        r = self.client.get(reverse('manage_sys:device-link', args=[self.device.id]))
+        self.assertFalse(r.json()['connected'])
+        self.client.get(self.url)
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_VIEW_DEVICE', actor_user=self.admin).exists())
+
+    def test_rfid_tap_registers_card_only_inside_window(self):
+        self._connect()
+        self._claim()
+        self.device.refresh_from_db()
+        reader = NfcReader.objects.create(device=self.device, reader_mode='simulated', is_active=True,
+                                          auto_register=True)           # signal mở cửa sổ 60s
+        ev = services.verify_rfid_tap(self.device, 'AA:BB:CC:DD')
+        self.assertEqual(ev.reason, 'CARD_REGISTERED')
+        self.assertTrue(CardDeviceAccess.objects.filter(device=self.device, access_card__user=self.user).exists())
+        self.assertTrue(AuditLog.objects.filter(action='CARD_AUTO_REGISTERED', device=self.device).exists())
+        # hết cửa sổ -> thẻ lạ khác bị từ chối như thường
+        NfcReader.objects.filter(pk=reader.pk).update(auto_register_until=timezone.now() - timedelta(seconds=1))
+        ev2 = services.verify_rfid_tap(self.device, '11:22:33:44')
+        self.assertEqual(ev2.reason, 'UNKNOWN_CARD')
+        self.assertEqual(AccessCard.objects.filter(user=self.user).count(), 1)

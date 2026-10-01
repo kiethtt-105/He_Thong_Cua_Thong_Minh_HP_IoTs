@@ -1,5 +1,6 @@
 # smartlock/admin.py
 from django.contrib import admin
+from django.contrib.admin.models import LogEntry
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
 
@@ -9,6 +10,41 @@ from .models import (
     FaceProfile, NfcLog, NfcReader, Notification, OneTimeCode, Permission, ShareAccessCode,
     SupportRequest, SystemSettings, User,
 )
+
+
+from . import services
+
+
+# ---------------------------------------------------------------- Ghi AuditLog cho MỌI thao tác ở Django admin
+class AuditedAdminMixin:
+    """Django admin chỉ tự ghi LogEntry (không hiện ở trang audit, xoá được). Mixin này ghi thêm
+    AuditLog (action ADMIN_<MODEL>_*): thêm / sửa (chỉ TÊN trường đổi, không ghi giá trị để khỏi
+    lộ dữ liệu nhạy cảm) / xoá, kể cả xoá hàng loạt."""
+
+    def _log(self, request, verb, obj, severity='warning', extra=None):
+        model = obj._meta.model_name.upper()
+        meta = {'model': obj._meta.label, 'object_id': str(obj.pk), 'object': str(obj)[:120],
+                'via': 'django_admin', **(extra or {})}
+        target = obj if isinstance(obj, User) else getattr(obj, 'user', None)
+        services.audit(request, f'ADMIN_{model}_{verb}'[:50], device=obj if isinstance(obj, Device) else
+                       getattr(obj, 'device', None), target_user=target if isinstance(target, User) else None,
+                       severity=severity, metadata=meta)
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if change:
+            self._log(request, 'CHANGED', obj, extra={'fields': sorted(form.changed_data)})
+        else:
+            self._log(request, 'ADDED', obj)
+
+    def delete_model(self, request, obj):
+        self._log(request, 'DELETED', obj, severity='critical')   # ghi TRƯỚC khi xoá để còn thông tin
+        super().delete_model(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        for obj in list(queryset):
+            self._log(request, 'DELETED', obj, severity='critical', extra={'bulk': True})
+        super().delete_queryset(request, queryset)
 
 
 # ---------------------------------------------------------------- User
@@ -25,7 +61,7 @@ class UserEditForm(UserChangeForm):
 
 
 @admin.register(User)
-class CustomUserAdmin(UserAdmin):
+class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
     form = UserEditForm
     add_form = UserCreateForm
     ordering = ('email',)
@@ -66,8 +102,12 @@ def _secret_fields(model):
 # model -> cấu hình admin. Model trong READ_ONLY dùng ReadOnlyAdmin.
 CONFIG = {
     SystemSettings: dict(list_display=('id', 'registration_enabled', 'updated_by')),
+    # Gán/gỡ chủ phải đi qua manage_sys / luồng claim (có kiểm tra kết nối + audit), không sửa tay ở đây.
     Device: dict(list_display=('name', 'owner', 'status', 'device_code', 'battery_level'),
-                 list_filter=('status',), search_fields=('name', 'device_code', 'owner__email')),
+                 list_filter=('status',), search_fields=('name', 'device_code', 'owner__email'),
+                 readonly_fields=('owner', 'status', 'is_purchased', 'purchased_at', 'device_code'),
+                 has_add_permission=lambda self, request: False,
+                 has_delete_permission=lambda self, request, obj=None: False),
     DeviceCommand: dict(list_display=('device', 'command_type', 'status', 'issued_by', 'created_at'),
                         list_filter=('command_type', 'status')),
     DeviceStatusLog: dict(list_display=('device', 'lock_state', 'battery_level', 'tamper_detected', 'recorded_at'),
@@ -108,5 +148,13 @@ READ_ONLY = {AuditLog, AccessEvent, AutomationRuleLog, DeviceStatusLog, DeviceCo
 for model, options in CONFIG.items():
     base = ReadOnlyAdmin if model in READ_ONLY else admin.ModelAdmin
     admin.site.register(
-        model, type(f'{model.__name__}Admin', (base,), {**options, 'exclude': _secret_fields(model)}),
+        model, type(f'{model.__name__}Admin', (AuditedAdminMixin, base),
+                    {**options, 'exclude': _secret_fields(model)}),
     )
+
+
+# LogEntry của Django: chỉ xem (không cho sửa/xoá để dấu vết admin còn nguyên).
+@admin.register(LogEntry)
+class LogEntryAdmin(ReadOnlyAdmin):
+    list_display = ('action_time', 'user', 'content_type', 'object_repr', 'action_flag')
+    list_filter = ('action_flag',)

@@ -1,4 +1,4 @@
-from django.urls import include, path
+from django.urls import path
 from . import views
 
 app_name = 'smartlock'
@@ -17,6 +17,7 @@ urlpatterns = [
     path('devices/', views.devices_list, name='devices-list'),
     path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
     path('devices/add/', views.device_add, name='device-add'),
+    path('devices/claim/', views.device_claim, name='device-claim'),   # user tự thêm khoá bằng code + secret
     path('devices/<uuid:device_id>/command/', views.device_command, name='device-command'),
     path('devices/<uuid:device_id>/ble-ticket/', views.device_ble_ticket, name='device-ble-ticket'),
 
@@ -31,8 +32,8 @@ urlpatterns = [
     path('nfc/reader/', views.nfc_reader, name='nfc-reader'),
     path('access/door-pins/', views.door_pins, name='door-pins'),
     path('access/face-profiles/', views.face_profiles, name='face-profiles'),
+    path('access/face-profiles/<uuid:profile_id>/delete/', views.face_profile_delete, name='face-profile-delete'),
     path('access/history/', views.access_events_history, name='access-history'),
- 
 
     path('share/codes/', views.share_codes, name='share-codes'),
     path('share/request/', views.share_request, name='share-request'),
@@ -42,7 +43,7 @@ urlpatterns = [
 
     path('permissions/manage/', views.permissions_manage, name='permissions-manage'),
     path('automation-rules/', views.automation_rules_manage, name='automation-rules'),
-    
+
     path('settings/system/', views.settings_system, name='settings-system'),
     path('settings/announcements/', views.announcements_manage, name='announcements-manage'),
     path('notifications/', views.notifications_list, name='notifications'),
@@ -55,14 +56,12 @@ urlpatterns = [
     path('demo/system-logs/data/', views.public_system_logs_api, name='public-system-logs-data'),
 
     # ====================== 2FA ======================
-    # Trang xác thực (login / bật / tắt) - chỉ vào được khi có phiên pending_2fa
     path('two-factor/verify/', views.verify_2fa, name='tf-verify'),
     path('two-factor/verify/email/send/', views.verify_email_send, name='tf-verify-email-send'),
     path('two-factor/verify/passkey/options/', views.verify_passkey_options, name='tf-verify-passkey-options'),
     path('two-factor/verify/passkey/finish/', views.verify_passkey_finish, name='tf-verify-passkey-finish'),
     path('two-factor/cancel/', views.cancel_2fa, name='tf-cancel'),
 
-    # Cài đặt 2FA (từ trang profile)
     path('two-factor/enable/', views.enable_2fa, name='tf-enable'),
     path('two-factor/disable/', views.disable_2fa, name='tf-disable'),
     path('two-factor/totp/begin/', views.totp_begin, name='tf-totp-begin'),
@@ -75,5 +74,4 @@ urlpatterns = [
     path('two-factor/passkey/<uuid:cred_id>/delete/', views.passkey_delete, name='tf-passkey-delete'),
     path('two-factor/remove/<str:method>/', views.remove_method, name='tf-remove-method'),
 
-    #path('api/v1/', include('smartlock.api.urls')),
 ]

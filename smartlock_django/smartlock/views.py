@@ -83,6 +83,44 @@ RECOVERY_ACTIONS = ('RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER')
 # ====================== AUTH REQUIRED DECORATOR (đưa lên đầu) ======================
 auth_required = login_required(login_url='smartlock:login')
 
+# ====================== RENDER: mỗi nhóm trang gộp 1 template, chọn trang bằng biến `page` ======================
+PAGE_TEMPLATE = {
+    "login": "auth",
+    "register": "auth",
+    "reset_password": "auth",
+    "verify_email": "auth",
+    "verify_2fa": "auth",
+    "devices_list": "devices",
+    "device_detail": "devices",
+    "device_add": "devices",
+    "device_claim": "devices",
+    "nfc_tags": "access",
+    "nfc_reader": "access",
+    "share_codes": "access",
+    "share_request": "access",
+    "door_pins": "access",
+    "face_profiles": "access",
+    "access_history": "access",
+    "permissions": "admin",
+    "automation_rules": "admin",
+    "settings_system": "admin",
+    "announcements": "admin",
+    "audit_logs": "admin",
+    "support_requests": "admin",
+    "support_request_detail": "admin",
+    "dashboard": "home",
+    "profile": "home",
+    "notifications": "home"
+}
+
+
+def _render(request, page, context=None, **kwargs):
+    """render('login') -> account/auth.html với page='login' (xem PAGE_TEMPLATE)."""
+    ctx = dict(context or {})
+    ctx['page'] = page
+    return render(request, f'account/{PAGE_TEMPLATE[page]}.html', ctx, **kwargs)
+
+
 # ====================== HELPERS ======================
 
 def _visible_logs(user):
@@ -169,21 +207,21 @@ def login_view(request):
     ctx = {'next': next_url}
 
     if request.method != 'POST':
-        return render(request, 'account/base/login.html', ctx)
+        return _render(request, 'login', ctx)
 
     identifier = (request.POST.get('identifier') or '').strip()
     password = request.POST.get('password') or ''
 
     if not identifier or not password:
         messages.error(request, 'Vui lòng điền đầy đủ thông tin.')
-        return render(request, 'account/base/login.html', ctx)
+        return _render(request, 'login', ctx)
 
     ip = _client_ip(request)
     if _ip_blacklisted(ip):
         _audit(request, 'LOGIN_BLOCKED_IP', success=False, severity='warning',
                username_attempt=identifier[:150])
         messages.error(request, 'Địa chỉ IP của bạn đã bị chặn.')
-        return render(request, 'account/base/login.html', ctx)
+        return _render(request, 'login', ctx)
 
     user = _find_user(identifier)
     now = timezone.now()
@@ -194,7 +232,7 @@ def login_view(request):
             messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {remaining} phút.')
             _audit(request, 'LOGIN_LOCKED', success=False, severity='warning',
                    actor=None, target_user=user, username_attempt=identifier[:150])
-            return render(request, 'account/base/login.html', ctx)
+            return _render(request, 'login', ctx)
 
     auth_user = authenticate(request, username=user.email, password=password) if user else None
 
@@ -203,7 +241,7 @@ def login_view(request):
         _audit(request, 'LOGIN_ADMIN_REJECTED', success=False, severity='warning',
                actor=None, target_user=user, username_attempt=identifier[:150])
         messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
-        return render(request, 'account/base/login.html', ctx)
+        return _render(request, 'login', ctx)
 
     if auth_user:
         # ---- 2FA: mật khẩu đúng nhưng chưa đăng nhập, chuyển sang bước xác thực 2 lớp ----
@@ -240,7 +278,7 @@ def login_view(request):
         messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
     _audit(request, 'LOGIN_FAILED', success=False, severity='warning', actor=None,
            target_user=user, username_attempt=identifier[:150])
-    return render(request, 'account/base/login.html', ctx)
+    return _render(request, 'login', ctx)
 
 
 def logout_view(request):
@@ -256,10 +294,10 @@ def register(request):
         return redirect('smartlock:dashboard')
 
     if not _settings().registration_enabled:
-        return render(request, 'account/base/register.html', {'disabled': True})
+        return _render(request, 'register', {'disabled': True})
 
     if request.method != 'POST':
-        return render(request, 'account/base/register.html')
+        return _render(request, 'register')
 
     email = (request.POST.get('email') or '').strip()
     username = (request.POST.get('username') or '').strip()
@@ -270,15 +308,15 @@ def register(request):
 
     if '@' in username:
         messages.error(request, 'Tên đăng nhập không được chứa ký tự @.')
-        return render(request, 'account/base/register.html', ctx)
+        return _render(request, 'register', ctx)
     if password1 != password2:
         messages.error(request, 'Mật khẩu không khớp.')
-        return render(request, 'account/base/register.html', ctx)
+        return _render(request, 'register', ctx)
     try:
         validate_password(password1)
     except ValidationError as e:
         messages.error(request, ' '.join(e.messages))
-        return render(request, 'account/base/register.html', ctx)
+        return _render(request, 'register', ctx)
 
     # Kiểm tra trùng TRƯỚC khi tạo, để xử lý rõ ràng từng trường hợp thay vì chỉ báo lỗi
     # chung chung "đã được sử dụng" rồi dừng lại (khiến người đăng ký thật sự bị bế tắc
@@ -289,7 +327,7 @@ def register(request):
 
     if username_taken:
         messages.error(request, 'Tên đăng nhập đã được sử dụng.')
-        return render(request, 'account/base/register.html', ctx)
+        return _render(request, 'register', ctx)
 
     if existing_email_user:
         if existing_email_user.is_active or existing_email_user.email_verified:
@@ -312,7 +350,7 @@ def register(request):
                        success=sent, metadata={'reason': 'duplicate_register_unverified'})
             messages.info(request, 'Email này đã được đăng ký nhưng chưa xác thực. Mình vừa gửi lại '
                                    'email xác thực, vui lòng kiểm tra hộp thư (kể cả mục Spam).')
-        return render(request, 'account/base/verify_email.html', {'email': email})
+        return _render(request, 'verify_email', {'email': email})
 
     try:
         with transaction.atomic():
@@ -324,17 +362,17 @@ def register(request):
         _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
                metadata={'reason': 'validation'})
         messages.error(request, 'Không thể tạo tài khoản: ' + ' '.join(e.messages))
-        return render(request, 'account/base/register.html', ctx)
+        return _render(request, 'register', ctx)
     except IntegrityError:
         _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
                metadata={'reason': 'duplicate'})
         messages.error(request, 'Email hoặc tên đăng nhập đã được sử dụng.')
-        return render(request, 'account/base/register.html', ctx)
+        return _render(request, 'register', ctx)
     except ValueError as e:
         _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
                metadata={'reason': 'invalid'})
         messages.error(request, f'Không thể tạo tài khoản: {e}')
-        return render(request, 'account/base/register.html', ctx)
+        return _render(request, 'register', ctx)
 
     logger.info("register: tạo user %s", email)
     _audit(request, 'REGISTER', actor=user, target_user=user)
@@ -342,7 +380,7 @@ def register(request):
         _audit(request, 'VERIFY_MAIL_FAILED', actor=user, target_user=user, success=False,
                severity='warning')
         messages.warning(request, 'Chưa gửi được email xác thực. Vui lòng bấm "Gửi lại" sau ít phút.')
-    return render(request, 'account/base/verify_email.html', {'email': email})
+    return _render(request, 'verify_email', {'email': email})
 
 
 def verify_email(request, token):
@@ -390,7 +428,7 @@ def resend_verification(request):
                 messages.error(request, 'Không gửi được email. Vui lòng thử lại sau.')
     else:
         messages.success(request, 'Nếu tài khoản cần xác thực, email đã được gửi lại.')
-    return render(request, 'account/base/verify_email.html', {'email': email})
+    return _render(request, 'verify_email', {'email': email})
 
 
 RESET_NEUTRAL_MSG = ('Nếu email này đã đăng ký, chúng tôi đã gửi link đặt lại mật khẩu. '
@@ -399,7 +437,7 @@ RESET_NEUTRAL_MSG = ('Nếu email này đã đăng ký, chúng tôi đã gửi l
 
 def password_reset_request(request):
     if request.method != 'POST':
-        return render(request, 'account/base/reset_password.html', {'mode': 'request'})
+        return _render(request, 'reset_password', {'mode': 'request'})
 
     email = (request.POST.get('email') or '').strip()
     ctx = {'mode': 'request', 'email': email}
@@ -408,7 +446,7 @@ def password_reset_request(request):
     def _neutral():
         # Mọi nhánh đều trả CÙNG một thông báo -> không lộ email nào đã đăng ký (chống user enumeration).
         messages.success(request, RESET_NEUTRAL_MSG)
-        return render(request, 'account/base/reset_password.html', ctx)
+        return _render(request, 'reset_password', ctx)
 
     if not user:
         _audit(request, 'PASSWORD_RESET_UNKNOWN_EMAIL', actor=None, success=False,
@@ -455,7 +493,7 @@ def reset_password(request, uidb64, token):
         _audit(request, 'PASSWORD_RESET_INVALID', actor=None, success=False, severity='warning',
                target_user=user)
         messages.error(request, 'Yêu cầu không hợp lệ')
-        return render(request, 'account/base/reset_password.html', {'mode': 'expired'})
+        return _render(request, 'reset_password', {'mode': 'expired'})
 
     ctx = {'mode': 'confirm'}
     if request.method == 'POST':
@@ -463,12 +501,12 @@ def reset_password(request, uidb64, token):
         p2 = request.POST.get('new_password2') or ''
         if not p1 or p1 != p2:
             messages.error(request, 'Mật khẩu không khớp.')
-            return render(request, 'account/base/reset_password.html', ctx)
+            return _render(request, 'reset_password', ctx)
         try:
             validate_password(p1, user)
         except ValidationError as e:
             messages.error(request, ' '.join(e.messages))
-            return render(request, 'account/base/reset_password.html', ctx)
+            return _render(request, 'reset_password', ctx)
         user.set_password(p1)
         user.save()
         from .api.mobile_auth import revoke_all_sessions
@@ -479,7 +517,7 @@ def reset_password(request, uidb64, token):
                 severity='warning', type_='SECURITY')
         messages.success(request, 'Mật khẩu đã được thay đổi thành công!')
         return redirect('smartlock:login')
-    return render(request, 'account/base/reset_password.html', ctx)
+    return _render(request, 'reset_password', ctx)
 
 
 # ====================== DASHBOARD ======================
@@ -526,7 +564,7 @@ def dashboard(request):
         'announcements': Announcement.objects.filter(is_active=True).order_by('-created_at')[:3],
         'chart_data': chart_data,
     }
-    return render(request, 'account/base/dashboard.html', context)
+    return _render(request, 'dashboard', context)
 
 
 # ====================== SYNC: bootstrap toàn bộ dữ liệu dashboard cho client cache ======================
@@ -645,13 +683,13 @@ def device_add(request):
                                   '(chỉ hiển thị một lần, hãy lưu lại).')
         return redirect('smartlock:devices-list')
 
-    return render(request, 'account/devices/add.html')
+    return _render(request, 'device_add')
 
 
 @auth_required
 def devices_list(request):
     devices = _accessible_devices(request.user).order_by('name')
-    return render(request, 'account/devices/list.html', {'device_list': devices})
+    return _render(request, 'devices_list', {'device_list': devices})
 
 
 @auth_required
@@ -695,7 +733,7 @@ def device_detail(request, device_id):
                            .select_related('issued_by').order_by('-created_at')[:6],
         'accesses': accesses,
     }
-    return render(request, 'account/devices/detail.html', context)
+    return _render(request, 'device_detail', context)
 
 
 @auth_required
@@ -874,7 +912,7 @@ def nfc_tags(request):
 
     cards = (AccessCard.objects.filter(user=request.user)
              .prefetch_related('carddeviceaccess_set__device').order_by('-created_at'))
-    return render(request, 'account/nfc/tags.html', {'access_cards': cards})
+    return _render(request, 'nfc_tags', {'access_cards': cards})
 
 
 @auth_required
@@ -978,7 +1016,7 @@ def nfc_reader(request):
         'nfc_logs': NfcLog.objects.filter(device=device).select_related('nfc_tag', 'reader')
                     .order_by('-created_at')[:10] if device else [],
     }
-    return render(request, 'account/nfc/reader.html', context)
+    return _render(request, 'nfc_reader', context)
 
 
 # ====================== SHARE & SUPPORT ======================
@@ -1064,7 +1102,7 @@ def share_codes(request):
         'permissions': Permission.objects.order_by('name'),
         'default_minutes': min(_settings().share_code_expiry_minutes, 1440),
     }
-    return render(request, 'account/share/codes.html', context)
+    return _render(request, 'share_codes', context)
 
 
 @auth_required
@@ -1139,7 +1177,7 @@ def share_request(request):
     accesses = (DeviceAccess.objects.filter(user=user, is_active=True)
                 .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
                 .select_related('device').prefetch_related('permissions').order_by('-created_at'))
-    return render(request, 'account/share/request.html',
+    return _render(request, 'share_request',
                   {'my_accesses': accesses, 'access_hours': SHARED_ACCESS_HOURS})
 
 
@@ -1205,7 +1243,7 @@ def support_requests(request):
         'device_list': Device.objects.filter(owner=user).order_by('name'),
         'action_choices': SupportRequest._meta.get_field('action').choices,
     }
-    return render(request, 'account/support/requests.html', context)
+    return _render(request, 'support_requests', context)
 
 
 @auth_required
@@ -1234,7 +1272,7 @@ def support_request_detail(request, request_id):
         'support_request': sr,
         'is_admin_view': _is_admin(request.user) and sr.requested_by_id != request.user.id,
     }
-    return render(request, 'account/support/request_detail.html', context)
+    return _render(request, 'support_request_detail', context)
 
 
 # ====================== PERMISSIONS ======================
@@ -1340,7 +1378,7 @@ def permissions_manage(request):
         'permissions': Permission.objects.order_by('name'),
         'accesses': accesses,
     }
-    return render(request, 'account/permissions/manage.html', context)
+    return _render(request, 'permissions', context)
 
 
 # ====================== AUTOMATION RULES ======================
@@ -1468,7 +1506,7 @@ def automation_rules_manage(request):
         'trigger_choices': AutomationRule.TRIGGER_CHOICES,
         'action_choices': AutomationRule.ACTION_CHOICES,
     }
-    return render(request, 'account/automation_rules/manage.html', context)
+    return _render(request, 'automation_rules', context)
 
 
 # ====================== SETTINGS / PROFILE / LOGS ======================
@@ -1526,7 +1564,7 @@ def settings_system(request):
         'system_settings': st,
         'stages_text': ', '.join(str(x) for x in (st.login_lockout_stage_minutes or [])),
     }
-    return render(request, 'account/settings/system.html', context)
+    return _render(request, 'settings_system', context)
 
 
 @auth_required
@@ -1597,7 +1635,7 @@ def announcements_manage(request):
         return redirect('smartlock:announcements-manage')
 
     context = {'announcements': Announcement.objects.select_related('created_by').order_by('-created_at')[:100]}
-    return render(request, 'account/settings/announcements.html', context)
+    return _render(request, 'announcements', context)
 
 
 @auth_required
@@ -1627,7 +1665,7 @@ def notifications_list(request):
         'unread_count': Notification.objects.filter(user=user, is_read=False).count(),
         'qs': '&filter=unread' if only_unread else '',
     }
-    return render(request, 'account/base/notifications.html', context)
+    return _render(request, 'notifications', context)
 
 
 @auth_required
@@ -1680,7 +1718,7 @@ def profile(request):
         'card_count': AccessCard.objects.filter(user=user).count(),
     }
     context.update(two_factor_context(request, user))
-    return render(request, 'account/base/profile.html', context)
+    return _render(request, 'profile', context)
 
 
 @auth_required
@@ -1703,7 +1741,7 @@ def audit_logs(request):
                     (('status', status), ('q', q), ('all', '1' if show_all else '')) if v)
     context = {'audit_logs': _page(request, qs), 'show_all': show_all,
                'status': status or '', 'q': q, 'qs': extra, 'can_see_all': _is_admin(user)}
-    return render(request, 'account/audit/logs.html', context)
+    return _render(request, 'audit_logs', context)
 
 
 # ====================== PUBLIC DEMO: SYSTEM LOGS REAL-TIME (KHÔNG YÊU CẦU ĐĂNG NHẬP) ======================
@@ -2221,7 +2259,7 @@ def verify_2fa(request):
     if tab not in methods:
         tab = default_tab
     title, subtitle = PURPOSE_TEXT.get(p['purpose'], PURPOSE_TEXT['login'])
-    return render(request, 'account/base/verify_2fa.html', {
+    return _render(request, 'verify_2fa', {
         'purpose': p['purpose'], 'title': title, 'subtitle': subtitle,
         'has_totp': 'totp' in methods, 'has_fido2': 'fido2' in methods, 'has_email': 'email' in methods,
         'tab': tab,
@@ -2688,7 +2726,7 @@ def door_pins(request):
     pins = (DoorPinCode.objects.filter(device=device).order_by('-created_at')[:50]
             if device else DoorPinCode.objects.none())
     context = {'device_list': devices, 'device': device, 'door_pins': pins}
-    return render(request, 'account/access/door_pins.html', context)
+    return _render(request, 'door_pins', context)
  
  
 # ==================== A2: ĐĂNG KÝ KHUÔN MẶT ====================
@@ -2756,7 +2794,7 @@ def face_profiles(request):
     profiles = (FaceProfile.objects.filter(device=device).select_related('user').order_by('-created_at')
                 if device else FaceProfile.objects.none())
     context = {'device_list': devices, 'device': device, 'face_profiles': profiles}
-    return render(request, 'account/access/face_profiles.html', context)
+    return _render(request, 'face_profiles', context)
  
  
 # ==================== A2: LỊCH SỬ RA VÀO (RFID + PIN + KHUÔN MẶT) ====================
@@ -2779,4 +2817,52 @@ def access_events_history(request):
         'device_list': devices, 'device': device, 'method': method or '',
         'access_events': _page(request, qs),
     }
-    return render(request, 'account/access/history.html', context)
+    return _render(request, 'access_history', context)
+
+
+# ====================== DEVICES: USER TỰ THÊM KHOÁ (gộp từ views_device.py) ======================
+# User tự thêm khoá (kể cả khoá đã bị gỡ chủ / chủ cũ) bằng mã thiết bị + secret.
+# Mọi nhánh (kể cả từ chối/lỗi) đều ghi AuditLog.
+@auth_required
+@require_http_methods(['GET', 'POST'])
+def device_claim(request):
+    if request.method == 'POST':
+        code = (request.POST.get('device_code') or '').strip()[:50]
+        secret = request.POST.get('secret') or ''
+        try:
+            device = services.user_claim_device(request.user, code, secret, request)
+        except services.ClaimError as exc:
+            services.audit(request, 'DEVICE_CLAIM_FAILED', success=False, severity='warning',
+                           metadata={'device_code_input': code.upper(), 'code': exc.code})
+            messages.error(request, exc.message)
+            return redirect('smartlock:device-claim')
+        services.audit(request, 'DEVICE_CLAIMED', device=device, target_user=request.user,
+                       severity='warning', metadata={'by': 'user'})
+        services.notify(request.user, 'Đã thêm khoá vào tài khoản',
+                        f'Khoá "{device.name}" ({device.device_code}) đã được gán cho bạn.',
+                        device=device, type_='DEVICE')
+        messages.success(request, f'Đã thêm khoá "{device.name}".')
+        return redirect('smartlock:device-detail', device_id=device.id)
+    return _render(request, 'device_claim')
+
+
+# ====================== FACE: XOÁ HẲN HỒ SƠ KHUÔN MẶT (dữ liệu sinh trắc - NĐ 13/2023) ======================
+@auth_required
+@require_POST
+def face_profile_delete(request, profile_id):
+    pid = services.parse_uuid(profile_id)
+    profile = FaceProfile.objects.select_related('device').filter(id=pid).first() if pid else None
+    # Chủ khoá xoá được mọi hồ sơ của khoá; người khác chỉ xoá hồ sơ của chính mình.
+    if profile and profile.user_id != request.user.id and profile.device.owner_id != request.user.id:
+        profile = None
+    if not profile:
+        services.audit(request, 'FACE_PROFILE_DELETE_DENIED', success=False, severity='warning',
+                       metadata={'profile_id': str(profile_id)[:64]})
+        messages.error(request, 'Không tìm thấy hồ sơ khuôn mặt.')
+        return redirect('smartlock:face-profiles')
+    device, owner_of_profile, info = profile.device, profile.user, {'face_profile_id': str(profile.id)}
+    profile.delete()
+    services.audit(request, 'FACE_PROFILE_DELETED', device=device, target_user=owner_of_profile,
+                   severity='warning', metadata=info)
+    messages.success(request, 'Đã xoá hồ sơ khuôn mặt.')
+    return redirect(f"{reverse('smartlock:face-profiles')}?device={device.id}")
