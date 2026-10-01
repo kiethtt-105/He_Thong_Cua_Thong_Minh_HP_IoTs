@@ -1,4 +1,4 @@
-from django.urls import path,include
+from django.urls import include, path
 from . import views
 
 app_name = 'smartlock'
@@ -18,6 +18,7 @@ urlpatterns = [
     path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
     path('devices/add/', views.device_add, name='device-add'),
     path('devices/<uuid:device_id>/command/', views.device_command, name='device-command'),
+    path('devices/<uuid:device_id>/ble-ticket/', views.device_ble_ticket, name='device-ble-ticket'),
 
     # ====================== SYNC: cache mã hoá về máy sau login ======================
     path('api/sync/', views.sync_bootstrap, name='sync-bootstrap'),
@@ -74,5 +75,5 @@ urlpatterns = [
     path('two-factor/passkey/<uuid:cred_id>/delete/', views.passkey_delete, name='tf-passkey-delete'),
     path('two-factor/remove/<str:method>/', views.remove_method, name='tf-remove-method'),
 
-    path('api/v1/', include('smartlock.api.urls')),
+    #path('api/v1/', include('smartlock.api.urls')),
 ]

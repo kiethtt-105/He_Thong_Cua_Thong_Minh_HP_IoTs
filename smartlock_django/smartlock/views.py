@@ -3,19 +3,16 @@ import base64
 import hashlib
 import hmac
 import io
-import ipaddress
 import json
 import logging
 import math
 import re
 import secrets
-import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
-import random, string
 from .models import DoorPinCode, FaceProfile, AccessEvent
-from . import access_control
+from . import services
 import pyotp
 import qrcode
 import qrcode.image.svg
@@ -26,7 +23,6 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
-from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count, Q
@@ -56,20 +52,27 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from .email_templates import render_email
+from .services import (
+    accessible_devices as _accessible_devices, admins as _admins, audit as _audit,
+    client_ip as _client_ip, find_user as _find_user, has_permission as _has_permission,
+    hash_token as _hash_token, ip_blacklisted as _ip_blacklisted, is_admin as _is_admin,
+    notify as _notify, parse_dt as _parse_dt, parse_uuid as _parse_uuid, pick_device as _pick_device,
+    register_failure as _register_failure, render_email, reset_lockout as _reset_lockout,
+    send_mail as _send_mail, send_verification as _send_verification,
+    system_settings as _settings, user_agent as _user_agent, valid_ip as _valid_ip,
+    issue_ble_ticket,
+)
 from .models import (
     AccessCard, Announcement, AuditLog, AutomationRule, AutomationRuleLog, CardDeviceAccess,
     Device, DeviceAccess, DeviceCommand, DeviceStatusLog, OneTimeCode, Fido2Credential,
     NfcLog, NfcReader, Notification, Permission,
-    ShareAccessCode, SupportRequest, SystemSettings, TwoFactorConfig,
+    ShareAccessCode, SupportRequest, TwoFactorConfig,
     User, fernet, sync_two_fa_flag,
 )
-from .mqtt_client import publish_command, MqttPublishError
 
 logger = logging.getLogger('smartlock.views')
 
 # ====================== CONSTANTS ======================
-MAX_FAILED_ATTEMPTS = 5
 COMMAND_TTL_SECONDS = 120
 SHARED_ACCESS_HOURS = 24
 SUPPORT_TTL_HOURS = 24
@@ -81,87 +84,6 @@ RECOVERY_ACTIONS = ('RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER')
 auth_required = login_required(login_url='smartlock:login')
 
 # ====================== HELPERS ======================
-def _send_mail(subject, plain, html, to, log_body=True):
-    # log_body=False: không ghi nội dung mail vào log (dùng cho mail chứa mã OTP)
-    logger.info("send_mail: to=%s subject=%r plain_preview=%r", to, subject,
-                plain[:200] if log_body else '<ẩn nội dung>')
-    try:
-        n = send_mail(subject, plain, None, [to], html_message=html)
-        logger.info("send_mail: OK (%s mail) -> %s", n, to)
-        return True
-    except Exception:
-        logger.exception("send_mail: THẤT BẠI -> %s", to)
-        return False
-
-def _hash_token(token) -> str:
-    return hashlib.sha256(str(token).encode()).hexdigest()
-
-def _valid_ip(value):
-    try:
-        return str(ipaddress.ip_address((value or '').strip()))
-    except ValueError:
-        return None
-
-def _client_ip(request):
-    """Chỉ tin X-Forwarded-For khi settings.TRUST_PROXY_HEADERS = True (đứng sau nginx/proxy).
-    Luôn trả về IP hợp lệ để không làm hỏng ghi log / GenericIPAddressField."""
-    ip = None
-    if getattr(dj_settings, 'TRUST_PROXY_HEADERS', False):
-        ip = _valid_ip((request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0])
-    return ip or _valid_ip(request.META.get('REMOTE_ADDR')) or '0.0.0.0'
-
-def _user_agent(request):
-    return (request.META.get('HTTP_USER_AGENT') or '')[:500]
-
-def _settings():
-    return SystemSettings.objects.get_or_create(pk=1)[0]
-
-def _is_admin(user):
-    return bool(user.is_staff or user.is_superuser or user.is_admin)
-
-def _admins():
-    """Danh sách tài khoản quản trị (đang active) để gửi email thông báo cho admin."""
-    return User.objects.filter(Q(is_staff=True) | Q(is_superuser=True) | Q(is_admin=True),
-                               is_active=True).exclude(email='')
-
-def _parse_uuid(value):
-    try:
-        return uuid.UUID(str(value))
-    except (ValueError, AttributeError, TypeError):
-        return None
-
-def _parse_dt(value):
-    if not value:
-        return None
-    try:
-        return timezone.make_aware(datetime.strptime(value, '%Y-%m-%dT%H:%M'))
-    except ValueError:
-        return None
-
-def _find_user(identifier):
-    identifier = (identifier or '').strip()
-    if not identifier:
-        return None
-    return User.objects.filter(Q(email__iexact=identifier) | Q(username__iexact=identifier)).first()
-
-def _audit(request, action, *, device=None, target_user=None, success=True,
-           severity='info', metadata=None, actor='auto', username_attempt=None):
-    if actor == 'auto':
-        actor = request.user if request.user.is_authenticated else None
-    try:
-        with transaction.atomic():  # savepoint: lỗi ghi log không làm hỏng transaction bên ngoài
-            AuditLog.objects.create(
-                actor_user=actor, target_user=target_user, device=device, action=action[:50],
-                username_attempt=username_attempt, severity=severity, success=success,
-                ip_address=_client_ip(request), user_agent=_user_agent(request), metadata=metadata,
-            )
-    except Exception:
-        logger.exception("audit: không ghi được log %s", action)
-
-def _notify(user, title, message, severity='info', device=None, type_='SYSTEM'):
-    Notification.objects.create(
-        user=user, device=device, type=type_, title=title[:150], message=message, severity=severity,
-    )
 
 def _visible_logs(user):
     """Log user được phép xem: mình làm, mình là đối tượng (bị admin/người khác tác động,
@@ -169,39 +91,6 @@ def _visible_logs(user):
     return AuditLog.objects.filter(
         Q(actor_user=user) | Q(target_user=user) | Q(device__owner=user)
     )
-
-def _ip_blacklisted(ip):
-    lines = [l.strip() for l in (_settings().ip_blacklist or '').splitlines()]
-    return ip in [l for l in lines if l]
-
-def _accessible_devices(user):
-    now = timezone.now()
-    shared_ids = (
-        DeviceAccess.objects.filter(user=user, is_active=True, accepted=True, valid_from__lte=now)
-        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
-        .values('device_id')
-    )
-    return Device.objects.filter(Q(owner=user) | Q(id__in=shared_ids))
-
-def _has_permission(user, device, code):
-    if device.owner_id == user.id:
-        return True
-    now = timezone.now()
-    return (
-        DeviceAccess.objects.filter(
-            device=device, user=user, is_active=True, accepted=True,
-            valid_from__lte=now, permissions__code=code,
-        ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)).exists()
-    )
-
-def _pick_device(queryset, raw_id, strict=False):
-    """strict=True (dùng cho POST): id gửi lên phải khớp đúng thiết bị,
-    không được âm thầm rơi về thiết bị đầu tiên (thao tác nhầm thiết bị)."""
-    dev_id = _parse_uuid(raw_id)
-    if strict:
-        return queryset.filter(id=dev_id).first() if dev_id else None
-    device = queryset.filter(id=dev_id).first() if dev_id else None
-    return device or queryset.first()
 
 def _default_permissions():
     # Suy ra danh sách quyền mặc định từ ALLOWED_COMMANDS.
@@ -261,63 +150,12 @@ def _redirect_with(url_name, **params):
         url += '?' + urlencode(params)
     return redirect(url)
 
-def _register_failure(user, ip):
-    """Ghi 1 lần đăng nhập sai. Trả về số phút bị khóa nếu vừa kích hoạt khóa, ngược lại None."""
-    st = _settings()
-    stages = st.login_lockout_stage_minutes or [5, 10, 30]
-    now = timezone.now()
-    locked_minutes = None
-    with transaction.atomic():
-        lock = User.objects.select_for_update().get(pk=user.pk)
-        lock.login_failed_attempts += 1
-        lock.login_last_failed_at = now
-        lock.login_last_failed_ip = ip
-        if lock.login_failed_attempts >= MAX_FAILED_ATTEMPTS:
-            locked_minutes = stages[min(lock.login_lock_stage, len(stages) - 1)]
-            lock.login_locked_until = now + timedelta(minutes=locked_minutes)
-            lock.login_lock_stage += 1
-            lock.login_failed_attempts = 0
-        lock.save(update_fields=['login_failed_attempts', 'login_last_failed_at', 'login_last_failed_ip',
-                                 'login_locked_until', 'login_lock_stage', 'updated_at'])
-    if locked_minutes:
-        _notify(user, 'Tài khoản bị khóa tạm thời',
-                f'Đăng nhập sai nhiều lần từ IP {ip}. Tài khoản bị khóa {locked_minutes} phút.',
-                severity='critical', type_='LOGIN_LOCKOUT')
-    return locked_minutes
-
-def _reset_lockout(user):
-    User.objects.filter(pk=user.pk).update(
-        login_failed_attempts=0, login_lock_stage=0, login_locked_until=None,
-    )
-
 def _ensure_sync_key(request):
     """Cấp (mỗi lần login mới) một khoá ngẫu nhiên gắn với session hiện tại. Client dùng khoá
     này để suy ra (HKDF) AES key mã hoá cache dashboard lưu trong IndexedDB của trình duyệt.
     Vì khoá đổi mỗi khi có session mới và bị xoá khi logout (Django logout() flush session),
     cache cũ mã hoá bằng khoá cũ vĩnh viễn không đọc được nữa dù còn sót lại trong IndexedDB."""
     request.session['sync_key'] = secrets.token_urlsafe(32)
-
-def _send_verification(request, user):
-    st = _settings()
-    minutes = st.verification_token_expiry_minutes
-    OneTimeCode.objects.filter(
-        user=user, purpose='EMAIL_VERIFY', is_used=False,
-    ).update(is_used=True, used_at=timezone.now())
-
-    token = uuid.uuid4()
-    OneTimeCode.objects.create(
-        user=user, purpose='EMAIL_VERIFY', token_hash=_hash_token(token),
-        expires_at=timezone.now() + timedelta(minutes=minutes),
-    )
-    link = request.build_absolute_uri(reverse('smartlock:verify_email', args=[token]))
-    context = {
-        'full_name': user.full_name or user.username,
-        'username': user.username,
-        'verification_link': link,
-        'expiry_minutes': minutes,
-    }
-    subject, html, plain = render_email('user_verification.html', context)
-    return _send_mail(subject, plain, html, user.email)
 
 def _page(request, queryset):
     return Paginator(queryset, PAGE_SIZE).get_page(request.GET.get('page'))
@@ -897,33 +735,34 @@ def device_command(request, device_id):
                metadata={'reason': 'duplicate_pending'})
         return JsonResponse({'ok': False, 'message': 'Lệnh này vừa được gửi, vui lòng chờ vài giây.'}, status=429)
 
-    cmd = DeviceCommand.objects.create(
-        device=device, issued_by=request.user, command_type=command, status='pending',
-        command_token_hash=_hash_token(secrets.token_urlsafe(32)),
-        expires_at=now + timedelta(seconds=COMMAND_TTL_SECONDS),
-    )
-
-    # Bắn lệnh xuống thiết bị thật qua MQTT. Trước đây bước này KHÔNG tồn tại - lệnh chỉ
-    # nằm trong DB ở trạng thái 'pending' mãi mãi trong khi UI vẫn báo "đã gửi lệnh".
-    try:
-        publish_command(device.device_code, {
-            'command_id': str(cmd.id),
-            'command': command,
-            'token': cmd.command_token_hash,   # thiết bị gửi lại đúng hash này khi ack để đối chiếu
-        })
-        cmd.status = 'sent'
-        cmd.save(update_fields=['status'])
-    except MqttPublishError as e:
-        cmd.status = 'failed'
-        cmd.save(update_fields=['status'])
+    cmd = services.dispatch_command(device, command, source='web', issued_by=request.user,
+                                    ttl=COMMAND_TTL_SECONDS)
+    if cmd.status != 'sent':
         _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
-               metadata={'reason': 'mqtt_publish_failed', 'error': str(e)[:200]})
+               metadata={'reason': 'mqtt_publish_failed', 'error': cmd.publish_error})
         return JsonResponse({'ok': False, 'message': 'Không kết nối được tới thiết bị. Vui lòng thử lại.'}, status=502)
 
     _audit(request, f'CMD_{command}', device=device, metadata={'command_id': str(cmd.id)})
     labels = {'LOCK': 'Khóa', 'UNLOCK': 'Mở khóa', 'REBOOT': 'Khởi động lại'}
     return JsonResponse({'ok': True, 'command_id': str(cmd.id),
                          'message': f'Đã gửi lệnh {labels.get(command, command)} tới "{device.name}".'})
+
+
+# ====================== BLUETOOTH: CẤP VÉ MỞ KHOÁ TẦM GẦN (CHẠY OFFLINE) ======================
+@auth_required
+@require_POST
+def device_ble_ticket(request, device_id):
+    """App có mạng gọi endpoint này để xin vé; đến gần cửa thì đưa vé cho ESP32 qua BLE.
+    ESP32 tự kiểm tra chữ ký + hạn (không cần mạng), xem services.py mục Bluetooth."""
+    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
+    if not device.bluetooth_enabled or device.status not in ('online', 'offline'):
+        return JsonResponse({'ok': False, 'message': 'Thiết bị không dùng được Bluetooth lúc này.'}, status=409)
+    if not _has_permission(request.user, device, 'UNLOCK'):
+        _audit(request, 'BLE_TICKET_DENIED', device=device, success=False, severity='warning')
+        return JsonResponse({'ok': False, 'message': 'Bạn không có quyền mở khóa thiết bị này.'}, status=403)
+    ticket, exp = issue_ble_ticket(device, request.user)
+    _audit(request, 'BLE_TICKET_ISSUED', device=device, metadata={'expires_at': exp})
+    return JsonResponse({'ok': True, 'ticket': ticket, 'expires_at': exp, 'device_code': device.device_code})
 
 
 def _mqtt_webhook_authorized(request) -> bool:
@@ -1504,7 +1343,7 @@ def permissions_manage(request):
 @auth_required
 def automation_rules_manage(request):
     """Trang quản lý AutomationRule của owner hiện tại: tạo / sửa / bật-tắt / xoá.
-    device=None nghĩa là luật áp dụng cho mọi thiết bị của owner (xem rules_engine.py)."""
+    device=None nghĩa là luật áp dụng cho mọi thiết bị của owner (xem services.py, mục Rule engine)."""
     user = request.user
     is_post = request.method == 'POST'
     devices = Device.objects.filter(owner=user).order_by('name')
@@ -2813,8 +2652,8 @@ def door_pins(request):
                 return _redirect_with('smartlock:door-pins', device=device.id)
  
             label = (request.POST.get('label') or '').strip()[:100]
-            plain_pin = access_control.generate_unique_pin(device)
-            pin = access_control.issue_door_pin(
+            plain_pin = services.generate_unique_pin(device)
+            pin = services.issue_door_pin(
                 device=device, created_by=request.user, plain_pin=plain_pin,
                 ttl_minutes=ttl_minutes, label=label, max_uses=max_uses,
             )
@@ -2880,7 +2719,7 @@ def face_profiles(request):
                 return _redirect_with('smartlock:face-profiles', device=device.id)
  
             name = (request.POST.get('name') or request.user.full_name or request.user.username)[:100]
-            access_control.register_face(device=device, user=request.user, embedding=embedding,
+            services.register_face(device=device, user=request.user, embedding=embedding,
                                           name=name, consent_confirmed=True)
             messages.success(request, 'Đã đăng ký khuôn mặt.')
             return _redirect_with('smartlock:face-profiles', device=device.id)

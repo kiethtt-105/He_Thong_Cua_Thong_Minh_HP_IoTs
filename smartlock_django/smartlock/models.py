@@ -503,17 +503,13 @@ class AutomationRule(models.Model):
 
     TRIGGER_BATTERY_LOW = 'BATTERY_LOW'
     TRIGGER_OFFLINE_TOO_LONG = 'OFFLINE_TOO_LONG'
-    TRIGGER_FAILED_ACCESS_BURST = 'FAILED_ACCESS_BURST'
     TRIGGER_DOOR_OPEN_TOO_LONG = 'DOOR_OPEN_TOO_LONG'
     TRIGGER_TAMPER_DETECTED = 'TAMPER_DETECTED'
-    TRIGGER_TEMPERATURE_OUT_OF_RANGE = 'TEMPERATURE_OUT_OF_RANGE'
     TRIGGER_CHOICES = [
         (TRIGGER_BATTERY_LOW, 'Pin yếu dưới ngưỡng (%)'),
         (TRIGGER_OFFLINE_TOO_LONG, 'Mất kết nối quá lâu (giây)'),
-        (TRIGGER_FAILED_ACCESS_BURST, 'Quẹt thẻ / nhập sai liên tiếp (số lần trong khoảng thời gian)'),
         (TRIGGER_DOOR_OPEN_TOO_LONG, 'Cửa mở quá lâu chưa đóng (giây)'),
         (TRIGGER_TAMPER_DETECTED, 'Phát hiện tác động vật lý (tamper)'),
-        (TRIGGER_TEMPERATURE_OUT_OF_RANGE, 'Nhiệt độ vượt ngưỡng (°C)'),
     ]
 
     ACTION_NOTIFY_ONLY = 'NOTIFY_ONLY'
@@ -535,11 +531,11 @@ class AutomationRule(models.Model):
     trigger_type = models.CharField(max_length=30, choices=TRIGGER_CHOICES)
     threshold_value = models.DecimalField(
         max_digits=8, decimal_places=2, null=True, blank=True,
-        help_text='VD: 20 (pin %), 300 (giây), 3 (số lần thất bại), 40 (°C).'
+        help_text='VD: 20 (pin %), 300 (giây).'
     )
     threshold_window_seconds = models.IntegerField(
         null=True, blank=True,
-        help_text='Khoảng thời gian tính ngưỡng cho các luật kiểu "N lần trong X giây".'
+        help_text='Không còn dùng (trước đây cho luật "N lần sai trong X giây"; nay khoá tạm nằm ở services.py).'
     )
     action_type = models.CharField(max_length=30, choices=ACTION_CHOICES, default=ACTION_NOTIFY_ONLY)
     notify_severity = models.CharField(
@@ -813,20 +809,22 @@ class FaceProfile(models.Model):
 class AccessEvent(models.Model):
     """
     Log hợp nhất cho MỌI lượt mở cửa thành công/thất bại của A2, dù qua kênh nào (RFID
-    / PIN / khuôn mặt) - phục vụ đúng yêu cầu "toàn bộ lượt ra/vào được ghi log về máy
+    / PIN / khuôn mặt / Bluetooth) - phục vụ đúng yêu cầu "toàn bộ lượt ra/vào được ghi log về máy
     chủ" và trang "xem lịch sử ra vào kèm ảnh chụp" của đề tài A2.
 
     NfcLog (model gốc) vẫn giữ nguyên riêng cho sự kiện đầu đọc NFC ở tầng thấp
     (reader connect/disconnect, config...). AccessEvent là log nghiệp vụ cấp cao hơn,
-    dùng cho automation rule FAILED_ACCESS_BURST và cho giao diện lịch sử ra vào.
+    dùng cho khoá tạm khi sai liên tiếp (services.py) và cho giao diện lịch sử ra vào.
     """
     METHOD_RFID = 'RFID'
     METHOD_PIN = 'PIN'
     METHOD_FACE = 'FACE'
+    METHOD_BLE = 'BLE'
     METHOD_CHOICES = [
         (METHOD_RFID, 'Thẻ RFID'),
         (METHOD_PIN, 'Mã PIN'),
         (METHOD_FACE, 'Khuôn mặt'),
+        (METHOD_BLE, 'Bluetooth'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

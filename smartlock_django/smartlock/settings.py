@@ -121,9 +121,10 @@ INSTALLED_APPS = [
     'rest_framework',
     'allauth',
     'allauth.account',
-    'django_extensions',  
     'manage_sys'
 ]
+if DEBUG:
+    INSTALLED_APPS.append('django_extensions')   # chỉ dùng khi dev (shell_plus...)
 
 
 # ==================== MIDDLEWARE CONFIGURATION ====================
@@ -135,7 +136,6 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'smartlock.admin_audit.AuditRequestMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
@@ -224,7 +224,6 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL")
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_BATCH_SIZE = env_int("EMAIL_BATCH_SIZE", 100)
 
-#
 PASSWORD_RESET_TIMEOUT = env_int("PASSWORD_RESET_TIMEOUT_MINUTES", 5) * 60
 
 # ==================== INTERNATIONALIZATION CONFIGURATION ====================
@@ -281,19 +280,14 @@ LOGGING = {
     },
 }
 
-#
 MANAGE_SYS_URL_PREFIX = '/manage-sys/'
 MANAGE_SYS_SESSION_SECONDS = 2 * 60 * 60
 
 
-TRUST_PROXY_HEADERS=True
+TRUST_PROXY_HEADERS = True   # đứng sau proxy (Vercel/nginx): tin X-Forwarded-For
 
 
-# Dán vào smartlock_django/settings.py (thay khối REST_FRAMEWORK cũ nếu đã có).
-# settings.py bạn gửi KHÔNG có REST_FRAMEWORK: thiếu DEFAULT_THROTTLE_RATES thì các view dùng
-# ScopedRateThrottle (command, redeem) sẽ báo ImproperlyConfigured -> 500, và thiếu
-# DEFAULT_PERMISSION_CLASSES thì API mặc định là AllowAny.
-
+# ==================== REST FRAMEWORK (API cho app di động) ====================
 REST_FRAMEWORK = {
     # Bearer (app) đứng trước, Session (web) đứng sau. Session vẫn bị kiểm tra CSRF; Bearer thì không cần CSRF.
     'DEFAULT_AUTHENTICATION_CLASSES': [
@@ -316,7 +310,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'smartlock.api.common.StandardPagination',  
 }
 
-# ---- tuỳ chọn cho app di động ----
+# ==================== APP DI ĐỘNG ====================
 MOBILE_ACCESS_TOKEN_SECONDS = 15 * 60
 MOBILE_REFRESH_TOKEN_DAYS = 30
 MOBILE_MAX_SESSIONS_PER_USER = 10

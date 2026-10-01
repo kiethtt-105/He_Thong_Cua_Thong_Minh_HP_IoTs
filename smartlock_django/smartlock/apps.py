@@ -7,6 +7,5 @@ class SmartlockConfig(AppConfig):
     name = 'smartlock'
 
     def ready(self):
-        from . import admin_audit,push
-        admin_audit.register_signals()
-        push.register_signals()
+        from . import services
+        services.register_signals()   # push FCM mỗi khi có Notification mới
