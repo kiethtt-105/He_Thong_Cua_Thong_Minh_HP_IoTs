@@ -507,6 +507,18 @@ def issue_door_pin(device, created_by, plain_pin: str, ttl_minutes: int,
     return pin
 
 
+def issue_unique_door_pin(device, created_by, ttl_minutes: int, label: str = '', max_uses: int = 1,
+                          digits: int = 6):
+    """Sinh + lưu PIN trong 1 transaction, khoá dòng Device để 2 người cấp PIN cùng lúc không sinh trùng.
+    Trả về (DoorPinCode, plain_pin)."""
+    with transaction.atomic():
+        Device.objects.select_for_update().get(pk=device.pk)
+        plain_pin = generate_unique_pin(device, digits=digits)
+        pin = issue_door_pin(device=device, created_by=created_by, plain_pin=plain_pin,
+                             ttl_minutes=ttl_minutes, label=label, max_uses=max_uses)
+    return pin, plain_pin
+
+
 # ---------------------------------------------------------------- Khuôn mặt (camera)
 def _euclidean_distance(a, b) -> float:
     if len(a) != len(b) or not a:

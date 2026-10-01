@@ -55,9 +55,8 @@ class Command(BaseCommand):
         )
         CardDeviceAccess.objects.get_or_create(access_card=card, device=devices[0])
 
-        plain_pin = services.generate_unique_pin(devices[0])
-        services.issue_door_pin(device=devices[0], created_by=owner, plain_pin=plain_pin,
-                                ttl_minutes=60, label='PIN test tự động', max_uses=5)
+        _, plain_pin = services.issue_unique_door_pin(
+            device=devices[0], created_by=owner, ttl_minutes=60, label='PIN test tự động', max_uses=5)
         ticket, exp = services.issue_ble_ticket(devices[0], owner)
 
         w = self.stdout.write

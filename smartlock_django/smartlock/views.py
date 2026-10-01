@@ -25,7 +25,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, OuterRef, Q, Subquery
 from django.db.models.functions import TruncDate, TruncMinute
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -393,58 +393,56 @@ def resend_verification(request):
     return render(request, 'account/base/verify_email.html', {'email': email})
 
 
+RESET_NEUTRAL_MSG = ('Nếu email này đã đăng ký, chúng tôi đã gửi link đặt lại mật khẩu. '
+                     'Vui lòng kiểm tra hộp thư (kể cả mục Spam).')
+
+
 def password_reset_request(request):
-    if request.method == 'POST':
-        email = (request.POST.get('email') or '').strip()
-        user = User.objects.filter(email__iexact=email).first()
-        ctx = {'mode': 'request', 'email': email}
+    if request.method != 'POST':
+        return render(request, 'account/base/reset_password.html', {'mode': 'request'})
 
-        if not user:
-            _audit(request, 'PASSWORD_RESET_UNKNOWN_EMAIL', actor=None, success=False,
-                   severity='warning', username_attempt=email[:150])
-            messages.error(request, 'Email này chưa có tài khoản nào. Vui lòng đăng ký tài khoản mới.')
-            return render(request, 'account/base/reset_password.html', ctx)
+    email = (request.POST.get('email') or '').strip()
+    ctx = {'mode': 'request', 'email': email}
+    user = User.objects.filter(email__iexact=email).first()
 
-        if not user.is_active or not user.email_verified:
-            # Tài khoản tồn tại nhưng chưa xác thực -> chưa thể đặt lại mật khẩu (reset_password
-            # yêu cầu is_active=True), hướng dẫn xác thực email trước.
-            _audit(request, 'PASSWORD_RESET_UNVERIFIED', actor=None, success=False,
-                   severity='warning', target_user=user)
-            messages.warning(request, 'Tài khoản này chưa xác thực email. Vui lòng xác thực email '
-                                      'trước khi đặt lại mật khẩu.')
-            return render(request, 'account/base/verify_email.html', {'email': email})
-
-        if AuditLog.objects.filter(action='PASSWORD_RESET_REQUEST', target_user=user,
-                                   created_at__gte=timezone.now() - timedelta(seconds=60)).exists():
-            _audit(request, 'PASSWORD_RESET_THROTTLED', actor=None, success=False, target_user=user)
-            messages.warning(request, 'Bạn vừa yêu cầu đặt lại mật khẩu. Vui lòng kiểm tra email, '
-                                      'hoặc đợi 1 phút trước khi gửi lại.')
-            return render(request, 'account/base/reset_password.html', ctx)
-
-        reset_link = request.build_absolute_uri(
-            reverse('smartlock:reset_password_confirm', args=[
-                force_str(urlsafe_base64_encode(force_bytes(str(user.pk)))),
-                default_token_generator.make_token(user),
-            ])
-        )
-        context = {
-            'full_name': user.full_name or user.username,
-            'password_reset_link': reset_link,
-            'reset_link': reset_link,
-            'expiry_minutes': dj_settings.PASSWORD_RESET_TIMEOUT // 60,
-        }
-        subject, html, plain = render_email('password_reset.html', context)
-        sent = _send_mail(subject, plain, html, user.email)
-        _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user, success=sent,
-               severity='info' if sent else 'warning',
-               metadata=None if sent else {'error': 'send_mail_failed'})
-        if sent:
-            messages.success(request, f'Đã gửi link đặt lại mật khẩu tới {email}. Vui lòng kiểm tra hộp thư '
-                                      '(kể cả mục Spam).')
-        else:
-            messages.error(request, 'Không gửi được email. Vui lòng thử lại sau ít phút.')
+    def _neutral():
+        # Mọi nhánh đều trả CÙNG một thông báo -> không lộ email nào đã đăng ký (chống user enumeration).
+        messages.success(request, RESET_NEUTRAL_MSG)
         return render(request, 'account/base/reset_password.html', ctx)
-    return render(request, 'account/base/reset_password.html', {'mode': 'request'})
+
+    if not user:
+        _audit(request, 'PASSWORD_RESET_UNKNOWN_EMAIL', actor=None, success=False,
+               severity='warning', username_attempt=email[:150])
+        return _neutral()
+
+    if not user.is_active or not user.email_verified:
+        _audit(request, 'PASSWORD_RESET_UNVERIFIED', actor=None, success=False,
+               severity='warning', target_user=user)
+        return _neutral()
+
+    if AuditLog.objects.filter(action='PASSWORD_RESET_REQUEST', target_user=user,
+                               created_at__gte=timezone.now() - timedelta(seconds=60)).exists():
+        _audit(request, 'PASSWORD_RESET_THROTTLED', actor=None, success=False, target_user=user)
+        return _neutral()
+
+    reset_link = request.build_absolute_uri(
+        reverse('smartlock:reset_password_confirm', args=[
+            force_str(urlsafe_base64_encode(force_bytes(str(user.pk)))),
+            default_token_generator.make_token(user),
+        ])
+    )
+    context = {
+        'full_name': user.full_name or user.username,
+        'password_reset_link': reset_link,
+        'reset_link': reset_link,
+        'expiry_minutes': dj_settings.PASSWORD_RESET_TIMEOUT // 60,
+    }
+    subject, html, plain = render_email('password_reset.html', context)
+    sent = _send_mail(subject, plain, html, user.email)
+    _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user, success=sent,
+           severity='info' if sent else 'warning',
+           metadata=None if sent else {'error': 'send_mail_failed'})
+    return _neutral()   # gửi lỗi cũng không báo ra ngoài; đã có audit log
 
 
 def reset_password(request, uidb64, token):
@@ -538,21 +536,17 @@ def sync_bootstrap(request):
     session hiện tại, xem _ensure_sync_key) rồi lưu vào IndexedDB để tải nhanh + auto refresh
     nền. KHÔNG cấp thêm quyền xem dữ liệu nào ngoài những gì các view khác đã cho phép."""
     user = request.user
-    devices = list(_accessible_devices(user).order_by('name'))
+    _latest_lock = (DeviceStatusLog.objects.filter(device=OuterRef('pk'))
+                    .order_by('-recorded_at').values('lock_state')[:1])
+    devices = list(_accessible_devices(user).annotate(last_lock_state=Subquery(_latest_lock))
+                   .order_by('name'))
     device_ids = [d.id for d in devices]
-
-    # Lấy log trạng thái mới nhất mỗi thiết bị mà không phụ thuộc tính năng riêng của DB
-    # (DISTINCT ON chỉ có ở Postgres): quét 500 log gần nhất toàn bộ rồi giữ bản đầu tiên
-    # gặp cho mỗi device - đủ dùng ở quy mô thiết bị cá nhân/hộ gia đình của app này.
-    last_logs = {}
-    for log in DeviceStatusLog.objects.filter(device_id__in=device_ids).order_by('-recorded_at')[:500]:
-        last_logs.setdefault(log.device_id, log)
 
     devices_json = [{
         'id': str(d.id), 'name': d.name, 'device_code': d.device_code,
         'status': d.status, 'status_display': d.get_status_display(),
         'battery_level': d.battery_level,
-        'lock_state': (last_logs[d.id].lock_state if d.id in last_logs else 'unknown'),
+        'lock_state': d.last_lock_state or 'unknown',
         'location': d.location or '', 'is_owner': d.owner_id == user.id,
         'updated_at': d.updated_at.isoformat(),
     } for d in devices]
@@ -2652,11 +2646,14 @@ def door_pins(request):
                 return _redirect_with('smartlock:door-pins', device=device.id)
  
             label = (request.POST.get('label') or '').strip()[:100]
-            plain_pin = services.generate_unique_pin(device)
-            pin = services.issue_door_pin(
-                device=device, created_by=request.user, plain_pin=plain_pin,
-                ttl_minutes=ttl_minutes, label=label, max_uses=max_uses,
-            )
+            try:
+                pin, plain_pin = services.issue_unique_door_pin(
+                    device=device, created_by=request.user,
+                    ttl_minutes=ttl_minutes, label=label, max_uses=max_uses,
+                )
+            except RuntimeError as exc:
+                messages.error(request, str(exc))
+                return _redirect_with('smartlock:door-pins', device=device.id)
             _audit(request, 'DOOR_PIN_CREATED', device=device, metadata={'pin_id': str(pin.id), 'label': label})
             # plain_pin CHỈ xuất hiện 1 lần duy nhất ở đây - không lưu, không log lại
             # dạng thô. Chủ nhà tự chụp màn hình / copy để gửi cho khách.
