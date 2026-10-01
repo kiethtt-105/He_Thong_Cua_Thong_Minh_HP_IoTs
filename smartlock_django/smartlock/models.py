@@ -158,7 +158,6 @@ class SystemSettings(models.Model):
     share_code_expiry_minutes = models.IntegerField(default=15)
     login_lockout_stage_minutes = models.JSONField(default=default_lockout_stage_minutes)
     session_timeout_hours = models.IntegerField(default=24)
-    ip_whitelist = models.TextField(default='')
     ip_blacklist = models.TextField(default='')
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)

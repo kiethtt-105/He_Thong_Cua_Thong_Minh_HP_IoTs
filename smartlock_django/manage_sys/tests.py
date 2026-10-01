@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from smartlock import services
 from smartlock.models import (
-    AccessCard, AuditLog, CardDeviceAccess, Device, DeviceStatusLog, NfcReader, Notification,
+    MobileSession, AccessCard, AuditLog, CardDeviceAccess, Device, DeviceStatusLog, NfcReader, Notification,
     SupportRequest, User,
 )
 
@@ -95,14 +95,14 @@ class ActionTests(ManageSysBase):
         sr.refresh_from_db()
         self.assertEqual((sr.status, sr.processed_by_id), ('approved', self.admin.id))
         self.assertTrue(Notification.objects.filter(user=self.user, type='SUPPORT').exists())
-        self.client.post(url, {'action': 'execute'})
+        self.client.post(url, {'action': 'execute', 'reason': 'đã xử lý xong'})
         sr.refresh_from_db()
         self.assertEqual(sr.status, 'executed')
         self.assertIsNotNone(sr.completed_at)
 
     def test_support_cannot_skip_states(self):
         sr = self._support()
-        self.client.post(reverse('manage_sys:support-detail', args=[sr.id]), {'action': 'execute'})
+        self.client.post(reverse('manage_sys:support-detail', args=[sr.id]), {'action': 'execute', 'reason': 'đã xử lý xong'})
         sr.refresh_from_db()
         self.assertEqual(sr.status, 'pending')
 
@@ -138,14 +138,25 @@ class ActionTests(ManageSysBase):
         self.user.refresh_from_db()
         self.assertFalse(self.user.is_active)
 
-    def test_settings_rejects_blacklisting_own_ip(self):
+    def test_settings_saved_without_ip_lists(self):
         r = self.client.post(reverse('manage_sys:settings'), {
-            'verification_token_expiry_minutes': 30, 'share_code_expiry_minutes': 15,
-            'session_timeout_hours': 24, 'lockout_stages': '5,10,30',
-            'ip_blacklist': '127.0.0.1', 'ip_whitelist': ''})
+            'verification_token_expiry_minutes': 45, 'share_code_expiry_minutes': 20,
+            'session_timeout_hours': 12, 'lockout_stages': '5,10,30'})
         self.assertEqual(r.status_code, 302)
         from smartlock.models import SystemSettings
-        self.assertEqual(SystemSettings.objects.get(pk=1).ip_blacklist, '')
+        st = SystemSettings.objects.get(pk=1)
+        self.assertEqual((st.verification_token_expiry_minutes, st.share_code_expiry_minutes,
+                          st.session_timeout_hours), (45, 20, 12))
+        self.assertFalse(hasattr(st, 'ip_blacklist'))
+        self.assertFalse(hasattr(st, 'ip_whitelist'))
+
+    def test_execute_requires_note(self):
+        sr = self._support()
+        url = reverse('manage_sys:support-detail', args=[sr.id])
+        self.client.post(url, {'action': 'approve'})
+        self.client.post(url, {'action': 'execute', 'reason': ''})
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, 'approved')
 
 
 class DeviceLifecycleTests(ManageSysBase):
@@ -170,7 +181,7 @@ class DeviceLifecycleTests(ManageSysBase):
     def test_admin_created_device_uses_sha256_secret_and_has_no_owner(self):
         r = self.client.post(reverse('manage_sys:device-create'), {
             'device_code': 'DEV-NEW0001', 'name': 'Mới', 'device_mode': 'simulated',
-            'owner_email': '', 'mac_address': ''})
+            'owner_email': '', 'mac_address': ''}, follow=True)   # POST -> redirect -> trang hiển thị secret
         d = Device.objects.get(device_code='DEV-NEW0001')
         self.assertIsNone(d.owner)
         self.assertEqual(d.status, 'provisioning')
@@ -210,10 +221,10 @@ class DeviceLifecycleTests(ManageSysBase):
     def test_remove_owner_requires_confirm_then_revokes_everything(self):
         self._connect()
         self._claim()
-        self.client.post(self.url, {'action': 'remove_owner', 'confirm': 'sai'})
+        self.client.post(self.url, {'action': 'remove_owner', 'confirm': 'sai', 'current_password': PW})
         self.device.refresh_from_db()
         self.assertEqual(self.device.owner_id, self.user.id)
-        self.client.post(self.url, {'action': 'remove_owner', 'confirm': self.device.device_code})
+        self.client.post(self.url, {'action': 'remove_owner', 'confirm': self.device.device_code, 'current_password': PW})
         self.device.refresh_from_db()
         self.assertEqual((self.device.owner_id, self.device.status), (None, 'revoked'))
         self.assertTrue(AuditLog.objects.filter(action='MANAGE_DEVICE_OWNER_REMOVED', severity='critical').exists())
@@ -222,7 +233,7 @@ class DeviceLifecycleTests(ManageSysBase):
     def test_admin_cannot_reassign_revoked_but_user_can_reclaim(self):
         self._connect()
         self._claim()
-        self.client.post(self.url, {'action': 'remove_owner', 'confirm': self.device.device_code})
+        self.client.post(self.url, {'action': 'remove_owner', 'confirm': self.device.device_code, 'current_password': PW})
         self._connect()
         self._claim(self.user)                                    # admin thử gán lại -> bị từ chối
         self.device.refresh_from_db()
@@ -250,7 +261,7 @@ class DeviceLifecycleTests(ManageSysBase):
 
     def test_rotate_secret_changes_hash_and_is_logged(self):
         old = self.device.provisioning_secret_hash
-        self.client.post(self.url, {'action': 'rotate_secret', 'confirm': self.device.device_code})
+        self.client.post(self.url, {'action': 'rotate_secret', 'confirm': self.device.device_code, 'current_password': PW})
         self.device.refresh_from_db()
         self.assertNotEqual(self.device.provisioning_secret_hash, old)
         self.assertTrue(AuditLog.objects.filter(action='MANAGE_DEVICE_SECRET_ROTATED').exists())
@@ -276,3 +287,250 @@ class DeviceLifecycleTests(ManageSysBase):
         ev2 = services.verify_rfid_tap(self.device, '11:22:33:44')
         self.assertEqual(ev2.reason, 'UNKNOWN_CARD')
         self.assertEqual(AccessCard.objects.filter(user=self.user).count(), 1)
+
+class LoginHardeningTests(ManageSysBase):
+    def _login(self, ident, pw=PW):
+        return self.client.post(reverse('manage_sys:login'), {'identifier': ident, 'password': pw})
+
+    def _error_text(self, r):
+        return [str(m) for m in r.context['messages']]
+
+    def test_locked_admin_gets_same_message_as_unknown_email(self):
+        from datetime import timedelta as td
+        self.admin.login_locked_until = timezone.now() + td(minutes=10)
+        self.admin.save(update_fields=['login_locked_until'])
+        locked = self._error_text(self._login('admin@example.com'))
+        unknown = self._error_text(self._login('nobody@example.com'))
+        wrong = self._error_text(self._login('user@example.com', 'sai-mat-khau'))
+        self.assertEqual(locked, unknown)
+        self.assertEqual(unknown, wrong)
+        self.assertNotIn(ADMIN_COOKIE, self.client.cookies)   # đúng mật khẩu nhưng đang khóa -> không vào được
+
+    def test_ip_throttle_blocks_even_correct_password(self):
+        for _ in range(10):
+            AuditLog.objects.create(action='MANAGE_LOGIN_FAILED', success=False, ip_address='127.0.0.1')
+        r = self._login('admin@example.com')
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn(ADMIN_COOKIE, self.client.cookies)
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_LOGIN_THROTTLED').exists())
+
+    def test_old_failures_do_not_throttle(self):
+        for _ in range(10):
+            AuditLog.objects.create(action='MANAGE_LOGIN_FAILED', success=False, ip_address='127.0.0.1')
+        AuditLog.objects.filter(action='MANAGE_LOGIN_FAILED').update(
+            created_at=timezone.now() - timedelta(minutes=30))
+        self.assertRedirects(self._login('admin@example.com'), reverse('manage_sys:dashboard'),
+                             fetch_redirect_response=False)
+
+
+class SecretRevealTests(ManageSysBase):
+    def setUp(self):
+        super().setUp()
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        self.device = Device.objects.create(
+            device_code='DEV-SEC00001', provisioning_secret_hash=services.hash_token('old'),
+            name='Khoá', status='provisioning', owner=None)
+        self.url = reverse('manage_sys:device-detail', args=[self.device.id])
+        self.reveal = reverse('manage_sys:device-secret', args=[self.device.id])
+
+    def test_rotate_redirects_and_refresh_does_not_rotate_again(self):
+        r = self.client.post(self.url, {'action': 'rotate_secret', 'confirm': self.device.device_code, 'current_password': PW})
+        self.assertRedirects(r, self.reveal, fetch_redirect_response=False)
+        self.device.refresh_from_db()
+        hash_after_rotate = self.device.provisioning_secret_hash
+        page = self.client.get(self.reveal)                       # hiển thị secret
+        secret = page.context['secret']
+        self.assertEqual(services.hash_token(secret), hash_after_rotate)
+        self.client.get(self.reveal)                              # "F5": không còn secret, KHÔNG xoay lại
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.provisioning_secret_hash, hash_after_rotate)
+        self.assertEqual(AuditLog.objects.filter(action='MANAGE_DEVICE_SECRET_ROTATED').count(), 1)
+
+    def test_secret_shown_once_then_redirected(self):
+        self.client.post(self.url, {'action': 'rotate_secret', 'confirm': self.device.device_code, 'current_password': PW})
+        self.assertEqual(self.client.get(self.reveal).status_code, 200)
+        self.assertRedirects(self.client.get(self.reveal), self.url, fetch_redirect_response=False)
+
+    def test_secret_not_stored_in_plaintext_in_session(self):
+        self.client.post(self.url, {'action': 'rotate_secret', 'confirm': self.device.device_code, 'current_password': PW})
+        stash = self.client.session['manage_pending_secret']
+        self.device.refresh_from_db()
+        # blob là token Fernet, không chứa secret gốc; secret gốc chỉ lấy được qua trang reveal
+        secret = self.client.get(self.reveal).context['secret']
+        self.assertNotIn(secret, str(stash))
+
+    def test_secret_not_in_audit_metadata(self):
+        self.client.post(self.url, {'action': 'rotate_secret', 'confirm': self.device.device_code, 'current_password': PW})
+        secret = self.client.get(self.reveal).context['secret']
+        for log in AuditLog.objects.filter(device=self.device):
+            self.assertNotIn(secret, str(log.metadata))
+
+
+class SupportSeparationTests(ManageSysBase):
+    def setUp(self):
+        super().setUp()
+        self.admin2 = make_user('admin2@example.com', 'admin2', is_admin=True, is_superuser=True)
+        self.device = Device.objects.create(
+            device_code='DEV-SUP00001', provisioning_secret_hash='x', name='Cửa', owner=self.user, status='online')
+        self.sr = SupportRequest.objects.create(
+            device=self.device, requested_by=self.user, action='RECOVERY',
+            authorization_code_hash='h', recovery_code_hash='r',
+            expires_at=timezone.now() + timedelta(hours=1))
+        self.url = reverse('manage_sys:support-detail', args=[self.sr.id])
+
+    def _as(self, email):
+        self.client.post(reverse('manage_sys:logout'))
+        self.client.post(reverse('manage_sys:login'), {'identifier': email, 'password': PW})
+
+    def test_sensitive_execute_requires_different_admin(self):
+        self._as('admin@example.com')
+        self.client.post(self.url, {'action': 'approve'})
+        self.client.post(self.url, {'action': 'execute', 'reason': 'đã xử lý xong'})         # cùng người duyệt -> bị từ chối
+        self.sr.refresh_from_db()
+        self.assertEqual(self.sr.status, 'approved')
+        self._as('admin2@example.com')
+        self.client.post(self.url, {'action': 'execute', 'reason': 'đã xử lý xong'})
+        self.sr.refresh_from_db()
+        self.assertEqual(self.sr.status, 'executed')
+        self.assertEqual(self.sr.processed_by_id, self.admin.id)   # vẫn ghi nhận người duyệt
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_SUPPORT_EXECUTE', actor_user=self.admin2).exists())
+
+    def test_admin_cannot_process_own_request(self):
+        sr = SupportRequest.objects.create(
+            device=self.device, requested_by=self.admin, action='ADD_CARD',
+            authorization_code_hash='h', expires_at=timezone.now() + timedelta(hours=1))
+        self._as('admin@example.com')
+        self.client.post(reverse('manage_sys:support-detail', args=[sr.id]), {'action': 'approve'})
+        sr.refresh_from_db()
+        self.assertEqual(sr.status, 'pending')
+
+
+class DeactivateRevokesMobileTests(ManageSysBase):
+    def test_deactivate_revokes_mobile_sessions(self):
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        s = MobileSession.objects.create(
+            user=self.user, refresh_hash='h' * 64, fcm_token='tok',
+            expires_at=timezone.now() + timedelta(days=30))
+        self.client.post(reverse('manage_sys:user-detail', args=[self.user.id]), {'action': 'toggle_active'})
+        s.refresh_from_db()
+        self.assertIsNotNone(s.revoked_at)
+        self.assertEqual(s.fcm_token, '')
+
+
+class ReauthTests(ManageSysBase):
+    def setUp(self):
+        super().setUp()
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        self.url = reverse('manage_sys:user-detail', args=[self.user.id])
+
+    def test_grant_admin_needs_correct_password(self):
+        self.client.post(self.url, {'action': 'grant_admin', 'current_password': 'sai'})
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_admin)
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_REAUTH_FAILED', actor_user=self.admin).exists())
+        self.admin.refresh_from_db()
+        self.assertEqual(self.admin.login_failed_attempts, 1)          # tính vào bộ đếm khóa
+        self.client.post(self.url, {'action': 'grant_admin', 'current_password': PW})
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_admin)
+
+    def test_missing_password_is_rejected(self):
+        self.client.post(self.url, {'action': 'grant_admin'})
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_admin)
+
+    def test_remove_owner_and_rotate_need_password(self):
+        dev = Device.objects.create(device_code='DEV-RE000001', provisioning_secret_hash='x',
+                                    name='K', owner=self.user, status='online')
+        url = reverse('manage_sys:device-detail', args=[dev.id])
+        self.client.post(url, {'action': 'rotate_secret', 'confirm': dev.device_code, 'current_password': 'sai'})
+        self.client.post(url, {'action': 'remove_owner', 'confirm': dev.device_code})
+        dev.refresh_from_db()
+        self.assertEqual((dev.provisioning_secret_hash, dev.owner_id), ('x', self.user.id))
+
+
+class SuperuserGuardTests(ManageSysBase):
+    def test_last_superuser_cannot_be_orphaned(self):
+        from manage_sys.views import _would_orphan_superusers
+        self.assertTrue(_would_orphan_superusers(self.admin))           # chỉ có 1 superuser
+        make_user('root2@example.com', 'root2', is_admin=True, is_superuser=True)
+        self.assertFalse(_would_orphan_superusers(self.admin))
+        self.assertFalse(_would_orphan_superusers(self.user))           # user thường: không liên quan
+
+
+class LoginExtrasTests(ManageSysBase):
+    def test_new_ip_login_notifies(self):
+        AuditLog.objects.create(action='MANAGE_LOGIN', actor_user=self.admin, ip_address='10.9.9.9')
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        self.assertTrue(Notification.objects.filter(user=self.admin, type='SECURITY').exists())
+
+    def test_known_ip_and_first_login_do_not_notify(self):
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})   # lần đầu
+        self.client.post(reverse('manage_sys:logout'))
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})   # cùng IP
+        self.assertFalse(Notification.objects.filter(user=self.admin, type='SECURITY').exists())
+
+    def test_admin_cookie_flags(self):
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        c = self.client.cookies[ADMIN_COOKIE]
+        self.assertTrue(c['httponly'])
+        self.assertEqual(c['samesite'], 'Strict')
+
+    def test_dashboard_stats(self):
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        r = self.client.get(reverse('manage_sys:dashboard'))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context['stats']['total_users'], 2)
+        self.assertEqual(r.context['stats']['active_users'], 2)
+
+
+class ClientIpTests(TestCase):
+    def _req(self, xff=None, remote='10.0.0.1'):
+        from django.test import RequestFactory
+        extra = {'REMOTE_ADDR': remote}
+        if xff is not None:
+            extra['HTTP_X_FORWARDED_FOR'] = xff
+        return RequestFactory().get('/', **extra)
+
+    def test_xff_ignored_when_not_trusted(self):
+        with self.settings(TRUST_PROXY_HEADERS=False):
+            self.assertEqual(services.client_ip(self._req('1.2.3.4')), '10.0.0.1')
+
+    def test_spoofed_first_xff_element_is_ignored(self):
+        with self.settings(TRUST_PROXY_HEADERS=True, TRUST_PROXY_COUNT=1):
+            # client giả mạo 6.6.6.6; proxy của mình thêm 203.0.113.9 ở cuối
+            self.assertEqual(services.client_ip(self._req('6.6.6.6, 203.0.113.9')), '203.0.113.9')
+
+    def test_two_trusted_proxies(self):
+        with self.settings(TRUST_PROXY_HEADERS=True, TRUST_PROXY_COUNT=2):
+            self.assertEqual(services.client_ip(self._req('6.6.6.6, 203.0.113.9, 172.16.0.1')), '203.0.113.9')
+
+    def test_short_xff_falls_back_to_remote_addr(self):
+        with self.settings(TRUST_PROXY_HEADERS=True, TRUST_PROXY_COUNT=2):
+            self.assertEqual(services.client_ip(self._req('6.6.6.6')), '10.0.0.1')
+
+    def test_invalid_value_falls_back(self):
+        with self.settings(TRUST_PROXY_HEADERS=True, TRUST_PROXY_COUNT=1):
+            self.assertEqual(services.client_ip(self._req('khong-phai-ip')), '10.0.0.1')
+
+
+class PruneAuditLogsTests(TestCase):
+    def test_prunes_by_severity_and_age(self):
+        from django.core.management import call_command
+        old = timezone.now() - timedelta(days=200)
+        very_old = timezone.now() - timedelta(days=800)
+        keep = AuditLog.objects.create(action='A_KEEP_NEW', severity='info')
+        a = AuditLog.objects.create(action='A_OLD_INFO', severity='info')
+        b = AuditLog.objects.create(action='A_OLD_CRIT', severity='critical')
+        c = AuditLog.objects.create(action='A_VERY_OLD_CRIT', severity='critical')
+        AuditLog.objects.filter(pk=a.pk).update(created_at=old)
+        AuditLog.objects.filter(pk=b.pk).update(created_at=old)
+        AuditLog.objects.filter(pk=c.pk).update(created_at=very_old)
+        call_command('prune_auditlogs', '--dry-run', stdout=__import__('io').StringIO())
+        self.assertEqual(AuditLog.objects.count(), 4)                   # dry-run không xoá
+        call_command('prune_auditlogs', stdout=__import__('io').StringIO())
+        left = set(AuditLog.objects.values_list('action', flat=True))
+        self.assertIn('A_KEEP_NEW', left)
+        self.assertIn('A_OLD_CRIT', left)                               # critical giữ 730 ngày
+        self.assertNotIn('A_OLD_INFO', left)
+        self.assertNotIn('A_VERY_OLD_CRIT', left)

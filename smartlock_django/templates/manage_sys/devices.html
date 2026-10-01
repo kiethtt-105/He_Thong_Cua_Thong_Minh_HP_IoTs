@@ -121,7 +121,7 @@ Thêm thiết bị
                     <div class="mb-4">
                         <label class="form-label">Chủ sở hữu (email hoặc username)</label>
                         <input type="text" name="owner_email" class="form-control" value="{{ form.owner_email }}" autocapitalize="none">
-                        <div class="form-text">Để trống: thiết bị ở trạng thái "chờ cấu hình", người dùng tự nhận sau. Có chủ: thiết bị vào ngay tài khoản đó và được tính là đã mua.</div>
+                        <div class="form-text">Chỉ để ghi nhớ chủ dự kiến. Thiết bị luôn được tạo ở trạng thái "chờ cấu hình"; việc gán chủ làm ở trang chi tiết và chỉ được khi khoá đã kết nối thật.</div>
                     </div>
                     <button class="btn btn-primary w-100"><i class="fa-solid fa-plus me-2"></i>Tạo thiết bị</button>
                 </form>
@@ -132,7 +132,7 @@ Thêm thiết bị
 {% elif page == 'device_created' %}
 <div class="alert alert-warning">
     <i class="fa-solid fa-triangle-exclamation me-2"></i>
-    <strong>Secret chỉ hiển thị một lần.</strong> Hãy chép vào firmware / file cấu hình của thiết bị ngay. Nếu mất phải tạo lại thiết bị.
+    <strong>Secret chỉ hiển thị một lần</strong> (tải lại trang sẽ không còn). Hãy chép vào firmware / file cấu hình của thiết bị ngay. Nếu chưa kịp chép, vào trang chi tiết dùng <em>Xoay secret</em> để tạo secret mới.
 </div>
 <div class="card">
     <div class="card-header">Thông tin kết nối</div>
@@ -146,7 +146,7 @@ Thêm thiết bị
                     onclick="navigator.clipboard.writeText(document.getElementById('sec').textContent);this.textContent='Đã chép'">Chép</button></dd>
             <dt>Chủ sở hữu</dt><dd>{{ device.owner.email|default:"— (chờ cấu hình)" }}</dd>
         </dl>
-        <div class="small text-muted">Thiết bị gọi <span class="mono">POST {{ api_base }}/api/device/heartbeat/</span> mỗi 10-30 giây với <span class="mono">device_code</span> và <span class="mono">secret</span>.</div>
+        <div class="small text-muted">Thiết bị kết nối MQTT broker với username = <span class="mono">{{ device.device_code }}</span>, password = secret ở trên; publish lên <span class="mono">smartlock/{{ device.device_code }}/status|ack|event</span> và subscribe <span class="mono">smartlock/{{ device.device_code }}/cmd</span>.</div>
     </div>
 </div>
 {% elif page == 'device_detail' %}
@@ -170,6 +170,63 @@ Thêm thiết bị
                     <dt>Trạng thái khóa</dt><dd>{{ last_log.lock_state }}{% if last_log.tamper_detected %} <span class="badge text-bg-danger">Bị phá</span>{% endif %}</dd>
                     {% endif %}
                 </dl>
+            </div>
+        </div>
+
+        <div class="card mb-4" id="linkCard" data-url="{% url 'manage_sys:device-link' device.id %}">
+            <div class="card-header d-flex justify-content-between align-items-center"><span>Kết nối</span><span id="linkBadge" class="badge text-bg-secondary">Đang kiểm tra…</span></div>
+            <div class="card-body">
+                <dl class="kv mb-3">
+                    <dt>Thấy lần cuối</dt><dd id="linkSeen">—</dd>
+                    <dt>PING gần nhất</dt><dd id="linkPing">{{ link.ping_status|default:"—" }}</dd>
+                </dl>
+                <form method="post">{% csrf_token %}<input type="hidden" name="action" value="ping">
+                    <button class="btn btn-outline-primary btn-sm w-100"><i class="fa-solid fa-satellite-dish me-2"></i>Gửi PING</button></form>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Thông tin thiết lập</div>
+            <div class="card-body">
+                <dl class="kv mb-0">
+                    <dt>MQTT username</dt><dd class="mono">{{ setup.mqtt_username }}</dd>
+                    <dt>Dấu vân tay secret</dt><dd class="mono">{{ setup.secret_fingerprint }}…</dd>
+                    <dt>Topic lệnh</dt><dd class="mono text-break">{{ setup.cmd_topic }}</dd>
+                    <dt>Topic thiết bị gửi</dt><dd class="mono text-break">{% for t in setup.publish_topics %}{{ t }}<br>{% endfor %}</dd>
+                </dl>
+            </div>
+        </div>
+
+        {% if admin_can_claim %}
+        <div class="card mb-4">
+            <div class="card-header">Gán chủ sở hữu</div>
+            <div class="card-body">
+                <form method="post">{% csrf_token %}<input type="hidden" name="action" value="claim">
+                    <input type="text" name="owner" class="form-control mb-2" placeholder="Email hoặc username" required autocapitalize="none">
+                    <button class="btn btn-primary w-100">Gán chủ</button>
+                    <div class="form-text">Chỉ được khi khoá đã kết nối (xem chỉ báo ở trên).</div>
+                </form>
+            </div>
+        </div>
+        {% elif user_must_claim %}
+        <div class="alert alert-info small">Khoá đã bị gỡ chủ: quản trị viên không gán lại được. Người dùng phải tự thêm bằng mã thiết bị + secret.</div>
+        {% endif %}
+
+        <div class="card mb-4 border-danger-subtle">
+            <div class="card-header text-danger">Vùng nguy hiểm</div>
+            <div class="card-body d-grid gap-3">
+                {% if device.owner %}
+                <form method="post" onsubmit="return confirm('Gỡ chủ và vô hiệu hóa MỌI quyền truy cập, thẻ, PIN, khuôn mặt của khoá này?')">{% csrf_token %}<input type="hidden" name="action" value="remove_owner">
+                    <label class="form-label small mb-1">Gỡ chủ sở hữu</label>
+                    <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Nhập mã: {{ device.device_code }}" required autocomplete="off">
+                    <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+                    <button class="btn btn-outline-danger btn-sm w-100">Gỡ chủ</button></form>
+                {% endif %}
+                <form method="post" onsubmit="return confirm('Xoay secret? Thiết bị phải nạp lại secret mới, secret cũ mất hiệu lực.')">{% csrf_token %}<input type="hidden" name="action" value="rotate_secret">
+                    <label class="form-label small mb-1">Xoay secret kết nối</label>
+                    <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Nhập mã: {{ device.device_code }}" required autocomplete="off">
+                    <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+                    <button class="btn btn-outline-danger btn-sm w-100">Xoay secret</button></form>
             </div>
         </div>
 
@@ -237,4 +294,27 @@ Thêm thiết bị
     </div>
 </div>
 {% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block scripts %}{{ block.super }}
+{% if page == 'device_detail' %}
+<script>
+(function () {
+    var card = document.getElementById('linkCard');
+    if (!card) return;
+    var badge = document.getElementById('linkBadge'), seen = document.getElementById('linkSeen'), ping = document.getElementById('linkPing');
+    function tick() {
+        fetch(card.dataset.url, {credentials: 'same-origin', cache: 'no-store'})
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                badge.textContent = d.connected ? 'Đã kết nối' : 'Chưa kết nối';
+                badge.className = 'badge text-bg-' + (d.connected ? 'success' : 'secondary');
+                seen.textContent = d.seconds_ago === null ? '—' : d.seconds_ago + ' giây trước';
+                if (d.ping_status) ping.textContent = d.ping_status;
+            })
+            .catch(function () { badge.textContent = 'Lỗi kiểm tra'; });
+    }
+    tick(); setInterval(tick, 5000);
+})();
+</script>
+{% endif %}
 {% endblock %}

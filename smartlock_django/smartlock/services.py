@@ -96,6 +96,19 @@ def system_settings() -> SystemSettings:
     return SystemSettings.objects.get_or_create(pk=1)[0]
 
 
+def share_code_ttl() -> timedelta:
+    """Thời hạn mã chia sẻ theo SystemSettings.share_code_expiry_minutes.
+    Nơi tạo ShareAccessCode (smartlock/views.py) PHẢI dùng: expires_at = now + services.share_code_ttl()."""
+    return timedelta(minutes=system_settings().share_code_expiry_minutes)
+
+
+def user_session_seconds() -> int:
+    """Thời gian phiên của USER thường theo SystemSettings.session_timeout_hours.
+    Nơi đăng nhập user (smartlock/views.py login_view) PHẢI gọi request.session.set_expiry(services.user_session_seconds())
+    (và dùng cho hạn MobileSession khi làm API). Phiên admin dùng MANAGE_SYS_SESSION_SECONDS riêng."""
+    return int(system_settings().session_timeout_hours) * 3600
+
+
 def is_admin(user) -> bool:
     return bool(user.is_staff or user.is_superuser or user.is_admin)
 

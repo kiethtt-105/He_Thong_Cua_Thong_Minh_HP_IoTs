@@ -17,6 +17,7 @@ urlpatterns = [
     path('devices/new/', views.device_create, name='device-create'),
     path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
     path('devices/<uuid:device_id>/link/', views.device_link_status, name='device-link'),
+    path('devices/<uuid:device_id>/secret/', views.device_secret, name='device-secret'),
 
     path('support/', views.support_list, name='support'),
     path('support/<uuid:request_id>/', views.support_detail, name='support-detail'),

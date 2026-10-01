@@ -123,11 +123,13 @@ Quản lý Người dùng
                         {% if target_is_manager %}
                         <form method="post" onsubmit="return confirm('Thu hồi TOÀN BỘ quyền quản trị của tài khoản này?')">
                             {% csrf_token %}<input type="hidden" name="action" value="revoke_admin">
+                            <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
                             <button class="btn btn-outline-danger w-100"><i class="fa-solid fa-user-shield me-2"></i>Thu hồi quyền quản trị</button>
                         </form>
                         {% else %}
                         <form method="post" onsubmit="return confirm('Cấp quyền quản trị cho tài khoản này?')">
                             {% csrf_token %}<input type="hidden" name="action" value="grant_admin">
+                            <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
                             <button class="btn btn-outline-primary w-100"><i class="fa-solid fa-user-shield me-2"></i>Cấp quyền quản trị</button>
                         </form>
                         {% endif %}

@@ -6,6 +6,8 @@ Tách phiên đăng nhập (session) của trang quản trị khỏi trang ngư�
   `manage_sys_sessionid`, cookie này bị giới hạn path = prefix quản trị.
 - Cookie `sessionid` của user thường bị bỏ qua hoàn toàn trên đường dẫn quản trị,
   và cookie quản trị không bao giờ được trình duyệt gửi tới các trang user.
+- Cookie quản trị luôn HttpOnly + SameSite=Strict (chống CSRF/lộ qua script), và Secure khi chạy HTTPS
+  (mặc định Secure = not DEBUG; ghi đè bằng settings.MANAGE_SYS_COOKIE_SECURE).
 
 => Đăng nhập admin KHÔNG làm user đăng nhập, và ngược lại. Đăng xuất bên nào
    cũng không ảnh hưởng bên kia.
@@ -20,6 +22,7 @@ class ManageSysSessionCookieMiddleware:
         self.get_response = get_response
         self.prefix = getattr(settings, 'MANAGE_SYS_URL_PREFIX', '/manage-sys/')
         self.cookie_name = getattr(settings, 'MANAGE_SYS_SESSION_COOKIE_NAME', 'manage_sys_sessionid')
+        self.secure = bool(getattr(settings, 'MANAGE_SYS_COOKIE_SECURE', not settings.DEBUG))
 
     def __call__(self, request):
         if not request.path_info.startswith(self.prefix):
@@ -35,11 +38,15 @@ class ManageSysSessionCookieMiddleware:
 
         response = self.get_response(request)
 
-        # Response: đổi tên cookie phiên -> cookie của admin, giới hạn path
+        # Response: đổi tên cookie phiên -> cookie của admin, giới hạn path + cờ bảo mật
         morsel = response.cookies.get(default)
         if morsel is not None:
             del response.cookies[default]
             morsel.set(self.cookie_name, morsel.value, morsel.coded_value)
             morsel['path'] = self.prefix
+            morsel['httponly'] = True
+            morsel['samesite'] = 'Strict'
+            if self.secure:
+                morsel['secure'] = True
             response.cookies[self.cookie_name] = morsel
         return response

@@ -221,6 +221,8 @@ Cài đặt hệ thống
                     <form method="post" class="mt-3">{% csrf_token %}
                         <input type="hidden" name="action" value="{% if sr.status == 'approved' %}execute{% else %}approve{% endif %}">
                         <button class="btn btn-outline-secondary w-100">Chốt trạng thái hết hạn</button></form>
+                {% elif sr.status == 'pending' and self_request %}
+                    <div class="alert alert-secondary mb-0">Bạn là người tạo yêu cầu này nên không thể tự duyệt hoặc từ chối. Cần quản trị viên khác xử lý.</div>
                 {% elif sr.status == 'pending' %}
                     <form method="post" id="reviewForm">{% csrf_token %}
                         <div class="mb-3">
@@ -232,11 +234,15 @@ Cài đặt hệ thống
                             <button name="action" value="reject" class="btn btn-outline-danger flex-fill" onclick="return confirm('Từ chối yêu cầu này?')"><i class="fa-solid fa-xmark me-1"></i> Từ chối</button>
                         </div>
                     </form>
+                {% elif sr.status == 'approved' and self_request %}
+                    <div class="alert alert-secondary mb-0">Bạn là người tạo yêu cầu này nên không thể tự thực hiện. Cần quản trị viên khác xử lý.</div>
+                {% elif sr.status == 'approved' and execute_blocked %}
+                    <div class="alert alert-warning mb-0"><i class="fa-solid fa-user-lock me-2"></i>Hành động nhạy cảm: người <strong>thực hiện</strong> phải khác người đã duyệt ({{ sr.processed_by.email }}). Hãy nhờ quản trị viên khác đánh dấu hoàn tất.</div>
                 {% elif sr.status == 'approved' %}
                     <form method="post">{% csrf_token %}
                         <div class="mb-3">
-                            <label class="form-label">Ghi chú (tùy chọn)</label>
-                            <textarea name="reason" class="form-control" rows="2" maxlength="300"></textarea>
+                            <label class="form-label">Việc đã thực hiện <span class="text-danger">*</span></label>
+                            <textarea name="reason" class="form-control" rows="2" maxlength="300" minlength="5" required placeholder="Ví dụ: đã thêm thẻ mới cho chủ khoá sau khi xác minh qua điện thoại"></textarea>
                         </div>
                         <button name="action" value="execute" class="btn btn-primary w-100" onclick="return confirm('Xác nhận đã thực hiện xong yêu cầu?')"><i class="fa-solid fa-check-double me-1"></i> Đánh dấu đã thực hiện</button>
                     </form>
@@ -471,16 +477,7 @@ Cài đặt hệ thống
                         <input type="text" name="lockout_stages" class="form-control" value="{{ stages_text }}" placeholder="5, 10, 30" required>
                         <div class="form-text">Mỗi lần sai quá số lần cho phép sẽ khóa theo mốc kế tiếp, cách nhau bằng dấu phẩy.</div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">IP bị chặn (mỗi dòng một IP)</label>
-                        <textarea name="ip_blacklist" rows="4" class="form-control mono">{{ st.ip_blacklist }}</textarea>
-                        <div class="form-text">Áp dụng cho cả đăng nhập user và đăng nhập quản trị. Không thể chặn IP hiện tại</div>
-                    </div>
-                    <div class="mb-0">
-                        <label class="form-label">IP cho phép (mỗi dòng một IP)</label>
-                        <textarea name="ip_whitelist" rows="3" class="form-control mono">{{ st.ip_whitelist }}</textarea>
-                        <div class="form-text text-warning-emphasis">Hiện được lưu để tham chiếu - Đang phát triển</div>
-                    </div>
+                    <div class="form-text">Ngoài khóa theo tài khoản, cổng quản trị còn tự giới hạn theo IP: 10 lần thất bại trong 15 phút sẽ bị tạm chặn.</div>
                 </div>
             </div>
         </div>
