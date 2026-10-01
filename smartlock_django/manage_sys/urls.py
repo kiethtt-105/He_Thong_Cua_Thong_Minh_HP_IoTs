@@ -19,9 +19,6 @@ urlpatterns = [
     path('devices/<uuid:device_id>/link/', views.device_link_status, name='device-link'),
     path('devices/<uuid:device_id>/secret/', views.device_secret, name='device-secret'),
 
-    path('support/', views.support_list, name='support'),
-    path('support/<uuid:request_id>/', views.support_detail, name='support-detail'),
-
     path('logs/', views.audit_logs, name='logs'),
     path('logs/logins/', views.login_attempts, name='login-attempts'),
 

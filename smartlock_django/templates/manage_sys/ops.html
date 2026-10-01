@@ -1,13 +1,9 @@
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
-{# Gộp: dashboard, support_list, support_detail, audit_logs, audit_logins, announcements, settings. View truyền biến `page`. #}
+{# Gộp: dashboard, audit_logs, audit_logins, announcements, settings. View truyền biến `page`. #}
 {% block title %}
 {% if page == 'dashboard' %}
 Tổng quan
-{% elif page == 'support_list' %}
-Hỗ trợ
-{% elif page == 'support_detail' %}
-Yêu cầu hỗ trợ
 {% elif page == 'audit_logs' %}
 Nhật ký hệ thống
 {% elif page == 'audit_logins' %}
@@ -21,12 +17,6 @@ Cài đặt hệ thống
 {% block page_title %}
 {% if page == 'dashboard' %}
 Tổng quan hệ thống
-{% elif page == 'support_list' %}
-Quản lý Yêu cầu Hỗ trợ
-{% elif page == 'support_detail' %}
-{{ sr.get_action_display }}
-    <span class="badge text-bg-{{ sr.status|badge }} align-middle">{{ sr.status|vi }}</span>
-    {% if is_overdue %}<span class="badge text-bg-secondary align-middle">Quá hạn</span>{% endif %}
 {% elif page == 'audit_logs' %}
 Nhật ký hệ thống
 {% elif page == 'audit_logins' %}
@@ -40,16 +30,13 @@ Cài đặt hệ thống
 {% block content %}
 {% if page == 'dashboard' %}
 <div class="row g-3 mb-3">
-    <div class="col-6 col-lg-3"><a href="{% url 'manage_sys:users' %}" class="card stat-card h-100"><div class="card-body">
+    <div class="col-12 col-sm-4 col-lg-4"><a href="{% url 'manage_sys:users' %}" class="card stat-card h-100"><div class="card-body">
         <div class="stat-icon bg-primary-subtle text-primary"><i class="fa-solid fa-users"></i></div>
         <div><div class="stat-num">{{ stats.total_users }}</div><small class="text-muted">Người dùng ({{ stats.active_users }} hoạt động)</small></div></div></a></div>
-    <div class="col-6 col-lg-3"><a href="{% url 'manage_sys:devices' %}" class="card stat-card h-100"><div class="card-body">
+    <div class="col-12 col-sm-4 col-lg-4"><a href="{% url 'manage_sys:devices' %}" class="card stat-card h-100"><div class="card-body">
         <div class="stat-icon bg-success-subtle text-success"><i class="fa-solid fa-plug"></i></div>
         <div><div class="stat-num">{{ stats.online_devices }}<span class="fs-6 text-muted fw-normal"> / {{ stats.total_devices }}</span></div><small class="text-muted">Thiết bị online</small></div></div></a></div>
-    <div class="col-6 col-lg-3"><a href="{% url 'manage_sys:support' %}?status=pending" class="card stat-card h-100"><div class="card-body">
-        <div class="stat-icon bg-warning-subtle text-warning"><i class="fa-solid fa-headset"></i></div>
-        <div><div class="stat-num">{{ stats.support_pending }}</div><small class="text-muted">Yêu cầu hỗ trợ chờ xử lý</small></div></div></a></div>
-    <div class="col-6 col-lg-3"><a href="{% url 'manage_sys:logs' %}?severity=critical" class="card stat-card h-100"><div class="card-body">
+    <div class="col-12 col-sm-4 col-lg-4"><a href="{% url 'manage_sys:logs' %}?severity=critical" class="card stat-card h-100"><div class="card-body">
         <div class="stat-icon bg-danger-subtle text-danger"><i class="fa-solid fa-triangle-exclamation"></i></div>
         <div><div class="stat-num">{{ stats.critical_24h }}</div><small class="text-muted">Sự kiện nghiêm trọng (24h)</small></div></div></a></div>
 </div>
@@ -71,31 +58,6 @@ Cài đặt hệ thống
 
 <div class="row g-4">
     <div class="col-lg-8">
-        <div class="card mb-4">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="fa-solid fa-list-check me-2 text-muted"></i>Yêu cầu hỗ trợ đang chờ</span>
-                <a href="{% url 'manage_sys:support' %}" class="small">Xem tất cả</a>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-hover mb-0">
-                    <thead><tr><th>Thiết bị</th><th>Người yêu cầu</th><th>Hành động</th><th>Hạn chót</th><th class="text-end"></th></tr></thead>
-                    <tbody>
-                    {% for sr in pending_requests %}
-                        <tr>
-                            <td>{{ sr.device.name }}</td>
-                            <td>{{ sr.requested_by.email }}</td>
-                            <td>{{ sr.get_action_display }}</td>
-                            <td>{{ sr.expires_at|date:"d/m H:i" }}</td>
-                            <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'manage_sys:support-detail' sr.id %}">Xử lý</a></td>
-                        </tr>
-                    {% empty %}
-                        <tr><td colspan="5"><div class="empty-state py-4"><div class="ei"><i class="fa-solid fa-check"></i></div><h6>Không có yêu cầu nào đang chờ</h6></div></td></tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
         <div class="card">
             <div class="card-header"><i class="fa-solid fa-chart-column me-2 text-muted"></i>Hoạt động hệ thống 7 ngày qua</div>
             <div class="card-body">
@@ -128,135 +90,6 @@ Cài đặt hệ thống
                 {% empty %}
                 <div class="list-group-item"><div class="empty-state py-4"><div class="ei"><i class="fa-solid fa-shield-check"></i></div><h6>Không có cảnh báo</h6></div></div>
                 {% endfor %}
-            </div>
-        </div>
-    </div>
-</div>
-{% elif page == 'support_list' %}
-<form method="get" class="filter-bar">
-    <input type="search" name="q" value="{{ q }}" class="form-control" style="flex:2 1 260px" placeholder="Tìm thiết bị, mã thiết bị, người yêu cầu...">
-    <select name="status" class="form-select" style="flex:1 1 170px">
-        <option value="">Mọi trạng thái</option>
-        {% for value, label in status_choices %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ value|vi }}</option>{% endfor %}
-    </select>
-    <select name="action" class="form-select" style="flex:1 1 200px">
-        <option value="">Mọi loại yêu cầu</option>
-        {% for value, label in action_choices %}<option value="{{ value }}" {% if action == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-    </select>
-    <div class="d-flex gap-2">
-        <button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button>
-        <a href="{% url 'manage_sys:support' %}" class="btn btn-outline-secondary">Xóa lọc</a>
-    </div>
-</form>
-
-<div class="card">
-    <div class="table-responsive">
-        <table class="table table-hover mb-0">
-            <thead><tr><th>Tạo lúc</th><th>Thiết bị</th><th>Người yêu cầu</th><th>Loại</th><th>Trạng thái</th><th>Hạn chót</th><th class="text-end"></th></tr></thead>
-            <tbody>
-            {% for sr in page_obj %}
-                <tr>
-                    <td>{{ sr.created_at|date:"d/m/Y H:i" }}</td>
-                    <td>{{ sr.device.name }}<br><span class="mono text-muted">{{ sr.device.device_code }}</span></td>
-                    <td class="text-break">{{ sr.requested_by.email }}</td>
-                    <td>{{ sr.get_action_display }} {% if sr.is_sensitive %}<i class="fa-solid fa-triangle-exclamation text-danger" title="Hành động nhạy cảm"></i>{% endif %}</td>
-                    <td><span class="badge text-bg-{{ sr.status|badge }}">{{ sr.status|vi }}</span>{% if sr.is_overdue %} <span class="badge text-bg-secondary">Quá hạn</span>{% endif %}</td>
-                    <td>{{ sr.expires_at|date:"d/m H:i" }}</td>
-                    <td class="text-end"><a href="{% url 'manage_sys:support-detail' sr.id %}" class="btn btn-sm btn-outline-primary">Xem</a></td>
-                </tr>
-            {% empty %}
-                <tr><td colspan="7"><div class="empty-state"><div class="ei"><i class="fa-solid fa-headset"></i></div><h6>Không có yêu cầu hỗ trợ nào</h6><div class="small">Thử đổi từ khóa hoặc bỏ bộ lọc.</div></div></td></tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-{% if page_obj.paginator.num_pages > 1 %}
-<nav class="mt-3" aria-label="Phân trang">
-    <ul class="pagination pagination-sm justify-content-center mb-0">
-        {% if page_obj.has_previous %}
-        <li class="page-item"><a class="page-link" href="?page=1{{ qs }}" aria-label="Trang đầu">«</a></li>
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{{ qs }}" aria-label="Trang trước">‹</a></li>
-        {% endif %}
-        <li class="page-item disabled"><span class="page-link">Trang {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} ({{ page_obj.paginator.count }} mục)</span></li>
-        {% if page_obj.has_next %}
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{{ qs }}" aria-label="Trang sau">›</a></li>
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{{ qs }}" aria-label="Trang cuối">»</a></li>
-        {% endif %}
-    </ul>
-</nav>
-{% endif %}
-{% elif page == 'support_detail' %}
-{% if is_sensitive %}
-<div class="alert alert-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>
-    Đây là hành động <strong>nhạy cảm</strong> ({{ sr.get_action_display }}). Hãy xác minh danh tính chủ thiết bị qua kênh khác trước khi duyệt.</div>
-{% endif %}
-
-<div class="row g-4">
-    <div class="col-lg-7">
-        <div class="card">
-            <div class="card-header">Chi tiết yêu cầu</div>
-            <div class="card-body">
-                <dl class="kv">
-                    <dt>Thiết bị</dt><dd><a href="{% url 'manage_sys:device-detail' sr.device.id %}">{{ sr.device.name }} ({{ sr.device.device_code }})</a></dd>
-                    <dt>Chủ thiết bị</dt><dd>{{ sr.device.owner.email|default:"—" }}</dd>
-                    <dt>Người yêu cầu</dt><dd><a href="{% url 'manage_sys:user-detail' sr.requested_by.id %}">{{ sr.requested_by.email }}</a></dd>
-                    <dt>Phạm vi</dt><dd>{{ sr.scope|default:"—" }}</dd>
-                    <dt>Mã khôi phục</dt><dd>{% if sr.recovery_code_hash %}Có{% else %}Không{% endif %}</dd>
-                    <dt>Tạo lúc</dt><dd>{{ sr.created_at|date:"d/m/Y H:i" }}</dd>
-                    <dt>Hạn chót</dt><dd>{{ sr.expires_at|date:"d/m/Y H:i" }}</dd>
-                    <dt>Người xử lý</dt><dd>{{ sr.processed_by.email|default:"—" }}</dd>
-                    <dt>Hoàn tất lúc</dt><dd>{{ sr.completed_at|date:"d/m/Y H:i"|default:"—" }}</dd>
-                </dl>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-lg-5">
-        <div class="card mb-4">
-            <div class="card-header">Xử lý</div>
-            <div class="card-body">
-                {% if is_overdue %}
-                    <div class="alert alert-secondary mb-0">Yêu cầu đã quá hạn. Thao tác bất kỳ sẽ chuyển yêu cầu sang <strong>Hết hạn</strong>.</div>
-                    <form method="post" class="mt-3">{% csrf_token %}
-                        <input type="hidden" name="action" value="{% if sr.status == 'approved' %}execute{% else %}approve{% endif %}">
-                        <button class="btn btn-outline-secondary w-100">Chốt trạng thái hết hạn</button></form>
-                {% elif sr.status == 'pending' and self_request %}
-                    <div class="alert alert-secondary mb-0">Bạn là người tạo yêu cầu này nên không thể tự duyệt hoặc từ chối. Cần quản trị viên khác xử lý.</div>
-                {% elif sr.status == 'pending' %}
-                    <form method="post" id="reviewForm">{% csrf_token %}
-                        <div class="mb-3">
-                            <label class="form-label">Ghi chú gửi tới người yêu cầu (tùy chọn)</label>
-                            <textarea name="reason" class="form-control" rows="2" maxlength="300"></textarea>
-                        </div>
-                        <div class="d-flex gap-2">
-                            <button name="action" value="approve" class="btn btn-success flex-fill" onclick="return confirm('Duyệt yêu cầu này?')"><i class="fa-solid fa-check me-1"></i> Duyệt</button>
-                            <button name="action" value="reject" class="btn btn-outline-danger flex-fill" onclick="return confirm('Từ chối yêu cầu này?')"><i class="fa-solid fa-xmark me-1"></i> Từ chối</button>
-                        </div>
-                    </form>
-                {% elif sr.status == 'approved' and self_request %}
-                    <div class="alert alert-secondary mb-0">Bạn là người tạo yêu cầu này nên không thể tự thực hiện. Cần quản trị viên khác xử lý.</div>
-                {% elif sr.status == 'approved' and execute_blocked %}
-                    <div class="alert alert-warning mb-0"><i class="fa-solid fa-user-lock me-2"></i>Hành động nhạy cảm: người <strong>thực hiện</strong> phải khác người đã duyệt ({{ sr.processed_by.email }}). Hãy nhờ quản trị viên khác đánh dấu hoàn tất.</div>
-                {% elif sr.status == 'approved' %}
-                    <form method="post">{% csrf_token %}
-                        <div class="mb-3">
-                            <label class="form-label">Việc đã thực hiện <span class="text-danger">*</span></label>
-                            <textarea name="reason" class="form-control" rows="2" maxlength="300" minlength="5" required placeholder="Ví dụ: đã thêm thẻ mới cho chủ khoá sau khi xác minh qua điện thoại"></textarea>
-                        </div>
-                        <button name="action" value="execute" class="btn btn-primary w-100" onclick="return confirm('Xác nhận đã thực hiện xong yêu cầu?')"><i class="fa-solid fa-check-double me-1"></i> Đánh dấu đã thực hiện</button>
-                    </form>
-                {% else %}
-                    <div class="alert alert-secondary mb-0">Yêu cầu đã ở trạng thái <strong>{{ sr.status|vi }}</strong>, không còn thao tác nào.</div>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-header">Nhật ký hỗ trợ của thiết bị</div>
-            <div class="list-group list-group-flush">
-                {% for l in logs %}<div class="list-group-item d-flex justify-content-between align-items-center gap-2"><span class="mono text-break">{{ l.action }}</span><small class="text-muted text-nowrap">{{ l.created_at|date:"d/m H:i" }}</small></div>
-                {% empty %}<div class="list-group-item text-center text-muted">Không có</div>{% endfor %}
             </div>
         </div>
     </div>
@@ -491,9 +324,7 @@ Cài đặt hệ thống
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 {% block page_actions %}
-{% if page == 'support_detail' %}
-<a href="{% url 'manage_sys:support' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>
-{% elif page == 'audit_logs' %}
+{% if page == 'audit_logs' %}
 <div class="btn-group btn-group-sm" role="group">
     <a class="btn btn-primary" href="{% url 'manage_sys:logs' %}">Audit log</a>
     <a class="btn btn-outline-secondary" href="{% url 'manage_sys:login-attempts' %}">Lượt đăng nhập</a>

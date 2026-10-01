@@ -3,7 +3,8 @@
 from django.db import models
 from django.utils import timezone
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator, RegexValidator
+from django.db.models.functions import Lower
 from django.core.exceptions import ValidationError
 from django.db.models.signals import pre_save, post_save
 from django.dispatch import receiver
@@ -107,6 +108,16 @@ class User(AbstractBaseUser, PermissionsMixin):
     login_last_failed_at = models.DateTimeField(null=True, blank=True)
     login_last_failed_ip = models.GenericIPAddressField(null=True, blank=True)
 
+    class Meta:
+        constraints = [
+            # email/username không phân biệt hoa-thường (clean() chỉ chuẩn hoá ở tầng form, DB mới là chốt chặn).
+            models.UniqueConstraint(Lower('email'), name='uniq_user_email_ci'),
+            models.UniqueConstraint(Lower('username'), name='uniq_user_username_ci'),
+            models.CheckConstraint(
+                check=models.Q(login_failed_attempts__gte=0, login_lock_stage__gte=0),
+                name='chk_user_lock_counters_nonneg'),
+        ]
+
     objects = UserManager()
 
     USERNAME_FIELD = 'email'
@@ -150,6 +161,12 @@ class OneTimeCode(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['user', 'purpose', 'created_at'], name='idx_otc_user_purpose')]
+        constraints = [
+            models.CheckConstraint(check=models.Q(attempts__gte=0), name='chk_otc_attempts_nonneg'),
+            # có used_at thì bắt buộc is_used=True (chiều ngược lại cho phép vì có chỗ chỉ .update(is_used=True)).
+            models.CheckConstraint(check=models.Q(used_at__isnull=True) | models.Q(is_used=True),
+                                   name='chk_otc_usedat_requires_used'),
+        ]
 
 class SystemSettings(models.Model):
     id = models.SmallIntegerField(primary_key=True, default=1)
@@ -161,6 +178,16 @@ class SystemSettings(models.Model):
     ip_blacklist = models.TextField(default='')
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(check=models.Q(id=1), name='chk_settings_singleton'),
+            models.CheckConstraint(
+                check=models.Q(verification_token_expiry_minutes__gte=1, verification_token_expiry_minutes__lte=10080,
+                               share_code_expiry_minutes__gte=1, share_code_expiry_minutes__lte=1440,
+                               session_timeout_hours__gte=1, session_timeout_hours__lte=720),
+                name='chk_settings_ranges'),
+        ]
 
 
 class Announcement(models.Model):
@@ -188,7 +215,10 @@ class Device(models.Model):
     )
     purchased_at = models.DateTimeField(null=True, blank=True)
     name = models.CharField(max_length=100)
-    mac_address = models.CharField(max_length=17, blank=True, null=True)
+    mac_address = models.CharField(
+        max_length=17, blank=True, null=True,
+        validators=[RegexValidator(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$',
+                                   'MAC phải dạng AA:BB:CC:DD:EE:FF (chữ hoa).')])
     firmware_version = models.CharField(max_length=30, blank=True, null=True)
     status = models.CharField(
         max_length=20, default='provisioning',
@@ -218,7 +248,12 @@ class Device(models.Model):
                     (~models.Q(status__in=('provisioning', 'revoked')) & models.Q(owner__isnull=False))
                 ),
                 name='chk_devices_owner_vs_status'
-            )
+            ),
+            models.CheckConstraint(check=models.Q(battery_level__gte=0, battery_level__lte=100),
+                                   name='chk_device_battery_range'),
+            # đã mua thì phải có thời điểm mua (mark_purchased() set cả hai).
+            models.CheckConstraint(check=models.Q(is_purchased=False) | models.Q(purchased_at__isnull=False),
+                                   name='chk_device_purchased_has_date'),
         ]
 
     def factory_reset(self, save=True):
@@ -254,6 +289,10 @@ class DeviceStatusLog(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['device', 'recorded_at'], name='idx_devstatuslog_dev_time')]
+        constraints = [
+            models.CheckConstraint(check=models.Q(battery_level__gte=0, battery_level__lte=100),
+                                   name='chk_statuslog_battery_range'),
+        ]
 
 
 class DeviceCommand(models.Model):
@@ -313,7 +352,9 @@ class DeviceAccess(models.Model):
             models.CheckConstraint(
                 check=models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=models.F('valid_from')),
                 name='chk_device_access_expiry'
-            )
+            ),
+            models.UniqueConstraint(fields=['device', 'user'], condition=models.Q(is_active=True),
+                                    name='uniq_active_device_access'),
         ]
 
 
@@ -337,6 +378,11 @@ class NfcReader(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['device', 'created_at'], name='idx_nfcreader_dev_time')]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=models.F('valid_from')),
+                name='chk_nfcreader_expiry'),
+        ]
 
     @property
     def auto_register_active(self) -> bool:
@@ -411,6 +457,10 @@ class Notification(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['user', 'created_at'], name='idx_notification_user_time')]
+        constraints = [
+            models.CheckConstraint(check=models.Q(read_at__isnull=True) | models.Q(is_read=True),
+                                   name='chk_notification_readat_requires_read'),
+        ]
 
 
 class AuditLog(models.Model):
@@ -585,6 +635,14 @@ class DoorPinCode(models.Model):
         indexes = [
             models.Index(fields=['device', 'expires_at'], name='idx_doorpin_dev_exp'),
         ]
+        constraints = [
+            models.CheckConstraint(check=models.Q(max_uses__gte=0, use_count__gte=0),
+                                   name='chk_doorpin_uses_nonneg'),
+            models.CheckConstraint(check=models.Q(expires_at__gt=models.F('valid_from')),
+                                   name='chk_doorpin_expiry'),
+            models.CheckConstraint(check=models.Q(is_revoked=False) | models.Q(revoked_at__isnull=False),
+                                   name='chk_doorpin_revoked_has_date'),
+        ]
 
     def set_pin(self, plain_pin: str):
         self.pin_hash = _hash_door_pin(self.device_id, plain_pin)
@@ -643,7 +701,12 @@ class FaceProfile(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=['user', 'device'], name='uniq_faceprofile_user_device')
+            models.UniqueConstraint(fields=['user', 'device'], name='uniq_faceprofile_user_device'),
+            models.CheckConstraint(check=models.Q(threshold__gt=0, threshold__lte=2),
+                                   name='chk_face_threshold_range'),
+            # NĐ 13/2023: hồ sơ khuôn mặt chỉ được BẬT khi đã có sự đồng ý.
+            models.CheckConstraint(check=models.Q(is_active=False) | models.Q(consent_confirmed=True),
+                                   name='chk_face_active_requires_consent'),
         ]
 
     def set_embedding(self, vector) -> None:
@@ -730,6 +793,10 @@ class MobileSession(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=['user', 'revoked_at'], name='idx_mobsess_user_rev')]
+        constraints = [
+            models.CheckConstraint(check=models.Q(expires_at__gt=models.F('created_at')),
+                                   name='chk_mobsession_expiry'),
+        ]
         ordering = ['-created_at']
 
     @property

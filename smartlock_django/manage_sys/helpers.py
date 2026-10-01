@@ -23,8 +23,6 @@ from smartlock.services import (  # noqa: F401  (re-export)
 logger = logging.getLogger('smartlock.manage_sys')
 
 PAGE_SIZE = 20
-# Các hành động hỗ trợ nhạy cảm (khớp CheckConstraint chk_support_requires_recovery)
-RECOVERY_ACTIONS = {'RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER'}
 
 # Lượt đăng nhập nay lấy từ AuditLog (bảng LoginAttemptLog cũ đã gộp vào AuditLog).
 LOGIN_ACTIONS = ('LOGIN', 'LOGIN_FAILED', 'LOGIN_ADMIN_REJECTED',
@@ -123,7 +121,7 @@ def check_reauth(request):
     if password and user.check_password(password):
         return True
     ip = client_ip(request)
-    register_failure(user, ip, admin_portal=True)
+    register_failure(user, ip)
     audit(request, 'MANAGE_REAUTH_FAILED', success=False, severity='warning')
     return False
 

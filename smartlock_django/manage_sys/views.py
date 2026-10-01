@@ -27,12 +27,12 @@ from django.views.decorators.http import require_http_methods, require_POST
 from smartlock import services
 from smartlock.models import (
     Announcement, AuditLog, Device, DeviceAccess, DeviceCommand, DeviceStatusLog,
-    NfcReader, SupportRequest, User,
+    NfcReader, User,
 )
 
 from .decorators import manage_required
 from .helpers import (
-    LOGIN_FAIL_ACTIONS, RECOVERY_ACTIONS, audit, burn_password_hash, check_reauth, client_ip,
+    LOGIN_FAIL_ACTIONS, audit, burn_password_hash, check_reauth, client_ip,
     decorate_login_attempt, has_manage_role, ip_throttled, is_manager, is_new_login_ip,
     lock_remaining_minutes, login_attempts_qs, modify_denied_reason, notify, paginate, pop_secret,
     register_failure, reset_lockout, revoke_mobile_sessions, stash_secret,
@@ -58,8 +58,6 @@ PAGE_TEMPLATE = {
     "device_created": "devices",
     "device_detail": "devices",
     "dashboard": "ops",
-    "support_list": "ops",
-    "support_detail": "ops",
     "audit_logs": "ops",
     "audit_logins": "ops",
     "announcements": "ops",
@@ -157,7 +155,7 @@ def login_view(request):
     # Thất bại. Chỉ đếm khóa với tài khoản quản trị, để cổng này không bị dùng
     # để khóa tài khoản user thường.
     if is_manager_account and not auth_user:
-        register_failure(user, ip, admin_portal=True)
+        register_failure(user, ip)
     action = 'MANAGE_LOGIN_DENIED' if auth_user else 'MANAGE_LOGIN_FAILED'
     audit(request, action, actor=None, target_user=user, success=False,
           severity='warning', username_attempt=identifier[:150])
@@ -194,7 +192,6 @@ def dashboard(request):
     stats = {
         'total_users': u['total'], 'active_users': u['active'], 'unverified_users': u['unverified'],
         'total_devices': d['total'], 'online_devices': d['online'], 'maintenance_devices': d['maintenance'],
-        'support_pending': SupportRequest.objects.filter(status='pending', expires_at__gt=now).count(),
         'failed_logins_24h': a24['failed'], 'locked_accounts': u['locked'], 'critical_24h': a24['critical'],
     }
 
@@ -212,8 +209,6 @@ def dashboard(request):
     context = {
         'stats': stats,
         'chart': chart,
-        'pending_requests': (SupportRequest.objects.filter(status='pending', expires_at__gt=now)
-                             .select_related('device', 'requested_by').order_by('expires_at')[:6]),
         'alert_logs': (AuditLog.objects.filter(severity__in=['warning', 'critical'])
                        .select_related('actor_user', 'device').order_by('-created_at')[:8]),
     }
@@ -566,8 +561,6 @@ def device_detail(request, device_id):
         'accesses': (DeviceAccess.objects.filter(device=device, is_active=True)
                      .select_related('user').prefetch_related('permissions').order_by('-created_at')),
         'readers': NfcReader.objects.filter(device=device).order_by('-created_at'),
-        'support_reqs': (SupportRequest.objects.filter(device=device)
-                         .select_related('requested_by').order_by('-created_at')[:5]),
         'logs': (AuditLog.objects.filter(device=device)
                  .select_related('actor_user').order_by('-created_at')[:10]),
     }
@@ -610,124 +603,6 @@ def device_link_status(request, device_id):
     })
     resp['Cache-Control'] = 'no-store'
     return resp
-
-
-# ====================== SUPPORT ======================
-_SUPPORT_TRANSITIONS = {
-    # action: (trạng thái hiện tại được phép, trạng thái mới, nhãn, mức độ)
-    'approve': ('pending', 'approved', 'duyệt', 'info'),
-    'reject': ('pending', 'rejected', 'từ chối', 'warning'),
-    'execute': ('approved', 'executed', 'đánh dấu đã thực hiện', 'warning'),
-}
-
-
-@manage_required
-def support_list(request):
-    qs = SupportRequest.objects.select_related('device', 'requested_by').order_by('-created_at')
-
-    q = (request.GET.get('q') or '').strip()
-    if q:
-        qs = qs.filter(Q(device__name__icontains=q) | Q(device__device_code__icontains=q)
-                       | Q(requested_by__email__icontains=q) | Q(requested_by__username__icontains=q))
-    status = request.GET.get('status') or ''
-    if status in dict(SupportRequest._meta.get_field('status').choices):
-        qs = qs.filter(status=status)
-    action = request.GET.get('action') or ''
-    if action in dict(SupportRequest._meta.get_field('action').choices):
-        qs = qs.filter(action=action)
-
-    page_obj, qs_str = paginate(request, qs)
-    now = timezone.now()
-    for sr in page_obj:
-        sr.is_overdue = sr.status in ('pending', 'approved') and sr.expires_at <= now
-        sr.is_sensitive = sr.action in RECOVERY_ACTIONS
-
-    return _render(request, 'support_list', {
-        'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status, 'action': action,
-        'status_choices': SupportRequest._meta.get_field('status').choices,
-        'action_choices': SupportRequest._meta.get_field('action').choices,
-    })
-
-
-@manage_required
-@require_http_methods(['GET', 'POST'])
-def support_detail(request, request_id):
-    if request.method == 'POST':
-        action = request.POST.get('action')
-        rule = _SUPPORT_TRANSITIONS.get(action)
-        if not rule:
-            messages.error(request, 'Hành động không hợp lệ.')
-            return redirect('manage_sys:support-detail', request_id=request_id)
-
-        required, new_status, label, severity = rule
-        reason = (request.POST.get('reason') or '').strip()[:300]
-        now = timezone.now()
-
-        effects = []  # audit/notify chạy SAU khi commit (chúng nuốt lỗi DB -> không được nằm trong atomic)
-        with transaction.atomic():
-            # khóa dòng để tránh 2 admin xử lý cùng lúc
-            sr = get_object_or_404(SupportRequest.objects.select_for_update().select_related('device', 'requested_by'),
-                                   id=request_id)
-            if sr.status != required:
-                messages.error(request, 'Trạng thái yêu cầu đã thay đổi, không thể thực hiện thao tác này.')
-            elif action == 'execute' and len(reason) < 5:
-                messages.error(request, 'Hãy ghi rõ việc đã thực hiện (tối thiểu 5 ký tự) trước khi đánh dấu hoàn tất.')
-            elif sr.requested_by_id == request.user.id:
-                messages.error(request, 'Bạn là người tạo yêu cầu này nên không thể tự xử lý. Cần quản trị viên khác.')
-            elif (action == 'execute' and sr.action in RECOVERY_ACTIONS
-                  and sr.processed_by_id == request.user.id):
-                # Tách người: hành động nhạy cảm -> người duyệt KHÔNG được tự đánh dấu đã thực hiện.
-                messages.error(request, 'Hành động nhạy cảm: người thực hiện phải khác người đã duyệt.')
-            elif sr.expires_at <= now:
-                sr.status = 'expired'
-                sr.completed_at = now
-                sr.save(update_fields=['status', 'completed_at'])
-                effects.append(lambda: audit(request, 'MANAGE_SUPPORT_EXPIRED', device=sr.device,
-                                             target_user=sr.requested_by, metadata={'request_id': str(sr.id)}))
-                messages.error(request, 'Yêu cầu đã hết hạn nên được chuyển sang "Hết hạn".')
-            else:
-                sr.status = new_status
-                fields = ['status']
-                if action != 'execute':          # giữ processed_by = NGƯỜI DUYỆT; người thực hiện ghi trong AuditLog
-                    sr.processed_by = request.user
-                    fields.append('processed_by')
-                if new_status in ('rejected', 'executed'):
-                    sr.completed_at = now
-                    fields.append('completed_at')
-                sr.save(update_fields=fields)
-                text = f'Yêu cầu hỗ trợ "{sr.get_action_display()}" cho "{sr.device.name}" đã được {label}.'
-                if reason:
-                    text += f' Ghi chú: {reason}'
-                effects.append(lambda: audit(
-                    request, f'MANAGE_SUPPORT_{action.upper()}', device=sr.device,
-                    target_user=sr.requested_by, severity=severity,
-                    metadata={'request_id': str(sr.id), 'reason': reason,
-                              'approved_by': sr.processed_by.email if sr.processed_by_id else None}))
-                effects.append(lambda: notify(
-                    sr.requested_by, 'Cập nhật yêu cầu hỗ trợ', text,
-                    severity='warning' if new_status == 'rejected' else 'info',
-                    device=sr.device, type_='SUPPORT'))
-                messages.success(request, f'Đã {label} yêu cầu.')
-        for fx in effects:
-            fx()
-        return redirect('manage_sys:support-detail', request_id=request_id)
-
-    sr = get_object_or_404(
-        SupportRequest.objects.select_related('device', 'device__owner', 'requested_by', 'processed_by'),
-        id=request_id)
-    now = timezone.now()
-    context = {
-        'sr': sr,
-        'is_overdue': sr.status in ('pending', 'approved') and sr.expires_at <= now,
-        'is_sensitive': sr.action in RECOVERY_ACTIONS,
-        'self_request': sr.requested_by_id == request.user.id,
-        'execute_blocked': (sr.status == 'approved' and sr.action in RECOVERY_ACTIONS
-                            and sr.processed_by_id == request.user.id),
-        'logs': (AuditLog.objects.filter(device=sr.device)
-                 .filter(Q(action__startswith='SUPPORT_') | Q(action__startswith='MANAGE_SUPPORT_'))
-                 .order_by('-created_at')[:5]),
-    }
-    return _render(request, 'support_detail', context)
 
 
 # ====================== AUDIT ======================

@@ -9,7 +9,7 @@ from django.utils import timezone
 from smartlock import services
 from smartlock.models import (
     MobileSession, AccessCard, AuditLog, CardDeviceAccess, Device, DeviceStatusLog, NfcReader, Notification,
-    SupportRequest, User,
+    User,
 )
 
 PREFIX = getattr(settings, 'MANAGE_SYS_URL_PREFIX', '/manage-sys/')
@@ -82,36 +82,6 @@ class ActionTests(ManageSysBase):
             device_code='DEV-TEST0001', provisioning_secret_hash='x', name='Cửa chính',
             owner=self.user, status='online')
 
-    def _support(self, **kw):
-        defaults = dict(device=self.device, requested_by=self.user, action='ADD_CARD',
-                        authorization_code_hash='h', expires_at=timezone.now() + timedelta(hours=1))
-        defaults.update(kw)
-        return SupportRequest.objects.create(**defaults)
-
-    def test_support_approve_then_execute(self):
-        sr = self._support()
-        url = reverse('manage_sys:support-detail', args=[sr.id])
-        self.client.post(url, {'action': 'approve', 'reason': 'ok'})
-        sr.refresh_from_db()
-        self.assertEqual((sr.status, sr.processed_by_id), ('approved', self.admin.id))
-        self.assertTrue(Notification.objects.filter(user=self.user, type='SUPPORT').exists())
-        self.client.post(url, {'action': 'execute', 'reason': 'đã xử lý xong'})
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, 'executed')
-        self.assertIsNotNone(sr.completed_at)
-
-    def test_support_cannot_skip_states(self):
-        sr = self._support()
-        self.client.post(reverse('manage_sys:support-detail', args=[sr.id]), {'action': 'execute', 'reason': 'đã xử lý xong'})
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, 'pending')
-
-    def test_expired_support_is_marked_expired(self):
-        sr = self._support(expires_at=timezone.now() - timedelta(minutes=1))
-        self.client.post(reverse('manage_sys:support-detail', args=[sr.id]), {'action': 'approve'})
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, 'expired')
-
     def test_device_maintenance_toggle(self):
         url = reverse('manage_sys:device-detail', args=[self.device.id])
         self.client.post(url, {'action': 'maintenance_on'})
@@ -149,14 +119,6 @@ class ActionTests(ManageSysBase):
                           st.session_timeout_hours), (45, 20, 12))
         self.assertFalse(hasattr(st, 'ip_blacklist'))
         self.assertFalse(hasattr(st, 'ip_whitelist'))
-
-    def test_execute_requires_note(self):
-        sr = self._support()
-        url = reverse('manage_sys:support-detail', args=[sr.id])
-        self.client.post(url, {'action': 'approve'})
-        self.client.post(url, {'action': 'execute', 'reason': ''})
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, 'approved')
 
 
 class DeviceLifecycleTests(ManageSysBase):
@@ -364,45 +326,6 @@ class SecretRevealTests(ManageSysBase):
         secret = self.client.get(self.reveal).context['secret']
         for log in AuditLog.objects.filter(device=self.device):
             self.assertNotIn(secret, str(log.metadata))
-
-
-class SupportSeparationTests(ManageSysBase):
-    def setUp(self):
-        super().setUp()
-        self.admin2 = make_user('admin2@example.com', 'admin2', is_admin=True, is_superuser=True)
-        self.device = Device.objects.create(
-            device_code='DEV-SUP00001', provisioning_secret_hash='x', name='Cửa', owner=self.user, status='online')
-        self.sr = SupportRequest.objects.create(
-            device=self.device, requested_by=self.user, action='RECOVERY',
-            authorization_code_hash='h', recovery_code_hash='r',
-            expires_at=timezone.now() + timedelta(hours=1))
-        self.url = reverse('manage_sys:support-detail', args=[self.sr.id])
-
-    def _as(self, email):
-        self.client.post(reverse('manage_sys:logout'))
-        self.client.post(reverse('manage_sys:login'), {'identifier': email, 'password': PW})
-
-    def test_sensitive_execute_requires_different_admin(self):
-        self._as('admin@example.com')
-        self.client.post(self.url, {'action': 'approve'})
-        self.client.post(self.url, {'action': 'execute', 'reason': 'đã xử lý xong'})         # cùng người duyệt -> bị từ chối
-        self.sr.refresh_from_db()
-        self.assertEqual(self.sr.status, 'approved')
-        self._as('admin2@example.com')
-        self.client.post(self.url, {'action': 'execute', 'reason': 'đã xử lý xong'})
-        self.sr.refresh_from_db()
-        self.assertEqual(self.sr.status, 'executed')
-        self.assertEqual(self.sr.processed_by_id, self.admin.id)   # vẫn ghi nhận người duyệt
-        self.assertTrue(AuditLog.objects.filter(action='MANAGE_SUPPORT_EXECUTE', actor_user=self.admin2).exists())
-
-    def test_admin_cannot_process_own_request(self):
-        sr = SupportRequest.objects.create(
-            device=self.device, requested_by=self.admin, action='ADD_CARD',
-            authorization_code_hash='h', expires_at=timezone.now() + timedelta(hours=1))
-        self._as('admin@example.com')
-        self.client.post(reverse('manage_sys:support-detail', args=[sr.id]), {'action': 'approve'})
-        sr.refresh_from_db()
-        self.assertEqual(sr.status, 'pending')
 
 
 class DeactivateRevokesMobileTests(ManageSysBase):

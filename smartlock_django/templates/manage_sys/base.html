@@ -70,7 +70,6 @@
             <div class="sb-label">Quản lý</div>
             <a class="sb-link {% if u|slice:':4' == 'user' %}active{% endif %}" href="{% url 'manage_sys:users' %}"><i class="fa-solid fa-users"></i> Người dùng</a>
             <a class="sb-link {% if u|slice:':6' == 'device' %}active{% endif %}" href="{% url 'manage_sys:devices' %}"><i class="fa-solid fa-plug"></i> Thiết bị</a>
-            <a class="sb-link {% if u|slice:':7' == 'support' %}active{% endif %}" href="{% url 'manage_sys:support' %}"><i class="fa-solid fa-headset"></i> Hỗ trợ</a>
 
             <div class="sb-label">Hệ thống</div>
             <a class="sb-link {% if u == 'logs' or u == 'login-attempts' %}active{% endif %}" href="{% url 'manage_sys:logs' %}"><i class="fa-solid fa-file-lines"></i> Nhật ký</a>
@@ -117,7 +116,7 @@
         <a class="bn-item {% if u == 'dashboard' %}active{% endif %}" href="{% url 'manage_sys:dashboard' %}"><i class="fa-solid fa-gauge"></i><span>Tổng quan</span></a>
         <a class="bn-item {% if u|slice:':4' == 'user' %}active{% endif %}" href="{% url 'manage_sys:users' %}"><i class="fa-solid fa-users"></i><span>Người dùng</span></a>
         <a class="bn-item {% if u|slice:':6' == 'device' %}active{% endif %}" href="{% url 'manage_sys:devices' %}"><i class="fa-solid fa-plug"></i><span>Thiết bị</span></a>
-        <a class="bn-item {% if u|slice:':7' == 'support' %}active{% endif %}" href="{% url 'manage_sys:support' %}"><i class="fa-solid fa-headset"></i><span>Hỗ trợ</span></a>
+        <a class="bn-item {% if u == 'logs' or u == 'login-attempts' %}active{% endif %}" href="{% url 'manage_sys:logs' %}"><i class="fa-solid fa-file-lines"></i><span>Nhật ký</span></a>
         <button type="button" class="bn-item" onclick="document.body.classList.toggle('sb-open')" aria-label="Menu"><i class="fa-solid fa-bars"></i><span>Menu</span></button>
     </nav>
 </div>

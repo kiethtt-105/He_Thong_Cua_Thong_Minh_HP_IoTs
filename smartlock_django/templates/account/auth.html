@@ -15,7 +15,7 @@ Xác thực tài khoản
 {% endblock %}
 {% block extra_head %}
 {% if page == 'verify_2fa' %}
-<style>.tf-tab.active { pointer-events: none; } .tf-code { letter-spacing: .4em; font-size: 1.4rem; text-align: center; font-family: var(--font-mono); font-weight: 600; }</style>
+<style>.tf-tab.active { pointer-events: none; background: var(--accent); color:#fff; border-color: var(--accent); } .tf-code { letter-spacing: .4em; font-size: 1.4rem; text-align: center; font-family: var(--font-mono); font-weight: 600; }</style>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 {% block scripts %}
@@ -89,7 +89,8 @@ Xác thực tài khoản
             <p class="mt-3">Điều khiển, chia sẻ quyền truy cập và theo dõi mọi hoạt động của khóa cửa ở một nơi duy nhất.</p>
             <ul class="auth-feats">
                 <li><i class="fa-solid fa-lock-open"></i> Khóa / mở từ xa theo thời gian thực</li>
-                <li><i class="fa-solid fa-share-nodes"></i> Chia sẻ quyền bằng mã có thời hạn</li>
+                <li><i class="fa-solid fa-share-nodes"></i> Chia sẻ khóa cho người thân, đặt thời hạn và quyền riêng</li>
+                <li><i class="fa-solid fa-hashtag"></i> Mã PIN, thẻ NFC và khuôn mặt cho khách</li>
                 <li><i class="fa-solid fa-shield-halved"></i> Nhật ký và xác thực 2 lớp bảo vệ tài khoản</li>
             </ul>
         </div>
@@ -269,4 +270,14 @@ Chúng tôi đã gửi email xác thực tới
         </div>
     </section>
 </div>
+
+<script>
+document.querySelectorAll('.auth-box input[type=password]').forEach(function (inp) {
+    var g = inp.closest('.input-group'); if (!g) return;
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-outline-secondary pw-toggle'; b.setAttribute('aria-label', 'Hiện/ẩn mật khẩu');
+    b.innerHTML = '<i class="fa-solid fa-eye"></i>';
+    b.addEventListener('click', function () { var s = inp.type === 'password'; inp.type = s ? 'text' : 'password'; b.firstChild.className = s ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye'; });
+    g.appendChild(b);
+});
+</script>
 {% endblock %}

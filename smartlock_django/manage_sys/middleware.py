@@ -22,7 +22,8 @@ class ManageSysSessionCookieMiddleware:
         self.get_response = get_response
         self.prefix = getattr(settings, 'MANAGE_SYS_URL_PREFIX', '/manage-sys/')
         self.cookie_name = getattr(settings, 'MANAGE_SYS_SESSION_COOKIE_NAME', 'manage_sys_sessionid')
-        self.secure = bool(getattr(settings, 'MANAGE_SYS_COOKIE_SECURE', not settings.DEBUG))
+        self.secure = bool(getattr(settings, 'MANAGE_SYS_COOKIE_SECURE',
+                                   getattr(settings, 'SECURE_COOKIES', not settings.DEBUG)))
 
     def __call__(self, request):
         if not request.path_info.startswith(self.prefix):

@@ -1,14 +1,12 @@
 {% extends 'account/layout.html' %}
-{# Gộp: nfc_tags, nfc_reader, share_codes, share_request, door_pins, face_profiles, access_history. View truyền biến `page` để chọn trang. #}
+{# Gộp: nfc_tags, nfc_reader, shares, door_pins, face_profiles, access_history. View truyền biến `page` để chọn trang. #}
 {% block title %}
 {% if page == 'nfc_tags' %}
 Thẻ NFC
 {% elif page == 'nfc_reader' %}
 Đầu đọc NFC
-{% elif page == 'share_codes' %}
-Mã chia sẻ
-{% elif page == 'share_request' %}
-Nhận quyền chia sẻ
+{% elif page == 'shares' %}
+Chia sẻ khóa
 {% elif page == 'door_pins' %}
 Mã PIN cửa
 {% elif page == 'face_profiles' %}
@@ -22,10 +20,8 @@ Lịch sử ra vào
 Thẻ NFC của tôi
 {% elif page == 'nfc_reader' %}
 Đầu đọc & đăng ký thẻ NFC
-{% elif page == 'share_codes' %}
-Mã chia sẻ khóa
-{% elif page == 'share_request' %}
-Nhận quyền chia sẻ khóa
+{% elif page == 'shares' %}
+Chia sẻ khóa
 {% elif page == 'door_pins' %}
 Mã PIN cửa
 {% elif page == 'face_profiles' %}
@@ -39,10 +35,8 @@ Lịch sử ra vào
 <p class="page-sub">Đổi tên, bật/tắt hoặc xóa các thẻ đã đăng ký.</p>
 {% elif page == 'nfc_reader' %}
 <p class="page-sub">Quản lý đầu đọc của thiết bị và đăng ký thẻ mới.</p>
-{% elif page == 'share_codes' %}
-<p class="page-sub">Tạo mã dùng một lần để cấp quyền tạm thời cho người khác.</p>
-{% elif page == 'share_request' %}
-<p class="page-sub">Nhập mã do chủ thiết bị gửi để nhận quyền truy cập.</p>
+{% elif page == 'shares' %}
+<p class="page-sub">Chia sẻ theo tài khoản, có hiệu lực ngay; người nhận được báo qua email và app.</p>
 {% elif page == 'door_pins' %}
 <p class="page-sub">Cấp mã PIN có thời hạn cho khách; mã chỉ hiển thị một lần khi tạo.</p>
 {% elif page == 'face_profiles' %}
@@ -60,8 +54,6 @@ Lịch sử ra vào
     {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
 </select></form>
 {% endif %}
-{% elif page == 'share_codes' %}
-<button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createCode" {% if not device_list %}disabled{% endif %}><i class="fa-solid fa-plus me-2"></i>Tạo mã mới</button>
 {% elif page == 'door_pins' %}
 <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#issuePin" {% if not device %}disabled{% endif %}><i class="fa-solid fa-plus me-2"></i>Cấp PIN mới</button>
 {% elif page == 'face_profiles' %}
@@ -135,7 +127,7 @@ Lịch sử ra vào
         <div class="card h-100">
             <div class="card-header">Đăng ký thẻ mới</div>
             <div class="card-body">
-                <p class="text-muted small">Nhập UID thẻ (ví dụ <code>04:A3:2B:1C</code>). UID được băm SHA-256 trước khi lưu.</p>
+                <p class="text-muted small">Nhập UID thẻ (ví dụ <code>04:A3:2B:1C</code>). UID được băm HMAC (có pepper của máy chủ) trước khi lưu.</p>
                 <form method="post">
                     {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="register_card">
                     <div class="mb-3"><label class="form-label">UID thẻ</label><input type="text" name="uid" class="form-control font-mono" required placeholder="04:A3:2B:1C"></div>
@@ -160,83 +152,99 @@ Lịch sử ra vào
     </table></div>
 </div>
 {% endif %}
-{% elif page == 'share_codes' %}
-<div class="card"><div class="table-responsive">
-    <table class="table table-hover mb-0">
-        <thead><tr><th>Mã</th><th>Thiết bị</th><th>Quyền hạn</th><th>Hết hạn</th><th class="text-end">Hành động</th></tr></thead>
-        <tbody>
-            {% for c in share_codes %}
-            <tr>
-                <td><span class="code-chip {% if c.is_expired %}dead{% endif %}">{{ c.plain }}</span></td>
-                <td class="fw-semibold">{{ c.device.name }}</td>
-                <td>{% for p in c.permissions.all %}<span class="chip me-1 mb-1">{{ p.name }}</span>{% empty %}<span class="text-muted">—</span>{% endfor %}</td>
-                <td class="text-nowrap"><div class="small mb-1">{{ c.expires_at|date:"d/m/Y H:i" }}</div>{% if c.is_expired %}<span class="status">Hết hạn</span>{% else %}<span class="status ok">Còn hiệu lực</span>{% endif %}</td>
-                <td class="text-end text-nowrap">
-                    {% if not c.is_expired %}<button class="btn btn-sm btn-outline-primary js-copy" data-text="{{ c.plain }}"><i class="fa-regular fa-copy"></i> Sao chép</button>{% endif %}
-                    <form method="post" class="d-inline" onsubmit="return confirm('Xóa mã này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="code_id" value="{{ c.id }}">
-                        <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash"></i></button></form>
-                </td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="5"><div class="empty-state"><div class="ei"><i class="fa-solid fa-share-nodes"></i></div><h6>Chưa có mã chia sẻ nào</h6><div>Tạo mã để chia sẻ quyền truy cập khóa.</div></div></td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div></div>
-
-<div class="modal fade" id="createCode" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
-    <form method="post">
-        {% csrf_token %}<input type="hidden" name="action" value="create">
-        <div class="modal-header"><h5 class="modal-title">Tạo mã chia sẻ</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-        <div class="modal-body">
-            <div class="row g-3 mb-3">
-                <div class="col-sm-7"><label class="form-label">Thiết bị</label>
-                    <select name="device_id" class="form-select" required>{% for d in device_list %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div>
-                <div class="col-sm-5"><label class="form-label">Thời hạn (phút)</label><input type="number" name="minutes" class="form-control" min="1" max="1440" value="{{ default_minutes }}"></div>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Gửi cho <span class="text-muted fw-normal">(tùy chọn)</span></label>
-                <input type="text" name="recipient" class="form-control" placeholder="Email hoặc username người nhận">
-                <div class="form-text">Điền vào để hệ thống tự gửi mã qua email. Để trống thì bạn tự chép mã và chia sẻ thủ công.</div>
-            </div>
-            <label class="form-label">Quyền hạn</label>
-            {% for p in permissions %}
-            <div class="form-check"><input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="sp-{{ p.code }}" {% if not p.is_sensitive %}checked{% endif %}>
-                <label class="form-check-label" for="sp-{{ p.code }}">{{ p.name }}{% if p.is_sensitive %} <span class="chip danger ms-1">Nhạy cảm</span>{% endif %}</label></div>
-            {% endfor %}
-        </div>
-        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button><button class="btn btn-primary">Tạo mã</button></div>
-    </form>
-</div></div></div>
-{% elif page == 'share_request' %}
+{% elif page == 'shares' %}
 <div class="row g-3">
-    <div class="col-lg-5">
-        <div class="card h-100"><div class="card-body p-4 text-center">
-            <div class="stat-icon bg-primary-subtle text-primary mx-auto mb-3" style="width:60px;height:60px;font-size:1.5rem"><i class="fa-solid fa-key"></i></div>
-            <h5 class="fw-bold">Nhập mã chia sẻ 6 số</h5>
-            <p class="text-muted small">Quyền truy cập có hiệu lực {{ access_hours }} giờ, mã chỉ dùng được một lần.</p>
-            <form method="post">
-                {% csrf_token %}
-                <input type="text" name="code" class="form-control form-control-lg otp mb-3" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="••••••" required>
-                <button class="btn btn-primary w-100 py-2">Nhận quyền truy cập</button>
-            </form>
-        </div></div>
-    </div>
     <div class="col-lg-7">
-        <div class="card h-100">
-            <div class="card-header">Thiết bị tôi được chia sẻ</div>
-            <div class="table-responsive"><table class="table mb-0">
-                <thead><tr><th>Thiết bị</th><th>Quyền hạn</th><th>Hết hạn</th></tr></thead>
-                <tbody>
-                    {% for a in my_accesses %}
-                    <tr>
-                        <td><a href="{% url 'smartlock:device-detail' a.device.id %}" class="fw-semibold">{{ a.device.name }}</a></td>
-                        <td>{% for p in a.permissions.all %}<span class="chip me-1 mb-1">{{ p.name }}</span>{% empty %}—{% endfor %}</td>
-                        <td class="text-nowrap">{% if a.expires_at %}{{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn{% endif %}</td>
-                    </tr>
-                    {% empty %}<tr><td colspan="3"><div class="empty-state py-5"><div class="ei"><i class="fa-solid fa-user-lock"></i></div>Bạn chưa được chia sẻ thiết bị nào.</div></td></tr>{% endfor %}
-                </tbody>
-            </table></div>
+        <form method="get" class="filter-bar">
+            <div class="flex-grow-1" style="min-width:220px"><select name="device" class="form-select" onchange="this.form.submit()">
+                {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% empty %}<option value="">Bạn chưa sở hữu khóa nào</option>{% endfor %}
+            </select></div>
+        </form>
+
+        {% if device %}
+        <div class="card mb-3">
+            <div class="card-header"><i class="fa-solid fa-user-plus me-2 text-primary"></i>Chia sẻ “{{ device.name }}” cho người khác</div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="grant">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-7"><label class="form-label">Email hoặc username người nhận</label>
+                            <input type="text" name="identifier" class="form-control" required placeholder="ten@email.com"></div>
+                        <div class="col-md-5"><label class="form-label">Hết hạn <span class="text-muted fw-normal">(tùy chọn)</span></label>
+                            <input type="datetime-local" name="expires_at" class="form-control"></div>
+                    </div>
+                    <label class="form-label">Quyền hạn</label>
+                    <div class="row g-2 mb-3">
+                        {% for p in permissions %}
+                        <div class="col-sm-6"><div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="g-{{ p.code }}" {% if not p.is_sensitive %}checked{% endif %}>
+                            <label class="form-check-label" for="g-{{ p.code }}">{{ p.name }}{% if p.is_sensitive %} <span class="chip danger ms-1">Nhạy cảm</span>{% endif %}</label></div></div>
+                        {% endfor %}
+                    </div>
+                    <button class="btn btn-primary"><i class="fa-solid fa-paper-plane me-2"></i>Chia sẻ</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Người đang được chia sẻ <span class="chip plain ms-1">{{ accesses|length }}</span></div>
+            <div>
+                {% for a in accesses %}
+                <div class="row-item flex-column">
+                    <div class="d-flex justify-content-between align-items-start gap-2 w-100">
+                        <div class="d-flex gap-3 align-items-start min-w-0">
+                            <div class="avatar-sm">{{ a.user.username|upper|slice:":1" }}</div>
+                            <div class="min-w-0">
+                                <div class="fw-semibold">{{ a.user.full_name|default:a.user.username }} <span class="text-muted fw-normal small">@{{ a.user.username }}</span></div>
+                                <div class="my-1 d-flex flex-wrap gap-1">{% for p in a.permissions.all %}<span class="chip">{{ p.name }}</span>{% empty %}<span class="text-muted small">Chưa có quyền nào</span>{% endfor %}</div>
+                                <small class="text-muted">{% if a.expires_at %}Hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn thời gian{% endif %}</small>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-1 flex-shrink-0">
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#edit-{{ a.id }}"><i class="fa-solid fa-pen"></i></button>
+                            <form method="post" onsubmit="return confirm('Thu hồi quyền của {{ a.user.username|escapejs }}?')">{% csrf_token %}
+                                <input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="access_id" value="{{ a.id }}">
+                                <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-ban"></i></button></form>
+                        </div>
+                    </div>
+                    <div class="collapse w-100 mt-3" id="edit-{{ a.id }}">
+                        <form method="post" class="border rounded p-3 bg-light">{% csrf_token %}
+                            <input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="update"><input type="hidden" name="access_id" value="{{ a.id }}">
+                            <div class="row g-2 mb-3">
+                                {% for p in permissions %}
+                                <div class="col-sm-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="u-{{ a.id }}-{{ p.code }}" {% if p.code in a.perm_codes %}checked{% endif %}>
+                                    <label class="form-check-label" for="u-{{ a.id }}-{{ p.code }}">{{ p.name }}</label></div></div>
+                                {% endfor %}
+                            </div>
+                            <button class="btn btn-sm btn-primary">Lưu quyền</button>
+                        </form>
+                    </div>
+                </div>
+                {% empty %}<div class="empty-state py-4"><div class="ei"><i class="fa-solid fa-user-lock"></i></div><div>Khóa này chưa chia sẻ cho ai.</div></div>{% endfor %}
+            </div>
+        </div>
+        {% else %}
+        <div class="card"><div class="empty-state"><div class="ei"><i class="fa-solid fa-share-nodes"></i></div><h6>Chưa có khóa để chia sẻ</h6><div>Chỉ chủ khóa mới chia sẻ được. Hãy thêm khóa ở mục Thiết bị.</div></div></div>
+        {% endif %}
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-header">Khóa được chia sẻ cho tôi</div>
+            <div>
+                {% for a in my_accesses %}
+                <div class="row-item">
+                    <div class="min-w-0">
+                        <a href="{% url 'smartlock:device-detail' a.device.id %}" class="fw-semibold">{{ a.device.name }}</a>
+                        <div class="small text-muted">Từ {{ a.created_by.username }}</div>
+                        <div class="my-1 d-flex flex-wrap gap-1">{% for p in a.permissions.all %}<span class="chip">{{ p.name }}</span>{% endfor %}</div>
+                        <small class="text-muted">{% if a.expires_at %}Hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn{% endif %}</small>
+                    </div>
+                    <form method="post" onsubmit="return confirm('Rời khỏi khóa này?')">{% csrf_token %}<input type="hidden" name="action" value="leave"><input type="hidden" name="access_id" value="{{ a.id }}">
+                        <button class="btn btn-sm btn-outline-secondary text-nowrap">Rời</button></form>
+                </div>
+                {% empty %}<div class="empty-state py-5"><div class="ei"><i class="fa-solid fa-user-lock"></i></div><div>Chưa ai chia sẻ khóa cho bạn.</div></div>{% endfor %}
+            </div>
         </div>
     </div>
 </div>
