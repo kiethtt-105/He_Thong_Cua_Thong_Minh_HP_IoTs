@@ -5,10 +5,10 @@ from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
 
 from .models import (
-    AccessCard, AccessEvent, Announcement, AuditLog, AutomationRule, AutomationRuleLog,
+    AccessCard, AccessEvent, Announcement, AuditLog,
     CardDeviceAccess, Device, DeviceAccess, DeviceCommand, DeviceStatusLog, DoorPinCode,
-    FaceProfile, NfcLog, NfcReader, Notification, OneTimeCode, Permission, ShareAccessCode,
-    SupportRequest, SystemSettings, User,
+    FaceProfile, NfcLog, NfcReader, Notification, OneTimeCode, Permission,
+    SystemSettings, User,
 )
 
 
@@ -115,8 +115,6 @@ CONFIG = {
     Permission: dict(list_display=('code', 'name', 'is_sensitive')),
     DeviceAccess: dict(list_display=('device', 'user', 'source', 'is_active', 'created_at'),
                        list_filter=('is_active', 'source'), search_fields=('device__name', 'user__email')),
-    ShareAccessCode: dict(list_display=('device', 'created_by', 'expires_at', 'created_at'),
-                          search_fields=('device__name',)),
     NfcReader: dict(list_display=('device', 'name', 'is_active', 'reader_mode', 'auto_register'),
                     list_filter=('is_active', 'reader_mode', 'auto_register')),
     AccessCard: dict(list_display=('name', 'user', 'is_active', 'created_at'),
@@ -124,8 +122,6 @@ CONFIG = {
     CardDeviceAccess: dict(list_display=('access_card', 'device', 'is_active')),
     NfcLog: dict(list_display=('device', 'event_type', 'success', 'user', 'created_at'),
                  list_filter=('event_type', 'success')),
-    SupportRequest: dict(list_display=('device', 'requested_by', 'action', 'status', 'created_at'),
-                         list_filter=('status', 'action'), search_fields=('device__name',)),
     Notification: dict(list_display=('user', 'device', 'title', 'severity', 'is_read', 'created_at'),
                        list_filter=('is_read', 'severity'), search_fields=('title',)),
     AuditLog: dict(list_display=('created_at', 'action', 'actor_user', 'target_user', 'device', 'success', 'severity'),
@@ -133,9 +129,6 @@ CONFIG = {
     OneTimeCode: dict(list_display=('user', 'purpose', 'is_used', 'expires_at', 'created_at'),
                       list_filter=('purpose', 'is_used'), search_fields=('user__email',)),
     Announcement: dict(list_display=('title', 'level', 'is_active', 'created_at'), list_filter=('level', 'is_active')),
-    AutomationRule: dict(list_display=('name', 'owner', 'device', 'trigger_type', 'action_type', 'is_active'),
-                         list_filter=('trigger_type', 'action_type', 'is_active')),
-    AutomationRuleLog: dict(list_display=('rule', 'device', 'action_taken', 'measured_value', 'triggered_at')),
     DoorPinCode: dict(list_display=('device', 'label', 'created_by', 'expires_at', 'use_count', 'max_uses', 'is_revoked'),
                       list_filter=('is_revoked',), search_fields=('device__name', 'label')),
     FaceProfile: dict(list_display=('user', 'device', 'name', 'is_active', 'consent_confirmed'),
@@ -143,7 +136,7 @@ CONFIG = {
     AccessEvent: dict(list_display=('created_at', 'device', 'method', 'success', 'reason', 'user'),
                       list_filter=('method', 'success')),
 }
-READ_ONLY = {AuditLog, AccessEvent, AutomationRuleLog, DeviceStatusLog, DeviceCommand, NfcLog}
+READ_ONLY = {AuditLog, AccessEvent, DeviceStatusLog, DeviceCommand, NfcLog}
 
 for model, options in CONFIG.items():
     base = ReadOnlyAdmin if model in READ_ONLY else admin.ModelAdmin

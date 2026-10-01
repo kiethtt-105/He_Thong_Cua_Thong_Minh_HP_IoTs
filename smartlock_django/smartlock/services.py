@@ -5,9 +5,11 @@ Mục lục
   1. Helper chung (hash, IP, audit, quyền, đăng nhập sai, gửi mail xác thực)
   2. Email (render HTML + bản text tự sinh)
   3. MQTT + gửi lệnh xuống thiết bị
-  4. Mở khoá: RFID / PIN / khuôn mặt / Bluetooth + khoá tạm khi sai liên tiếp
-  5. Rule engine (luật cảnh báo do user cấu hình)
+  4. Mở khoá: RFID / PIN / khuôn mặt / Bluetooth / NFC điện thoại + khoá tạm khi sai liên tiếp
+  5. Online/offline của thiết bị
   6. Push FCM tới app Android
+  7. Vòng đời khoá (claim / gỡ chủ / xoay secret)
+  (Quyền theo tính năng, chia sẻ khoá và popup nằm ở mục 1.)
 """
 import hashlib
 import hmac
@@ -21,7 +23,6 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone as dt_timezone
-from decimal import Decimal
 from email.utils import parseaddr
 from typing import Optional
 
@@ -36,9 +37,9 @@ from django.utils import timezone
 from django.utils.html import linebreaks, strip_tags, urlize
 
 from .models import (
-    AccessCard, AccessEvent, AuditLog, AutomationRule, AutomationRuleLog, CardDeviceAccess, Device,
+    AccessCard, AccessEvent, AuditLog, CardDeviceAccess, Device,
     DeviceAccess, DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, NfcLog, NfcReader,
-    Notification, OneTimeCode, ShareAccessCode, SystemSettings, User, hash_card_uid,
+    Notification, OneTimeCode, Permission, SystemSettings, User, hash_card_uid,
 )
 
 logger = logging.getLogger('smartlock.services')
@@ -94,12 +95,6 @@ def user_agent(request) -> str:
 
 def system_settings() -> SystemSettings:
     return SystemSettings.objects.get_or_create(pk=1)[0]
-
-
-def share_code_ttl() -> timedelta:
-    """Thời hạn mã chia sẻ theo SystemSettings.share_code_expiry_minutes.
-    Nơi tạo ShareAccessCode (smartlock/views.py) PHẢI dùng: expires_at = now + services.share_code_ttl()."""
-    return timedelta(minutes=system_settings().share_code_expiry_minutes)
 
 
 def user_session_seconds() -> int:
@@ -195,6 +190,161 @@ def has_permission(user, device, code) -> bool:
     ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)).exists()
 
 
+# ---------------------------------------------------------------- Quyền theo TỪNG TÍNH NĂNG
+# Chủ khoá luôn có đủ mọi quyền. Người được chia sẻ chỉ có đúng các quyền chủ chọn lúc chia sẻ.
+# (code, tên hiển thị, mô tả, nhạy cảm?)
+PERMISSION_CATALOG = [
+    ('UNLOCK', 'Mở khoá từ xa', 'Mở cửa qua Internet (trình duyệt hoặc app).', False),
+    ('LOCK', 'Khoá từ xa', 'Khoá cửa qua Internet (trình duyệt hoặc app).', False),
+    ('BLUETOOTH', 'Mở bằng Bluetooth', 'Dùng điện thoại mở cửa khi đứng gần (app xin vé BLE).', False),
+    ('NFC_PHONE', 'Mở bằng NFC trên điện thoại', 'Điện thoại giả lập thẻ NFC để chạm đầu đọc.', False),
+    ('manage_nfc', 'Quản lý thẻ NFC', 'Đăng ký thẻ của mình, bật/tắt thẻ trên khoá này.', True),
+    ('manage_pins', 'Quản lý mã PIN', 'Cấp/thu hồi mã PIN để khách bấm trên bàn phím.', True),
+    ('manage_face_profiles', 'Quản lý khuôn mặt', 'Đăng ký khuôn mặt được phép mở cửa.', True),
+    ('view_history', 'Xem lịch sử ra vào', 'Xem nhật ký mở cửa và nhận popup khi cửa mở.', False),
+]
+PERMISSION_CODES = tuple(code for code, *_ in PERMISSION_CATALOG)
+
+
+def ensure_default_permissions() -> None:
+    existing = set(Permission.objects.values_list('code', flat=True))
+    for code, name, desc, sensitive in PERMISSION_CATALOG:
+        if code not in existing:
+            Permission.objects.get_or_create(
+                code=code, defaults={'name': name, 'description': desc, 'is_sensitive': sensitive})
+
+
+def _live_access(user, now):
+    """DeviceAccess còn hiệu lực của user (đang bật, đã đến hạn bắt đầu, chưa hết hạn)."""
+    return (DeviceAccess.objects.filter(user=user, is_active=True, accepted=True, valid_from__lte=now)
+            .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)))
+
+
+def devices_with_permission(user, code):
+    """Khoá user dùng được tính năng `code`: khoá của mình + khoá được chia sẻ kèm quyền đó."""
+    ids = _live_access(user, timezone.now()).filter(permissions__code=code).values('device_id')
+    return Device.objects.filter(Q(owner=user) | Q(id__in=ids))
+
+
+def permission_codes(user, device) -> set:
+    if device.owner_id == user.id:
+        return set(PERMISSION_CODES)
+    codes = (_live_access(user, timezone.now()).filter(device=device)
+             .values_list('permissions__code', flat=True))
+    return {c for c in codes if c}
+
+
+def capabilities(user, device) -> dict:
+    """Giao diện dùng dict này để hiện/ẩn từng khối chức năng cho CHỦ và cho NGƯỜI ĐƯỢC CHIA SẺ.
+    `bluetooth` / `nfc_phone` là tính năng của ĐIỆN THOẠI (app), trình duyệt không dùng được."""
+    codes = permission_codes(user, device)
+    return {
+        'is_owner': device.owner_id == user.id,
+        'remote_unlock': 'UNLOCK' in codes and device.wifi_enabled,
+        'remote_lock': 'LOCK' in codes and device.wifi_enabled,
+        'bluetooth': 'BLUETOOTH' in codes and device.bluetooth_enabled,
+        'nfc_phone': 'NFC_PHONE' in codes and device.nfc_enabled,
+        'manage_nfc': 'manage_nfc' in codes,
+        'manage_pins': 'manage_pins' in codes,
+        'manage_faces': 'manage_face_profiles' in codes,
+        'view_history': 'view_history' in codes,
+        'manage_sharing': device.owner_id == user.id,     # chỉ chủ mới chia sẻ/thu hồi
+    }
+
+
+# ---------------------------------------------------------------- Chia sẻ khoá (có hiệu lực NGAY)
+def grant_access(device, owner, target, permissions, expires_at):
+    """Chia sẻ khoá cho `target` (không cần người nhận xác nhận). Đã có quyền -> cập nhật.
+    Trả (DeviceAccess, created)."""
+    with transaction.atomic():
+        access = (DeviceAccess.objects.select_for_update()
+                  .filter(device=device, user=target, is_active=True).order_by('-created_at').first())
+        created = access is None
+        if created:
+            access = DeviceAccess.objects.create(device=device, user=target, created_by=owner,
+                                                 accepted=True, source='DIRECT', expires_at=expires_at)
+        else:
+            access.expires_at = expires_at
+            access.accepted = True
+            access.save(update_fields=['expires_at', 'accepted'])
+        access.permissions.set(permissions)
+    return access, created
+
+
+def _expiry_text(dt) -> str:
+    return timezone.localtime(dt).strftime('%H:%M %d/%m/%Y') if dt else 'Không giới hạn'
+
+
+def notify_access_shared(request, access, created=True) -> bool:
+    """Báo cho người được chia sẻ: thông báo trong app (kèm popup + push) VÀ email.
+    Trả True nếu email gửi được. Không bao giờ ném lỗi."""
+    device, target, owner = access.device, access.user, access.created_by
+    owner_name = owner.full_name or owner.username
+    perm_names = [p.name for p in access.permissions.order_by('name')]
+    expires = _expiry_text(access.expires_at)
+    if created:
+        title = f'{owner_name} đã chia sẻ khoá cho bạn'
+    else:
+        title = f'Quyền của bạn trên khoá "{device.name}" đã thay đổi'
+    message = (f'Khoá "{device.name}". Quyền: {", ".join(perm_names) or "chưa có quyền nào"}. '
+               f'Hết hạn: {expires}.')
+    try:
+        notify(target, title, message, device=device, type_='SHARE')
+    except Exception:
+        logger.exception('share: không tạo được thông báo cho %s', target.pk)
+    try:
+        subject, html, plain = render_email('device_shared.html', {
+            'full_name': target.full_name or target.username,
+            'owner_name': owner_name, 'device_name': device.name,
+            'device_location': device.location or '', 'permissions': perm_names,
+            'expires_text': expires, 'is_update': not created,
+            'action_url': request.build_absolute_uri(reverse('smartlock:device-detail', args=[device.id])),
+        })
+        return send_mail(subject, plain, html, target.email)
+    except Exception:
+        logger.exception('share: không gửi được email tới %s', target.pk)
+        return False
+
+
+# ---------------------------------------------------------------- Popup trên màn hình
+# Mọi Notification mới đều hiện thành popup NGAY TRONG TRANG (JS poll smartlock:events), không dùng
+# Notification API của trình duyệt. Hàm dưới tạo Notification cho những ai đang "theo dõi" cánh cửa.
+def door_watchers(device):
+    """Chủ khoá + người được chia sẻ có quyền xem lịch sử."""
+    shared = (_live_access_for_device(device).filter(permissions__code='view_history').values('user_id'))
+    return User.objects.filter(Q(pk=device.owner_id) | Q(pk__in=shared), is_active=True).distinct()
+
+
+def _live_access_for_device(device):
+    now = timezone.now()
+    return (DeviceAccess.objects.filter(device=device, is_active=True, accepted=True, valid_from__lte=now)
+            .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)))
+
+
+def announce_door_event(device, title, message, severity='info', type_='DOOR_EVENT', extra_users=()):
+    recipients = {u.pk: u for u in door_watchers(device)}
+    for u in extra_users:
+        if u is not None:
+            recipients.setdefault(u.pk, u)
+    for u in recipients.values():
+        notify(u, title, message, severity=severity, device=device, type_=type_)
+
+
+def announce_command_result(cmd, ok=True) -> None:
+    """SUBSCRIBER MQTT gọi khi nhận ack của lệnh LOCK/UNLOCK -> popup "Đã khoá/Đã mở khoá" cho
+    người gửi lệnh + những người theo dõi cửa. Lệnh khác bỏ qua."""
+    verb = {'LOCK': 'khoá', 'UNLOCK': 'mở khoá'}.get(cmd.command_type)
+    if not verb:
+        return
+    who = cmd.issued_by.full_name or cmd.issued_by.username
+    name = cmd.device.name
+    if ok:
+        title, msg, sev = f'Cửa đã {verb}', f'"{name}" đã {verb} theo lệnh của {who}.', 'info'
+    else:
+        title, msg, sev = f'Lệnh {verb} thất bại', f'"{name}" không thực hiện được lệnh {verb} của {who}.', 'warning'
+    announce_door_event(cmd.device, title, msg, severity=sev, type_='DOOR_EVENT', extra_users=[cmd.issued_by])
+
+
 def pick_device(queryset, raw_id, strict=False):
     """strict=True (dùng cho POST): id gửi lên phải khớp đúng thiết bị,
     không được âm thầm rơi về thiết bị đầu tiên (thao tác nhầm thiết bị)."""
@@ -266,10 +416,8 @@ EMAIL_SUBJECTS = {
     'user_verification.html': 'Xác thực tài khoản Smart Lock',
     'password_reset.html': 'Đặt lại mật khẩu Smart Lock',
     'device_added.html': 'Thiết bị mới đã được thêm vào tài khoản của bạn',
-    'share_code_notification.html': 'Bạn đã nhận được mã chia sẻ khóa',
-    'admin_nfc_approval.html': 'Yêu cầu kích hoạt thẻ NFC mới',
+    'device_shared.html': 'Có người vừa chia sẻ khoá cho bạn',
     'admin_device_approval.html': 'Thiết bị mới cần kích hoạt',
-    'recovery_notification.html': 'Thông báo khôi phục thiết bị',
     'two_factor_code.html': 'Mã xác thực 2 lớp Smart Lock',
     'system_announcement.html': 'Thông báo hệ thống',
 }
@@ -310,7 +458,7 @@ def render_email(template_name: str, context: dict) -> tuple:
             plain += f"\n\nTruy cập: {ctx['action_url']}"
     except Exception:
         logger.exception('render_email: lỗi khi render emails/%s', template_name)
-        keys = ('verification_link', 'password_reset_link', 'otp_code', 'share_code', 'action_url')
+        keys = ('verification_link', 'password_reset_link', 'otp_code', 'action_url')
         plain = '\n'.join(str(ctx[k]) for k in keys if ctx.get(k)) or subject
         html = linebreaks(urlize(plain, autoescape=True))
     return subject, html, plain
@@ -471,6 +619,18 @@ def _handle_burst_if_needed(device):
         )
 
 
+METHOD_TEXT = {'RFID': 'thẻ NFC', 'PIN': 'mã PIN', 'FACE': 'khuôn mặt', 'BLE': 'Bluetooth',
+               'NFC_PHONE': 'NFC trên điện thoại'}
+STALE_EVENT_SECONDS = 300      # sự kiện offline đến trễ hơn mức này thì không bật popup
+
+
+def _announce_access(event: AccessEvent) -> None:
+    who = (event.user.full_name or event.user.username) if event.user_id else 'Ai đó'
+    announce_door_event(
+        event.device, 'Cửa vừa được mở',
+        f'{who} đã mở "{event.device.name}" bằng {METHOD_TEXT.get(event.method, event.method)}.')
+
+
 def _log_event(occurred_at=None, **kwargs) -> AccessEvent:
     event = AccessEvent.objects.create(**kwargs)
     if occurred_at:  # sự kiện offline đến trễ: đặt lại đúng giờ xảy ra
@@ -478,6 +638,12 @@ def _log_event(occurred_at=None, **kwargs) -> AccessEvent:
         event.created_at = occurred_at
     if not event.success and event.reason not in NON_COUNTED_REASONS:
         _handle_burst_if_needed(event.device)
+    if event.success and (occurred_at is None
+                          or (timezone.now() - occurred_at).total_seconds() <= STALE_EVENT_SECONDS):
+        try:
+            _announce_access(event)
+        except Exception:      # popup chỉ là phụ trợ, không được làm hỏng luồng mở cửa
+            logger.exception('popup: không tạo được thông báo mở cửa')
     return event
 
 
@@ -672,47 +838,66 @@ def register_face(device, user, embedding: list, name: str = '', consent_confirm
     return profile
 
 
-# ---------------------------------------------------------------- Bluetooth (tầm gần, offline)
-# Luồng: app có mạng -> xin "vé" -> đến gần thì đưa vé cho ESP32 qua BLE -> ESP32 TỰ kiểm tra
-# chữ ký + hạn (không cần mạng) rồi mở cửa -> khi có mạng, ESP32 publish sự kiện `ble_unlock`
-# kèm vé để server ghi log. Vé không có bản ghi DB; thu hồi = để vé hết hạn (mặc định 24h).
+# ---------------------------------------------------------------- Điện thoại: Bluetooth + NFC giả lập thẻ (HCE)
+# Cả 2 kênh dùng cùng cơ chế "vé" ký HMAC; thiết bị TỰ kiểm tra chữ ký + hạn (không cần mạng) rồi
+# mở cửa, khi có mạng mới publish sự kiện kèm vé để server ghi log. Vé không có bản ghi DB;
+# thu hồi = để vé hết hạn (mặc định 1 giờ) hoặc xoay secret thiết bị.
 #
-#   key  = HMAC_SHA256(key=sha256_hex(provisioning_secret) [chuỗi ASCII], msg="ble-ticket-v1")
+#   key  = HMAC_SHA256(key=<provisioning_secret_hash ASCII>, msg=<nhãn kênh>)
 #   sig  = HMAC_SHA256(key, "<device_code>|<user_hex>|<exp>") -> hex, lấy 32 ký tự đầu
-#   vé   = "<user_hex>.<exp>.<sig>"          (user_hex = UUID user bỏ dấu '-', exp = unix giây)
-BLE_TICKET_TTL_SECONDS = int(getattr(settings, 'BLE_TICKET_TTL_SECONDS', 3600))   # mặc định 1 giờ (trước: 24h)
+#   vé   = "<user_hex>.<exp>.<sig>"          (user_hex = UUID bỏ dấu '-', exp = unix giây)
+# Nhãn kênh khác nhau => vé BLE không dùng được ở đầu đọc NFC và ngược lại. Nhãn BLE giữ nguyên
+# như trước nên firmware cũ vẫn chạy.
+PHONE_CHANNELS = {
+    'ble': {'label': b'ble-ticket-v1', 'permission': 'BLUETOOTH', 'flag': 'bluetooth_enabled',
+            'method': AccessEvent.METHOD_BLE, 'prefix': 'BLE', 'name': 'Bluetooth'},
+    'nfc': {'label': b'nfc-phone-ticket-v1', 'permission': 'NFC_PHONE', 'flag': 'nfc_enabled',
+            'method': AccessEvent.METHOD_NFC_PHONE, 'prefix': 'NFC_PHONE', 'name': 'NFC'},
+}
+TICKET_TTL_SECONDS = int(getattr(settings, 'BLE_TICKET_TTL_SECONDS', 3600))
+BLE_TICKET_TTL_SECONDS = TICKET_TTL_SECONDS     # tên cũ
 
 
-def _ble_sig(device, user_hex: str, exp: int) -> str:
-    key = hmac.new(device.provisioning_secret_hash.encode(), b'ble-ticket-v1', hashlib.sha256).digest()
+def _ticket_sig(device, kind: str, user_hex: str, exp: int) -> str:
+    key = hmac.new(device.provisioning_secret_hash.encode(), PHONE_CHANNELS[kind]['label'],
+                   hashlib.sha256).digest()
     msg = f'{device.device_code}|{user_hex}|{exp}'.encode()
     return hmac.new(key, msg, hashlib.sha256).hexdigest()[:32]
 
 
-def issue_ble_ticket(device, user, ttl: int = BLE_TICKET_TTL_SECONDS):
-    """Trả (ticket, exp_unix). Gọi view kiểm tra quyền UNLOCK + bluetooth_enabled trước."""
-    exp = int(time.time()) + ttl
+def issue_phone_ticket(device, user, kind: str, ttl: int = None):
+    """Trả (ticket, exp_unix). View phải kiểm tra quyền + cờ bật kênh của thiết bị trước."""
+    exp = int(time.time()) + (ttl or TICKET_TTL_SECONDS)
     user_hex = user.id.hex
-    return f'{user_hex}.{exp}.{_ble_sig(device, user_hex, exp)}', exp
+    return f'{user_hex}.{exp}.{_ticket_sig(device, kind, user_hex, exp)}', exp
 
 
-def parse_ble_ticket(device, ticket: str):
+def parse_phone_ticket(device, ticket: str, kind: str):
     """Trả (user, exp) nếu chữ ký hợp lệ và user tồn tại, ngược lại None. Không kiểm tra hạn."""
     try:
         user_hex, exp_s, sig = (ticket or '').strip().split('.')
         exp = int(exp_s)
     except ValueError:
         return None
-    if not hmac.compare_digest(sig, _ble_sig(device, user_hex, exp)):
+    if not hmac.compare_digest(sig, _ticket_sig(device, kind, user_hex, exp)):
         return None
     uid = parse_uuid(user_hex)
     user = User.objects.filter(pk=uid).first() if uid else None
     return (user, exp) if user else None
 
 
-def record_ble_unlock(device, ticket: str = '', ok: bool = True, reason=None, at=None) -> AccessEvent:
-    """ESP32 báo 1 lượt mở/từ chối qua BLE (cửa đã xử lý tại chỗ, server chỉ ghi log).
+def issue_ble_ticket(device, user, ttl: int = TICKET_TTL_SECONDS):
+    return issue_phone_ticket(device, user, 'ble', ttl)
+
+
+def parse_ble_ticket(device, ticket: str):
+    return parse_phone_ticket(device, ticket, 'ble')
+
+
+def _record_phone_unlock(device, kind, ticket='', ok=True, reason=None, at=None) -> AccessEvent:
+    """Thiết bị báo 1 lượt mở/từ chối qua điện thoại (cửa đã xử lý tại chỗ, server chỉ ghi log).
     `at` = unix giây lúc xảy ra (sự kiện offline đến trễ)."""
+    cfg = PHONE_CHANNELS[kind]
     now = timezone.now()
     occurred = None
     try:
@@ -725,137 +910,42 @@ def record_ble_unlock(device, ticket: str = '', ok: bool = True, reason=None, at
 
     user = None
     if ok:
-        parsed = parse_ble_ticket(device, ticket)
+        parsed = parse_phone_ticket(device, ticket, kind)
         if not parsed:
-            ok, reason = False, 'BLE_INVALID_TICKET'
+            ok, reason = False, f"{cfg['prefix']}_INVALID_TICKET"
         else:
             user, exp = parsed
             if exp < at_unix:
-                ok, reason = False, 'BLE_TICKET_EXPIRED'
-            elif not device.bluetooth_enabled or not has_permission(user, device, 'UNLOCK'):
-                ok, reason = False, 'BLE_NOT_ALLOWED'
-    return _log_event(occurred_at=occurred, device=device, method=AccessEvent.METHOD_BLE,
-                      success=ok, reason=None if ok else (reason or 'BLE_DENIED')[:100], user=user)
+                ok, reason = False, f"{cfg['prefix']}_TICKET_EXPIRED"
+            elif not getattr(device, cfg['flag']) or not has_permission(user, device, cfg['permission']):
+                ok, reason = False, f"{cfg['prefix']}_NOT_ALLOWED"
+    return _log_event(occurred_at=occurred, device=device, method=cfg['method'], success=ok,
+                      reason=None if ok else (reason or f"{cfg['prefix']}_DENIED")[:100], user=user)
+
+
+def record_ble_unlock(device, ticket: str = '', ok: bool = True, reason=None, at=None) -> AccessEvent:
+    return _record_phone_unlock(device, 'ble', ticket, ok, reason, at)
+
+
+def record_nfc_phone_unlock(device, ticket: str = '', ok: bool = True, reason=None, at=None) -> AccessEvent:
+    return _record_phone_unlock(device, 'nfc', ticket, ok, reason, at)
 
 
 # ============================================================================
-# 5. RULE ENGINE (luật do user cấu hình, ngưỡng nằm trong DB)
+# 5. ONLINE / OFFLINE CỦA THIẾT BỊ   (đã BỎ rule engine tự động hoá)
 # ============================================================================
-#   evaluate_device_status(device, status_log)  <- subscriber gọi sau mỗi gói status
-#   mark_offline_devices()                      <- subscriber gọi định kỳ (thread nền)
-# Khi luật kích hoạt: tôn trọng cooldown, tạo Notification cho owner, thực hiện action
-# (NOTIFY_ONLY / AUTO_LOCK / TEMP_BLOCK_ACCESS) và ghi AutomationRuleLog.
 OFFLINE_AFTER_SECONDS = 180      # không nhận status > 3 phút -> coi là offline
 
 
-def _rules_for(device, trigger_type):
-    if not device.owner_id:
-        return AutomationRule.objects.none()
-    return (AutomationRule.objects
-            .filter(is_active=True, trigger_type=trigger_type, owner_id=device.owner_id)
-            .filter(Q(device=device) | Q(device__isnull=True)))
-
-
-def _claim(rule) -> bool:
-    """Giành quyền kích hoạt luật (atomic): chỉ 1 tiến trình thắng khi 2 gói tin đến cùng lúc."""
-    now = timezone.now()
-    cutoff = now - timedelta(seconds=rule.cooldown_seconds)
-    return AutomationRule.objects.filter(pk=rule.pk).filter(
-        Q(last_triggered_at__isnull=True) | Q(last_triggered_at__lte=cutoff)
-    ).update(last_triggered_at=now) == 1
-
-
-def _do_action(rule, device):
-    if rule.action_type == AutomationRule.ACTION_AUTO_LOCK:
-        dispatch_command(device, 'LOCK', source='automation_rule', issued_by=rule.owner, ttl=120)
-    elif rule.action_type == AutomationRule.ACTION_TEMP_BLOCK_ACCESS:
-        start_lockout(device, {'source': 'automation_rule', 'rule_id': str(rule.id)})
-
-
-def _fire(rule, device, measured, title, message) -> int:
-    """Kích hoạt luật nếu không còn trong cooldown. Trả 1 nếu đã kích hoạt, 0 nếu không."""
-    if not _claim(rule):
-        return 0
-    notification = Notification.objects.create(
-        user=rule.owner, device=device, type='AUTOMATION_RULE',
-        title=title[:150], message=message, severity=rule.notify_severity,
-    )
-    try:
-        _do_action(rule, device)
-    except Exception:
-        logger.exception('rules: lỗi khi thực hiện action %s của luật %s', rule.action_type, rule.id)
-    AutomationRuleLog.objects.create(
-        rule=rule, device=device, action_taken=rule.action_type, notification=notification,
-        measured_value=None if measured is None else Decimal(str(measured)).quantize(Decimal('0.01')),
-    )
-    logger.info('rules: luật "%s" kích hoạt cho %s (giá trị=%s)', rule.name, device.device_code, measured)
-    return 1
-
-
-def _unlocked_since(device, current):
-    """Thời điểm bắt đầu chuỗi trạng thái 'unlocked' liên tục gần nhất."""
-    last_locked = (DeviceStatusLog.objects
-                   .filter(device=device, lock_state='locked', recorded_at__lt=current.recorded_at)
-                   .order_by('-recorded_at').first())
-    qs = DeviceStatusLog.objects.filter(device=device, lock_state='unlocked')
-    if last_locked:
-        qs = qs.filter(recorded_at__gt=last_locked.recorded_at)
-    first_open = qs.order_by('recorded_at').first()
-    return first_open.recorded_at if first_open else current.recorded_at
-
-
 def evaluate_device_status(device, status_log) -> int:
-    """Đánh giá luật pin yếu / tamper / cửa mở quá lâu theo gói status mới nhất."""
-    fired = 0
-    for rule in _rules_for(device, AutomationRule.TRIGGER_BATTERY_LOW):
-        if rule.threshold_value is not None and status_log.battery_level < rule.threshold_value:
-            fired += _fire(rule, device, status_log.battery_level, f'Pin yếu: {device.name}',
-                           f'Pin thiết bị "{device.name}" còn {status_log.battery_level}% '
-                           f'(ngưỡng {rule.threshold_value}%).')
-
-    if status_log.tamper_detected:
-        for rule in _rules_for(device, AutomationRule.TRIGGER_TAMPER_DETECTED):
-            fired += _fire(rule, device, None, f'Cảnh báo tác động vật lý: {device.name}',
-                           f'Thiết bị "{device.name}" phát hiện bị tác động vật lý (tamper).')
-
-    if status_log.lock_state == 'unlocked':
-        for rule in _rules_for(device, AutomationRule.TRIGGER_DOOR_OPEN_TOO_LONG):
-            if rule.threshold_value is None:
-                continue
-            seconds_open = (timezone.now() - _unlocked_since(device, status_log)).total_seconds()
-            if seconds_open >= float(rule.threshold_value):
-                fired += _fire(rule, device, seconds_open, f'Cửa mở quá lâu: {device.name}',
-                               f'Cửa "{device.name}" đã mở khoảng {int(seconds_open)} giây '
-                               f'(ngưỡng {rule.threshold_value} giây).')
-    return fired
-
-
-def evaluate_offline_devices() -> int:
-    """Luật OFFLINE_TOO_LONG (threshold_value = số giây)."""
-    fired = 0
-    now = timezone.now()
-    rules = (AutomationRule.objects.filter(is_active=True, trigger_type=AutomationRule.TRIGGER_OFFLINE_TOO_LONG)
-             .select_related('owner', 'device'))
-    for rule in rules:
-        if rule.threshold_value is None:
-            continue
-        devices = Device.objects.filter(owner_id=rule.owner_id, status='offline', last_seen_at__isnull=False)
-        if rule.device_id:
-            devices = devices.filter(pk=rule.device_id)
-        for device in devices:
-            offline_seconds = (now - device.last_seen_at).total_seconds()
-            if offline_seconds >= float(rule.threshold_value):
-                fired += _fire(rule, device, offline_seconds, f'Mất kết nối: {device.name}',
-                               f'Thiết bị "{device.name}" đã mất kết nối khoảng {int(offline_seconds)} giây.')
-    return fired
+    """Đã bỏ tự động hoá. Hàm rỗng chỉ để subscriber cũ chưa sửa không bị lỗi - hãy XOÁ lời gọi này."""
+    return 0
 
 
 def mark_offline_devices() -> int:
-    """Thiết bị 'online' mà lâu không gửi status -> 'offline', rồi chạy luật OFFLINE_TOO_LONG."""
+    """Thiết bị 'online' mà lâu không gửi status -> 'offline'. Subscriber gọi định kỳ."""
     cutoff = timezone.now() - timedelta(seconds=OFFLINE_AFTER_SECONDS)
-    n = Device.objects.filter(status='online', last_seen_at__lt=cutoff).update(status='offline')
-    evaluate_offline_devices()
-    return n
+    return Device.objects.filter(status='online', last_seen_at__lt=cutoff).update(status='offline')
 
 
 # ============================================================================
@@ -1075,7 +1165,7 @@ def release_device(device_id):
             'pins': DoorPinCode.objects.filter(device=device, is_revoked=False)
                     .update(is_revoked=True, revoked_at=now),
             'faces': FaceProfile.objects.filter(device=device, is_active=True).update(is_active=False),
-            'share_codes': ShareAccessCode.objects.filter(device=device).delete()[0],
+            'share_codes': 0,      # đã bỏ mã chia sẻ; giữ khoá để code gọi release_device cũ không lỗi
             'commands': DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'))
                         .update(status='expired'),
         }

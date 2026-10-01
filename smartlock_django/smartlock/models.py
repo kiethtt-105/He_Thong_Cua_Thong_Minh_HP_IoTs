@@ -184,7 +184,7 @@ class Device(models.Model):
         default=False,
         help_text='True khi thiết bị đã được khách mua/kích hoạt chính thức, khác với '
                    'thiết bị demo/dùng thử nội bộ. Chỉ thiết bị đã mua mới được tính vào '
-                   'doanh số và được cấp bảo hành/hỗ trợ (SupportRequest).'
+                   'doanh số.'
     )
     purchased_at = models.DateTimeField(null=True, blank=True)
     name = models.CharField(max_length=100)
@@ -294,14 +294,16 @@ class DeviceAccess(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='user_deviceaccesses')
     permissions = models.ManyToManyField(Permission, blank=True, related_name='device_accesses')
+    # Chia sẻ theo tài khoản (email/username), có hiệu lực NGAY - người nhận không cần xác nhận.
+    # 'SHARE_CODE' chỉ còn là giá trị cũ trong các bản ghi đã tạo trước đây.
     source = models.CharField(
         max_length=20, default='DIRECT',
-        choices=[('DIRECT', 'Chủ thiết bị cấp trực tiếp'), ('SHARE_CODE', 'Qua mã chia sẻ 6 số')]
+        choices=[('DIRECT', 'Chủ thiết bị chia sẻ trực tiếp'), ('SHARE_CODE', 'Mã chia sẻ (cũ)')]
     )
     valid_from = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
-    accepted = models.BooleanField(default=False)
+    accepted = models.BooleanField(default=True)   # luôn True: chia sẻ không cần xác nhận
     created_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='created_deviceaccesses')
     created_at = models.DateTimeField(auto_now_add=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
@@ -313,54 +315,6 @@ class DeviceAccess(models.Model):
                 name='chk_device_access_expiry'
             )
         ]
-
-
-def _hash_share_code(plain_6_digit_code: str) -> str:
-    """
-    SHA-256(pepper + mã 6 số) dạng hex. Dùng để tra cứu trực tiếp bằng SQL Index
-    (ShareAccessCode.objects.filter(code_hash=...)) thay vì phải load toàn bộ mã
-    đang hoạt động vào Python rồi giải mã đối xứng (Fernet) từng bản ghi trong vòng lặp -
-    cách cũ vừa lộ logic dò vét cạn, vừa tăng tải CPU khi số mã chia sẻ tăng lên.
-    Một chiều nên không cần lo lộ mã gốc nếu lộ DB, giống cách xử lý mật khẩu/OTP.
-    """
-    return _pepper_hmac('sharecode', plain_6_digit_code)
-
-
-class ShareAccessCode(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    device = models.ForeignKey(Device, on_delete=models.CASCADE, related_name='share_codes')
-    created_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='created_sharecodes')
-    permissions = models.ManyToManyField(Permission, blank=True, related_name='share_codes')
-    code_hash = models.CharField(max_length=64, db_index=True)
-    expires_at = models.DateTimeField()
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['device', 'expires_at'], name='idx_sharecode_dev_exp'),
-            models.Index(fields=['code_hash', 'expires_at'], name='idx_sharecode_hash_exp'),
-        ]
-
-    def set_code(self, plain_6_digit_code: str):
-        self.code_hash = _hash_share_code(plain_6_digit_code)
-
-    def check_code(self, plain_6_digit_code: str) -> bool:
-        return hmac.compare_digest(self.code_hash, _hash_share_code(plain_6_digit_code))
-
-    @classmethod
-    def is_code_taken(cls, plain_6_digit_code: str) -> bool:
-        """Dùng khi sinh mã mới: có mã nào đang còn hạn trùng giá trị này không."""
-        return cls.objects.filter(
-            code_hash=_hash_share_code(plain_6_digit_code), expires_at__gt=timezone.now()
-        ).exists()
-
-    @classmethod
-    def find_active_by_code(cls, plain_6_digit_code: str, device_code=None):
-        """Tra cứu O(1) qua SQL Index trên code_hash - thay cho vòng lặp giải mã Fernet cũ."""
-        qs = cls.objects.filter(code_hash=_hash_share_code(plain_6_digit_code), expires_at__gt=timezone.now())
-        if device_code:   # người dùng nhập kèm mã thiết bị -> thu hẹp không gian đoán mã
-            qs = qs.filter(device__device_code=device_code)
-        return qs.select_related('device').first()
 
 
 # ==================== NHÓM D: NFC READER & THẺ TỪ ====================
@@ -443,39 +397,6 @@ class NfcLog(models.Model):
 
 
 # ==================== NHÓM E: HỖ TRỢ & NHẬT KÝ ====================
-class SupportRequest(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    device = models.ForeignKey(Device, on_delete=models.CASCADE)
-    requested_by = models.ForeignKey(User, on_delete=models.RESTRICT, related_name='requested_supportrequests')
-    action = models.CharField(
-        max_length=50,
-        choices=[('ADD_CARD', 'Add Card'), ('REMOVE_CARD', 'Remove Card'), ('CHANGE_PERMISSION', 'Change Permission'),
-                 ('RESET_REMOTE', 'Reset Remote'), ('RECOVERY', 'Recovery'), ('TRANSFER_OWNER', 'Transfer Owner'),
-                 ('OTA_SENSITIVE', 'OTA Sensitive'), ('OTHER', 'Other')]
-    )
-    scope = models.CharField(max_length=100, blank=True, null=True)
-    authorization_code_hash = models.CharField(max_length=255)
-    recovery_code_hash = models.CharField(max_length=255, blank=True, null=True)
-    status = models.CharField(max_length=20, default='pending', choices=[('pending', 'Pending'), ('approved', 'Approved'),
-                                                                     ('executed', 'Executed'), ('expired', 'Expired'),
-                                                                     ('rejected', 'Rejected'), ('cancelled', 'Cancelled')])
-    expires_at = models.DateTimeField()
-    processed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='processed_supportrequests')
-    created_at = models.DateTimeField(auto_now_add=True)
-    completed_at = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        constraints = [
-            models.CheckConstraint(
-                check=(
-                    models.Q(action__in=['RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER'], recovery_code_hash__isnull=False) |
-                    (~models.Q(action__in=['RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER']) & models.Q(recovery_code_hash__isnull=True))
-                ),
-                name='chk_support_requires_recovery'
-            )
-        ]
-
-
 class Notification(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -511,105 +432,6 @@ class AuditLog(models.Model):
             models.Index(fields=['device', 'created_at'], name='idx_auditlog_dev_time'),
             models.Index(fields=['actor_user', 'created_at'], name='idx_auditlog_actor_time'),
         ]
-
-
-# ==================== NHÓM F: RULE ENGINE (CẢNH BÁO / TỰ ĐỘNG HOÁ) ====================
-# Đáp ứng yêu cầu bắt buộc của đề bài (Phần 2.3 Lớp 3 - Backend, rubric mục 5):
-# "Rule engine: ít nhất 03 luật cảnh báo/tự động hoá do người dùng cấu hình được
-# (không hard-code ngưỡng trong mã nguồn)". Trước đây hệ thống chưa có model nào
-# cho phần này - toàn bộ ngưỡng (pin yếu, quẹt sai liên tiếp...) đang là hằng số
-# trong code, không đúng yêu cầu. Nhóm model dưới đây thay thế cho việc đó.
-class AutomationRule(models.Model):
-    """1 luật cảnh báo/tự động hoá do user tự tạo, sửa, bật/tắt qua giao diện
-    web (views.py: permissions_manage/settings_system nên có thêm 1 trang
-    'automation-rules'), KHÔNG cần sửa mã nguồn khi muốn đổi ngưỡng."""
-
-    TRIGGER_BATTERY_LOW = 'BATTERY_LOW'
-    TRIGGER_OFFLINE_TOO_LONG = 'OFFLINE_TOO_LONG'
-    TRIGGER_DOOR_OPEN_TOO_LONG = 'DOOR_OPEN_TOO_LONG'
-    TRIGGER_TAMPER_DETECTED = 'TAMPER_DETECTED'
-    TRIGGER_CHOICES = [
-        (TRIGGER_BATTERY_LOW, 'Pin yếu dưới ngưỡng (%)'),
-        (TRIGGER_OFFLINE_TOO_LONG, 'Mất kết nối quá lâu (giây)'),
-        (TRIGGER_DOOR_OPEN_TOO_LONG, 'Cửa mở quá lâu chưa đóng (giây)'),
-        (TRIGGER_TAMPER_DETECTED, 'Phát hiện tác động vật lý (tamper)'),
-    ]
-
-    ACTION_NOTIFY_ONLY = 'NOTIFY_ONLY'
-    ACTION_AUTO_LOCK = 'AUTO_LOCK'
-    ACTION_TEMP_BLOCK_ACCESS = 'TEMP_BLOCK_ACCESS'
-    ACTION_CHOICES = [
-        (ACTION_NOTIFY_ONLY, 'Chỉ gửi thông báo'),
-        (ACTION_AUTO_LOCK, 'Tự động khoá cửa (gửi lệnh LOCK)'),
-        (ACTION_TEMP_BLOCK_ACCESS, 'Tạm khoá quyền truy cập của thẻ/user liên quan'),
-    ]
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='automation_rules')
-    device = models.ForeignKey(
-        Device, on_delete=models.CASCADE, null=True, blank=True, related_name='automation_rules',
-        help_text='Để trống = áp dụng cho mọi thiết bị của owner.'
-    )
-    name = models.CharField(max_length=150)
-    trigger_type = models.CharField(max_length=30, choices=TRIGGER_CHOICES)
-    threshold_value = models.DecimalField(
-        max_digits=8, decimal_places=2, null=True, blank=True,
-        help_text='VD: 20 (pin %), 300 (giây).'
-    )
-    threshold_window_seconds = models.IntegerField(
-        null=True, blank=True,
-        help_text='Không còn dùng (trước đây cho luật "N lần sai trong X giây"; nay khoá tạm nằm ở services.py).'
-    )
-    action_type = models.CharField(max_length=30, choices=ACTION_CHOICES, default=ACTION_NOTIFY_ONLY)
-    notify_severity = models.CharField(
-        max_length=20, default='warning',
-        choices=[('info', 'Info'), ('warning', 'Warning'), ('critical', 'Critical')]
-    )
-    cooldown_seconds = models.IntegerField(
-        default=300,
-        help_text='Không kích hoạt lại luật này trong khoảng thời gian sau lần kích hoạt gần nhất, '
-                   'tránh spam thông báo khi điều kiện vẫn còn đúng.'
-    )
-    is_active = models.BooleanField(default=True)
-    last_triggered_at = models.DateTimeField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['owner', 'is_active'], name='idx_autorule_owner_active'),
-            models.Index(fields=['device', 'trigger_type'], name='idx_autorule_dev_trigger'),
-        ]
-
-    def is_in_cooldown(self) -> bool:
-        if not self.last_triggered_at:
-            return False
-        return (timezone.now() - self.last_triggered_at).total_seconds() < self.cooldown_seconds
-
-    def mark_triggered(self, save=True):
-        self.last_triggered_at = timezone.now()
-        if save:
-            self.save(update_fields=['last_triggered_at'])
-
-    def __str__(self):
-        return f'{self.name} ({self.get_trigger_type_display()})'
-
-
-class AutomationRuleLog(models.Model):
-    """Lịch sử mỗi lần 1 rule thực sự được kích hoạt - dùng làm bằng chứng
-    rule engine hoạt động thật (đưa vào Chương 6 báo cáo: bảng kịch bản kiểm thử)."""
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    rule = models.ForeignKey(AutomationRule, on_delete=models.CASCADE, related_name='logs')
-    device = models.ForeignKey(Device, on_delete=models.SET_NULL, null=True, blank=True)
-    measured_value = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    action_taken = models.CharField(max_length=30)
-    notification = models.ForeignKey(
-        'Notification', on_delete=models.SET_NULL, null=True, blank=True, related_name='rule_log_entries'
-    )
-    triggered_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [models.Index(fields=['rule', 'triggered_at'], name='idx_autorulelog_rule_time')]
 
 
 # ==================== NHÓM G: XÁC THỰC 2 LỚP (2FA) ====================
@@ -724,13 +546,6 @@ def set_updated_at_nfc_reader(sender, instance, **kwargs):
 @receiver(pre_save, sender=SystemSettings)
 def set_updated_at_system_settings(sender, instance, **kwargs):
     instance.updated_at = timezone.now()
-
-
-@receiver(pre_save, sender=AutomationRule)
-def set_updated_at_automation_rule(sender, instance, **kwargs):
-    instance.updated_at = timezone.now()
-
-
 
 
 # ==================== A2: MÃ PIN CỬA (KHÁCH THUÊ) ====================
@@ -857,11 +672,13 @@ class AccessEvent(models.Model):
     METHOD_PIN = 'PIN'
     METHOD_FACE = 'FACE'
     METHOD_BLE = 'BLE'
+    METHOD_NFC_PHONE = 'NFC_PHONE'
     METHOD_CHOICES = [
         (METHOD_RFID, 'Thẻ RFID'),
         (METHOD_PIN, 'Mã PIN'),
         (METHOD_FACE, 'Khuôn mặt'),
         (METHOD_BLE, 'Bluetooth'),
+        (METHOD_NFC_PHONE, 'NFC trên điện thoại'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

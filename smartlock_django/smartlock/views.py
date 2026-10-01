@@ -31,6 +31,7 @@ from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import (
     url_has_allowed_host_and_scheme, urlsafe_base64_decode, urlsafe_base64_encode,
@@ -63,10 +64,10 @@ from .services import (
     issue_ble_ticket,
 )
 from .models import (
-    AccessCard, Announcement, AuditLog, AutomationRule, AutomationRuleLog, CardDeviceAccess,
+    AccessCard, Announcement, AuditLog, CardDeviceAccess,
     Device, DeviceAccess, DeviceCommand, DeviceStatusLog, OneTimeCode, Fido2Credential,
     NfcLog, NfcReader, Notification, Permission,
-    ShareAccessCode, SupportRequest, TwoFactorConfig,
+    TwoFactorConfig,
     User, fernet, sync_two_fa_flag,
 )
 
@@ -74,11 +75,9 @@ logger = logging.getLogger('smartlock.views')
 
 # ====================== CONSTANTS ======================
 COMMAND_TTL_SECONDS = 120
-SHARED_ACCESS_HOURS = 24
-SUPPORT_TTL_HOURS = 24
 PAGE_SIZE = 20
+# lệnh -> quyền cần có (None = chỉ chủ khoá)
 ALLOWED_COMMANDS = {'LOCK': 'LOCK', 'UNLOCK': 'UNLOCK', 'REBOOT': None}
-RECOVERY_ACTIONS = ('RESET_REMOTE', 'RECOVERY', 'TRANSFER_OWNER')
 
 # ====================== AUTH REQUIRED DECORATOR (đưa lên đầu) ======================
 auth_required = login_required(login_url='smartlock:login')
@@ -96,21 +95,14 @@ PAGE_TEMPLATE = {
     "device_claim": "devices",
     "nfc_tags": "access",
     "nfc_reader": "access",
-    "share_codes": "access",
-    "share_request": "access",
+    "shares": "access",
     "door_pins": "access",
     "face_profiles": "access",
     "access_history": "access",
-    "permissions": "admin",
-    "automation_rules": "admin",
-    "settings_system": "admin",
-    "announcements": "admin",
     "audit_logs": "admin",
-    "support_requests": "admin",
-    "support_request_detail": "admin",
     "dashboard": "home",
     "profile": "home",
-    "notifications": "home"
+    "notifications": "home",
 }
 
 
@@ -130,51 +122,10 @@ def _visible_logs(user):
         Q(actor_user=user) | Q(target_user=user) | Q(device__owner=user)
     )
 
-def _default_permissions():
-    # Suy ra danh sách quyền mặc định từ ALLOWED_COMMANDS.
-    codes = sorted({c for c in ALLOWED_COMMANDS.values() if c})
-    perms = [(c, c.replace('_', ' ').title(), None, False) for c in codes]
-    # Quyền quản lý truy cập (PIN/khuôn mặt) - nhạy cảm, mặc định không ai ngoài chủ có.
-    perms += [
-        ('manage_pins', 'Quản lý mã PIN', 'Cấp/thu hồi mã PIN cho khách', True),
-        ('manage_face_profiles', 'Quản lý khuôn mặt', 'Đăng ký khuôn mặt được phép mở cửa', True),
-    ]
-    return perms
 
-def _ensure_default_permissions():
-    existing = set(Permission.objects.values_list('code', flat=True))
-    for code, name, desc, sensitive in _default_permissions():
-        if code not in existing:
-            Permission.objects.get_or_create(
-                code=code, defaults={'name': name, 'description': desc, 'is_sensitive': sensitive},
-            )
 
-def _unique_share_plain():
-    """Mã 6 số không trùng với mã đang còn hạn nào khác (tránh cấp nhầm thiết bị)."""
-    for _ in range(20):
-        plain = f'{secrets.randbelow(10 ** 6):06d}'
-        if not ShareAccessCode.is_code_taken(plain):
-            return plain
-    return None
 
-def _clean_ip_lines(text):
-    good, bad = [], []
-    for line in (text or '').splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        ip = _valid_ip(line)
-        (good if ip else bad).append(ip or line)
-    return good, bad
 
-def _parse_decimal(value):
-    value = (value or '').strip().replace(',', '.')
-    if not value:
-        return None
-    try:
-        return Decimal(value)
-    except InvalidOperation:
-        return None
 
 def _parse_int(value):
     try:
@@ -520,51 +471,6 @@ def reset_password(request, uidb64, token):
     return _render(request, 'reset_password', ctx)
 
 
-# ====================== DASHBOARD ======================
-@auth_required
-def dashboard(request):
-    user = request.user
-    devices = _accessible_devices(user).order_by('name')
-    current = _pick_device(devices, request.GET.get('device'))
-    now = timezone.now()
-
-    share_code, share_progress = None, 0
-    if current:
-        last_log = DeviceStatusLog.objects.filter(device=current).order_by('-recorded_at').first()
-        current.lock_state = last_log.lock_state if last_log else 'unknown'
-        if current.owner_id == user.id:
-            share_code = (ShareAccessCode.objects
-                          .filter(device=current, expires_at__gt=now).order_by('-created_at').first())
-            if share_code:
-                total = (share_code.expires_at - share_code.created_at).total_seconds() or 1
-                left = (share_code.expires_at - now).total_seconds()
-                share_progress = max(0, min(100, int(left / total * 100)))
-
-    today = timezone.localdate()
-    days = [today - timedelta(days=i) for i in range(6, -1, -1)]
-    counts = {
-        r['d']: r['c'] for r in
-        _visible_logs(user).filter(created_at__date__gte=days[0])
-        .annotate(d=TruncDate('created_at')).values('d').annotate(c=Count('id'))
-    }
-    chart_data = {'labels': [d.strftime('%d/%m') for d in days],
-                  'values': [counts.get(d, 0) for d in days]}
-
-    context = {
-        'devices': devices,
-        'current_device': current,
-        'total_devices': devices.count(),
-        'online_devices': devices.filter(status='online').count(),
-        'unapproved_cards': AccessCard.objects.filter(user=user, is_active=False).count(),
-        'unread_count': Notification.objects.filter(user=user, is_read=False).count(),
-        'active_share_code': share_code,
-        'share_progress': share_progress,
-        'recent_notifications': Notification.objects.filter(user=user).order_by('-created_at')[:4],
-        'recent_logs': _visible_logs(user).select_related('device').order_by('-created_at')[:6],
-        'announcements': Announcement.objects.filter(is_active=True).order_by('-created_at')[:3],
-        'chart_data': chart_data,
-    }
-    return _render(request, 'dashboard', context)
 
 
 # ====================== SYNC: bootstrap toàn bộ dữ liệu dashboard cho client cache ======================
@@ -586,6 +492,7 @@ def sync_bootstrap(request):
         'battery_level': d.battery_level,
         'lock_state': d.last_lock_state or 'unknown',
         'location': d.location or '', 'is_owner': d.owner_id == user.id,
+        'permissions': sorted(services.permission_codes(user, d)),
         'updated_at': d.updated_at.isoformat(),
     } for d in devices]
 
@@ -643,6 +550,7 @@ def device_add(request):
             # constraint chk_devices_owner_vs_status: 'provisioning' bắt buộc owner=NULL,
             # còn ở đây đã gán owner nên phải dùng trạng thái khác.
             status='offline',
+            device_mode='simulated',   # tạo từ web = thiết bị giả lập; khoá thật dùng device_claim
             owner=request.user,
             bluetooth_enabled=True,
             wifi_enabled=True,
@@ -692,109 +600,10 @@ def devices_list(request):
     return _render(request, 'devices_list', {'device_list': devices})
 
 
-@auth_required
-def device_detail(request, device_id):
-    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
-    is_owner = device.owner_id == request.user.id
-
-    if request.method == 'POST':
-        if not is_owner:
-            _audit(request, 'DEVICE_UPDATE_DENIED', device=device, success=False, severity='warning')
-            messages.error(request, 'Chỉ chủ thiết bị mới được chỉnh sửa.')
-            return redirect('smartlock:device-detail', device_id=device.id)
-        name = (request.POST.get('name') or '').strip()
-        if not name:
-            messages.error(request, 'Tên thiết bị không được để trống.')
-        else:
-            fields = ('name', 'location', 'wifi_enabled', 'bluetooth_enabled', 'nfc_enabled')
-            before = {f: getattr(device, f) for f in fields}
-            device.name = name[:100]
-            device.location = (request.POST.get('location') or '').strip()[:255] or None
-            device.wifi_enabled = 'wifi_enabled' in request.POST
-            device.bluetooth_enabled = 'bluetooth_enabled' in request.POST
-            device.nfc_enabled = 'nfc_enabled' in request.POST
-            device.save()
-            changes = {f: [before[f], getattr(device, f)] for f in fields if before[f] != getattr(device, f)}
-            _audit(request, 'DEVICE_UPDATED', device=device, metadata={'changes': changes} if changes else None)
-            messages.success(request, 'Đã cập nhật thiết bị.')
-        return redirect('smartlock:device-detail', device_id=device.id)
-
-    last_log = DeviceStatusLog.objects.filter(device=device).order_by('-recorded_at').first()
-    device.lock_state = last_log.lock_state if last_log else 'unknown'
-    accesses = []
-    if is_owner:
-        accesses = (DeviceAccess.objects.filter(device=device, is_active=True)
-                    .select_related('user').prefetch_related('permissions'))
-    context = {
-        'device': device,
-        'is_owner': is_owner,
-        'last_log': last_log,
-        'recent_commands': DeviceCommand.objects.filter(device=device)
-                           .select_related('issued_by').order_by('-created_at')[:6],
-        'accesses': accesses,
-    }
-    return _render(request, 'device_detail', context)
 
 
-@auth_required
-@require_POST
-def device_command(request, device_id):
-    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
-    command = (request.POST.get('command') or '').upper()
-    if command not in ALLOWED_COMMANDS:
-        _audit(request, 'CMD_INVALID', device=device, success=False, severity='warning',
-               metadata={'command': command[:30]})
-        return JsonResponse({'ok': False, 'message': 'Lệnh không hợp lệ.'}, status=400)
-
-    needed = ALLOWED_COMMANDS[command]
-    allowed = (device.owner_id == request.user.id) if needed is None \
-        else _has_permission(request.user, device, needed)
-    if not allowed:
-        _audit(request, f'CMD_{command}_DENIED', device=device, success=False, severity='warning')
-        return JsonResponse({'ok': False, 'message': 'Bạn không có quyền thực hiện lệnh này.'}, status=403)
-    if device.status != 'online':
-        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
-               metadata={'reason': 'device_not_online', 'status': device.status})
-        return JsonResponse({'ok': False, 'message': 'Thiết bị đang không online.'}, status=409)
-
-    now = timezone.now()
-    # 'sent' cũng là trạng thái chưa xong (đã publish, chờ ack) -> phải tính vào hết hạn & chống trùng.
-    DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'),
-                                 expires_at__lte=now).update(status='expired')
-    if DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'), command_type=command,
-                                    created_at__gte=now - timedelta(seconds=10)).exists():
-        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
-               metadata={'reason': 'duplicate_pending'})
-        return JsonResponse({'ok': False, 'message': 'Lệnh này vừa được gửi, vui lòng chờ vài giây.'}, status=429)
-
-    cmd = services.dispatch_command(device, command, source='web', issued_by=request.user,
-                                    ttl=COMMAND_TTL_SECONDS)
-    if cmd.status != 'sent':
-        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
-               metadata={'reason': 'mqtt_publish_failed', 'error': cmd.publish_error})
-        return JsonResponse({'ok': False, 'message': 'Không kết nối được tới thiết bị. Vui lòng thử lại.'}, status=502)
-
-    _audit(request, f'CMD_{command}', device=device, metadata={'command_id': str(cmd.id)})
-    labels = {'LOCK': 'Khóa', 'UNLOCK': 'Mở khóa', 'REBOOT': 'Khởi động lại'}
-    return JsonResponse({'ok': True, 'command_id': str(cmd.id),
-                         'message': f'Đã gửi lệnh {labels.get(command, command)} tới "{device.name}".'})
 
 
-# ====================== BLUETOOTH: CẤP VÉ MỞ KHOÁ TẦM GẦN (CHẠY OFFLINE) ======================
-@auth_required
-@require_POST
-def device_ble_ticket(request, device_id):
-    """App có mạng gọi endpoint này để xin vé; đến gần cửa thì đưa vé cho ESP32 qua BLE.
-    ESP32 tự kiểm tra chữ ký + hạn (không cần mạng), xem services.py mục Bluetooth."""
-    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
-    if not device.bluetooth_enabled or device.status not in ('online', 'offline'):
-        return JsonResponse({'ok': False, 'message': 'Thiết bị không dùng được Bluetooth lúc này.'}, status=409)
-    if not _has_permission(request.user, device, 'UNLOCK'):
-        _audit(request, 'BLE_TICKET_DENIED', device=device, success=False, severity='warning')
-        return JsonResponse({'ok': False, 'message': 'Bạn không có quyền mở khóa thiết bị này.'}, status=403)
-    ticket, exp = issue_ble_ticket(device, request.user)
-    _audit(request, 'BLE_TICKET_ISSUED', device=device, metadata={'expires_at': exp})
-    return JsonResponse({'ok': True, 'ticket': ticket, 'expires_at': exp, 'device_code': device.device_code})
 
 
 def _mqtt_webhook_authorized(request) -> bool:
@@ -878,764 +687,24 @@ def mqtt_acl_webhook(request):
     return JsonResponse({'ok': False}, status=403)
 
 
-# ====================== NFC ======================
-@auth_required
-def nfc_tags(request):
-    if request.method == 'POST':
-        action = request.POST.get('action')
-        card_id = _parse_uuid(request.POST.get('card_id'))
-        card = AccessCard.objects.filter(id=card_id, user=request.user).first() if card_id else None
-        if not card:
-            _audit(request, 'CARD_NOT_FOUND', success=False, severity='warning',
-                   metadata={'card_id': str(request.POST.get('card_id'))[:64], 'action': str(action)[:30]})
-            messages.error(request, 'Không tìm thấy thẻ.')
-        elif action == 'toggle':
-            card.is_active = not card.is_active
-            card.save()
-            _audit(request, 'CARD_ENABLED' if card.is_active else 'CARD_DISABLED',
-                   metadata={'card_id': str(card.id), 'name': card.name})
-            messages.success(request, 'Đã kích hoạt thẻ.' if card.is_active else 'Đã vô hiệu hóa thẻ.')
-        elif action == 'rename':
-            old_name = card.name
-            card.name = (request.POST.get('name') or '').strip()[:100] or None
-            card.save()
-            _audit(request, 'CARD_RENAMED',
-                   metadata={'card_id': str(card.id), 'from': old_name, 'to': card.name})
-            messages.success(request, 'Đã đổi tên thẻ.')
-        elif action == 'delete':
-            info = {'card_id': str(card.id), 'name': card.name,
-                    'devices': [str(d) for d in card.carddeviceaccess_set.values_list('device_id', flat=True)]}
-            card.delete()
-            _audit(request, 'CARD_DELETED', metadata=info)
-            messages.success(request, 'Đã xóa thẻ.')
-        return redirect('smartlock:nfc-tags')
 
-    cards = (AccessCard.objects.filter(user=request.user)
-             .prefetch_related('carddeviceaccess_set__device').order_by('-created_at'))
-    return _render(request, 'nfc_tags', {'access_cards': cards})
 
 
-@auth_required
-def nfc_reader(request):
-    is_post = request.method == 'POST'
-    devices = Device.objects.filter(owner=request.user).order_by('name')
-    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
-                          strict=is_post)
 
-    if is_post:
-        if not device:
-            _audit(request, 'NFC_DEVICE_NOT_FOUND', success=False, severity='warning',
-                   metadata={'device': str(request.POST.get('device') or request.GET.get('device'))[:64]})
-            messages.error(request, 'Không tìm thấy thiết bị hoặc bạn không phải chủ.')
-            return redirect('smartlock:devices-list')
 
-        action = request.POST.get('action')
-        back = lambda: _redirect_with('smartlock:nfc-reader', device=device.id)
 
-        if action == 'add_reader':
-            name = (request.POST.get('name') or '').strip()[:100] or 'Đầu đọc mô phỏng'
-            with transaction.atomic():
-                reader = NfcReader.objects.create(device=device, reader_mode='simulated',
-                                                  name=name, is_active=True)
-                NfcLog.objects.create(reader=reader, device=device, user=request.user,
-                                      event_type='READER_CONNECTED', ip_address=_client_ip(request),
-                                      user_agent=_user_agent(request))
-            _audit(request, 'NFC_READER_ADDED', device=device,
-                   metadata={'reader_id': str(reader.id), 'name': name})
-            messages.success(request, 'Đã thêm đầu đọc.')
-            return back()
 
-        if action in ('toggle_reader', 'toggle_auto'):
-            reader = NfcReader.objects.filter(id=_parse_uuid(request.POST.get('reader_id')),
-                                              device=device).first()
-            if not reader:
-                _audit(request, 'NFC_READER_NOT_FOUND', device=device, success=False, severity='warning')
-                messages.error(request, 'Không tìm thấy đầu đọc.')
-                return back()
-            if action == 'toggle_reader':
-                reader.is_active = not reader.is_active
-                reader.save()
-                event = 'READER_CONNECTED' if reader.is_active else 'READER_DISCONNECTED'
-                audit_action = 'NFC_READER_ENABLED' if reader.is_active else 'NFC_READER_DISABLED'
-            else:
-                cfg = reader  # cấu hình đầu đọc nay nằm ngay trên NfcReader
-                cfg.auto_register = not cfg.auto_register
-                cfg.save()
-                event = 'CONFIG_UPDATED'
-                audit_action = 'NFC_AUTO_REGISTER_ON' if cfg.auto_register else 'NFC_AUTO_REGISTER_OFF'
-            NfcLog.objects.create(reader=reader, device=device, user=request.user, event_type=event,
-                                  ip_address=_client_ip(request), user_agent=_user_agent(request))
-            _audit(request, audit_action, device=device, metadata={'reader_id': str(reader.id)})
-            messages.success(request, 'Đã cập nhật đầu đọc.')
-            return back()
 
-        if action == 'register_card':
-            uid = re.sub(r'[\s:\-]', '', request.POST.get('uid') or '').upper()
-            name = (request.POST.get('name') or '').strip()[:100] or None
-            if len(uid) < 4:
-                messages.error(request, 'UID thẻ không hợp lệ.')
-                return back()
-            try:
-                with transaction.atomic():
-                    if AccessCard.objects.filter(card_uid_hash=_hash_token(uid)).exists():
-                        raise IntegrityError('card uid already registered (legacy hash)')
-                    card = AccessCard.objects.create(
-                        card_uid_hash=_hash_card_uid(uid), user=request.user, name=name, is_active=True)
-                    CardDeviceAccess.objects.create(access_card=card, device=device)
-            except IntegrityError:
-                _audit(request, 'CARD_REGISTER_FAILED', device=device, success=False,
-                       severity='warning', metadata={'reason': 'duplicate'})
-                messages.error(request, 'Thẻ này đã được đăng ký.')
-                return back()
-            reader = NfcReader.objects.filter(device=device, is_active=True).first()
-            NfcLog.objects.create(reader=reader, nfc_tag=card, device=device, user=request.user,
-                                  event_type='CARD_REGISTER', ip_address=_client_ip(request),
-                                  user_agent=_user_agent(request))
-            _audit(request, 'CARD_REGISTERED', device=device,
-                   metadata={'card_id': str(card.id), 'name': name})
 
-            nfc_ctx = {
-                'user_email': request.user.email,
-                'card_name': name or 'Thẻ không tên',
-                'card_uid': uid,
-                'action_url': request.build_absolute_uri(
-                    reverse('smartlock:audit-logs')) + f'?all=1&q=CARD_REGISTERED',
-            }
-            subject, html, plain_text = render_email('admin_nfc_approval.html', nfc_ctx)
-            for admin in _admins():
-                _send_mail(subject, plain_text, html, admin.email)
 
-            messages.success(request, 'Đã đăng ký thẻ NFC.')
-            return back()
-        return back()
 
-    context = {
-        'device_list': devices,
-        'device': device,
-        'readers': NfcReader.objects.filter(device=device).order_by('-created_at') if device else [],
-        'nfc_logs': NfcLog.objects.filter(device=device).select_related('nfc_tag', 'reader')
-                    .order_by('-created_at')[:10] if device else [],
-    }
-    return _render(request, 'nfc_reader', context)
 
 
-# ====================== SHARE & SUPPORT ======================
-@auth_required
-def share_codes(request):
-    user = request.user
-    _ensure_default_permissions()
-    owned = Device.objects.filter(owner=user).order_by('name')
 
-    if request.method == 'POST':
-        action = request.POST.get('action')
-        if action == 'create':
-            device = owned.filter(id=_parse_uuid(request.POST.get('device_id'))).first()
-            if not device:
-                _audit(request, 'SHARE_CODE_CREATE_DENIED', success=False, severity='warning')
-                messages.error(request, 'Vui lòng chọn thiết bị của bạn.')
-                return redirect('smartlock:share-codes')
-            try:
-                minutes = int(request.POST.get('minutes') or min(_settings().share_code_expiry_minutes, 1440))
-                if not 1 <= minutes <= 1440:
-                    raise ValueError
-            except ValueError:
-                messages.error(request, 'Thời hạn phải từ 1 đến 1440 phút.')
-                return redirect('smartlock:share-codes')
-            plain = _unique_share_plain()
-            if not plain:
-                messages.error(request, 'Không tạo được mã, vui lòng thử lại.')
-                return redirect('smartlock:share-codes')
-            perms = list(Permission.objects.filter(code__in=request.POST.getlist('permissions')))
-            code = ShareAccessCode(device=device, created_by=user,
-                                   expires_at=timezone.now() + timedelta(minutes=minutes))
-            code.set_code(plain)
-            code.save()
-            code.permissions.set(perms)
-            _audit(request, 'SHARE_CODE_CREATED', device=device,
-                   metadata={'code_id': str(code.id), 'minutes': minutes,
-                             'permissions': sorted(p.code for p in perms)})
-            messages.success(request, f'Đã tạo mã chia sẻ {plain} (hết hạn sau {minutes} phút).')
 
-            # Nếu chủ thiết bị điền sẵn email/username người nhận, gửi luôn mã qua email
-            # thay vì phải tự chép và gửi thủ công. Không nhập thì giữ hành vi cũ (chỉ hiện trên màn hình).
-            recipient_id = (request.POST.get('recipient') or '').strip()
-            if recipient_id:
-                recipient = _find_user(recipient_id)
-                if not recipient or not recipient.is_active:
-                    messages.warning(request, f'Không tìm thấy người dùng "{recipient_id}" — '
-                                              'hãy tự gửi mã cho họ.')
-                else:
-                    share_ctx = {
-                        'full_name': recipient.full_name or recipient.username,
-                        'device_name': device.name,
-                        'share_code': plain,
-                        'expiry_minutes': minutes,
-                        'action_url': request.build_absolute_uri(reverse('smartlock:share-request')),
-                    }
-                    subject, html, plain_text = render_email('share_code_notification.html', share_ctx)
-                    if _send_mail(subject, plain_text, html, recipient.email):
-                        messages.success(request, f'Đã gửi mã chia sẻ tới email của {recipient.username}.')
-                    else:
-                        messages.error(request, 'Không gửi được email cho người nhận.')
-        elif action == 'delete':
-            code = (ShareAccessCode.objects.select_related('device')
-                    .filter(id=_parse_uuid(request.POST.get('code_id')), device__owner=user).first())
-            if code:
-                device, code_id = code.device, str(code.id)
-                code.delete()
-                _audit(request, 'SHARE_CODE_DELETED', device=device, metadata={'code_id': code_id})
-                messages.success(request, 'Đã xóa mã chia sẻ.')
-        return redirect('smartlock:share-codes')
 
-    now = timezone.now()
-    codes = list(ShareAccessCode.objects.filter(device__owner=user)
-                 .select_related('device').prefetch_related('permissions').order_by('-created_at'))
-    for c in codes:
-        # Mã lưu dạng hash 1 chiều nên không thể "giải mã" lại để hiển thị.
-        # Mã gốc chỉ hiện đúng 1 lần trong thông báo ngay lúc tạo (xem nhánh action == 'create' ở trên).
-        c.plain = '••••••'
-        c.is_expired = c.expires_at <= now
 
-    context = {
-        'share_codes': codes,
-        'device_list': owned,
-        'permissions': Permission.objects.order_by('name'),
-        'default_minutes': min(_settings().share_code_expiry_minutes, 1440),
-    }
-    return _render(request, 'share_codes', context)
 
-
-@auth_required
-def share_request(request):
-    user = request.user
-    if request.method == 'POST':
-        ip = _client_ip(request)
-        now = timezone.now()
-        plain = re.sub(r'\D', '', request.POST.get('code') or '')
-
-        # Đếm lần NHẬP SAI (theo user hoặc theo IP) trong 15 phút.
-        fails = (AuditLog.objects
-                 .filter(action='SHARE_CODE_REDEEM_FAILED', created_at__gte=now - timedelta(minutes=15))
-                 .filter(Q(actor_user=user) | Q(ip_address=ip)).count())
-        fails_day = (AuditLog.objects
-                     .filter(action='SHARE_CODE_REDEEM_FAILED', created_at__gte=now - timedelta(hours=24))
-                     .filter(Q(actor_user=user) | Q(ip_address=ip)).count())
-        if fails >= 5 or fails_day >= 20:
-            _audit(request, 'SHARE_CODE_RATE_LIMITED', success=False, severity='critical')
-            messages.error(request, 'Bạn nhập sai quá nhiều lần. Vui lòng thử lại sau 15 phút.')
-            return redirect('smartlock:share-request')
-
-        match = None
-        if len(plain) == 6:
-            match = ShareAccessCode.find_active_by_code(
-                plain, device_code=(request.POST.get('device_code') or '').strip()[:50] or None)
-
-        if not match:
-            _audit(request, 'SHARE_CODE_REDEEM_FAILED', success=False, severity='warning')
-            messages.error(request, 'Mã chia sẻ không đúng hoặc đã hết hạn.')
-            return redirect('smartlock:share-request')
-
-        if match.device.owner_id == user.id:
-            _audit(request, 'SHARE_CODE_OWN_DEVICE', device=match.device, success=False)
-            messages.error(request, 'Đây là thiết bị của chính bạn.')
-            return redirect('smartlock:share-request')
-
-        with transaction.atomic():
-            locked = ShareAccessCode.objects.select_for_update().filter(id=match.id).first()
-            if not locked:  # người khác vừa dùng mã này
-                _audit(request, 'SHARE_CODE_REDEEM_FAILED', success=False, severity='warning',
-                       metadata={'reason': 'already_used'})
-                messages.error(request, 'Mã chia sẻ không đúng hoặc đã hết hạn.')
-                return redirect('smartlock:share-request')
-
-            new_exp = now + timedelta(hours=SHARED_ACCESS_HOURS)
-            perms = list(locked.permissions.all())
-            access = (DeviceAccess.objects.select_for_update()
-                      .filter(device=match.device, user=user, is_active=True).first())
-            if access:  # đã có quyền: gia hạn + gộp quyền, không tạo bản ghi trùng
-                if access.expires_at is not None:
-                    access.expires_at = max(access.expires_at, new_exp)
-                    access.save(update_fields=['expires_at'])
-                access.permissions.add(*perms)
-            else:
-                access = DeviceAccess.objects.create(
-                    device=match.device, user=user, source='SHARE_CODE', accepted=True,
-                    valid_from=now, expires_at=new_exp, created_by=match.created_by,
-                )
-                access.permissions.set(perms)
-            locked.delete()
-
-        _audit(request, 'SHARE_CODE_REDEEMED', device=match.device, target_user=match.created_by,
-               metadata={'access_id': str(access.id), 'permissions': sorted(p.code for p in perms)})
-        _notify(match.created_by, 'Mã chia sẻ đã được sử dụng',
-                f'{user.username} đã nhận quyền truy cập "{match.device.name}".',
-                device=match.device, type_='SHARE')
-        messages.success(request, f'Đã nhận quyền truy cập thiết bị "{match.device.name}".')
-        return redirect('smartlock:share-request')
-
-    now = timezone.now()
-    accesses = (DeviceAccess.objects.filter(user=user, is_active=True)
-                .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
-                .select_related('device').prefetch_related('permissions').order_by('-created_at'))
-    return _render(request, 'share_request',
-                  {'my_accesses': accesses, 'access_hours': SHARED_ACCESS_HOURS})
-
-
-@auth_required
-def support_requests(request):
-    user = request.user
-    now = timezone.now()
-    SupportRequest.objects.filter(status='pending', expires_at__lte=now).update(
-        status='expired', completed_at=now)
-
-    if request.method == 'POST':
-        device = Device.objects.filter(id=_parse_uuid(request.POST.get('device_id')), owner=user).first()
-        action = request.POST.get('action')
-        valid_actions = {c for c, _ in SupportRequest._meta.get_field('action').choices}
-        if not device:
-            _audit(request, 'SUPPORT_REQUEST_DENIED', success=False, severity='warning',
-                   metadata={'reason': 'not_owner'})
-            messages.error(request, 'Không phải thiết bị của bạn.')
-            return redirect('smartlock:support-requests')
-        if action not in valid_actions:
-            _audit(request, 'SUPPORT_REQUEST_DENIED', device=device, success=False, severity='warning',
-                   metadata={'reason': 'invalid_action', 'action': str(action)[:30]})
-            messages.error(request, 'Loại yêu cầu không hợp lệ.')
-            return redirect('smartlock:support-requests')
-        if SupportRequest.objects.filter(device=device, requested_by=user, status='pending').count() >= 5:
-            messages.error(request, 'Bạn đang có quá nhiều yêu cầu chờ xử lý cho thiết bị này.')
-            return redirect('smartlock:support-requests')
-
-        auth_code = secrets.token_hex(4).upper()
-        recovery = secrets.token_hex(4).upper() if action in RECOVERY_ACTIONS else None
-        sr = SupportRequest.objects.create(
-            device=device, requested_by=user, action=action,
-            scope=(request.POST.get('scope') or '').strip()[:100] or None,
-            authorization_code_hash=_hash_token(auth_code),
-            recovery_code_hash=_hash_token(recovery) if recovery else None,
-            expires_at=now + timedelta(hours=SUPPORT_TTL_HOURS),
-        )
-        _audit(request, 'SUPPORT_REQUEST_CREATED', device=device,
-               metadata={'request_id': str(sr.id), 'action': action})
-
-        # Các hành động RECOVERY_ACTIONS (reset/khôi phục/chuyển chủ) ảnh hưởng nghiêm trọng
-        # tới quyền sở hữu thiết bị -> báo ngay cho quản trị viên qua email.
-        if recovery:
-            recovery_ctx = {
-                'device_name': device.name,
-                'action_url': request.build_absolute_uri(
-                    reverse('smartlock:support-request-detail', args=[sr.id])),
-            }
-            for admin in _admins():
-                recovery_ctx['full_name'] = admin.full_name or admin.username
-                subject, html, plain_text = render_email('recovery_notification.html', recovery_ctx)
-                _send_mail(subject, plain_text, html, admin.email)
-
-        msg = f'Đã tạo yêu cầu. Mã ủy quyền: {auth_code}'
-        if recovery:
-            msg += f' — Mã khôi phục: {recovery}'
-        messages.success(request, msg + ' (chỉ hiển thị một lần, hãy lưu lại).')
-        return redirect('smartlock:support-request-detail', request_id=sr.id)
-
-    reqs = SupportRequest.objects.filter(requested_by=user).select_related('device').order_by('-created_at')
-    context = {
-        'support_requests': _page(request, reqs),
-        'device_list': Device.objects.filter(owner=user).order_by('name'),
-        'action_choices': SupportRequest._meta.get_field('action').choices,
-    }
-    return _render(request, 'support_requests', context)
-
-
-@auth_required
-def support_request_detail(request, request_id):
-    # Admin được xem MỌI yêu cầu (để hỗ trợ/duyệt), người dùng thường chỉ xem yêu cầu của mình.
-    qs = SupportRequest.objects.select_related('device', 'processed_by')
-    if not _is_admin(request.user):
-        qs = qs.filter(requested_by=request.user)
-    sr = get_object_or_404(qs, id=request_id)
-
-    if request.method == 'POST' and request.POST.get('action') == 'cancel':
-        if sr.requested_by_id != request.user.id:
-            messages.error(request, 'Chỉ người tạo yêu cầu mới được hủy.')
-        elif sr.status == 'pending' and sr.expires_at > timezone.now():
-            sr.status = 'cancelled'
-            sr.completed_at = timezone.now()
-            sr.save()
-            _audit(request, 'SUPPORT_REQUEST_CANCELLED', device=sr.device,
-                   metadata={'request_id': str(sr.id)})
-            messages.success(request, 'Đã hủy yêu cầu.')
-        else:
-            messages.error(request, 'Chỉ có thể hủy yêu cầu đang chờ xử lý.')
-        return redirect('smartlock:support-request-detail', request_id=sr.id)
-
-    context = {
-        'support_request': sr,
-        'is_admin_view': _is_admin(request.user) and sr.requested_by_id != request.user.id,
-    }
-    return _render(request, 'support_request_detail', context)
-
-
-# ====================== PERMISSIONS ======================
-@auth_required
-def permissions_manage(request):
-    _ensure_default_permissions()
-    user = request.user
-    is_post = request.method == 'POST'
-    devices = Device.objects.filter(owner=user).order_by('name')
-    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
-                          strict=is_post)
-
-    if is_post:
-        if not device:
-            _audit(request, 'ACCESS_DEVICE_NOT_FOUND', success=False, severity='warning',
-                   metadata={'device': str(request.POST.get('device') or request.GET.get('device'))[:64]})
-            messages.error(request, 'Không tìm thấy thiết bị của bạn.')
-            return redirect('smartlock:permissions-manage')
-
-        action = request.POST.get('action')
-        back = lambda: _redirect_with('smartlock:permissions-manage', device=device.id)
-        perms = list(Permission.objects.filter(code__in=request.POST.getlist('permissions')))
-        perm_codes = sorted(p.code for p in perms)
-
-        if action == 'grant':
-            identifier = request.POST.get('identifier')
-            target = _find_user(identifier)
-            raw_exp = (request.POST.get('expires_at') or '').strip()
-            expires = _parse_dt(raw_exp)
-            now = timezone.now()
-            if raw_exp and expires is None:
-                # Trước đây nhập sai định dạng bị coi là "không hết hạn" => cấp quyền vĩnh viễn.
-                messages.error(request, 'Định dạng thời điểm hết hạn không hợp lệ.')
-            elif not target or not target.is_active:
-                _audit(request, 'ACCESS_GRANT_FAILED', device=device, success=False,
-                       username_attempt=(identifier or '')[:150], metadata={'reason': 'user_not_found'})
-                messages.error(request, 'Không tìm thấy người dùng (email hoặc username).')
-            elif target.id == user.id:
-                messages.error(request, 'Bạn đã là chủ thiết bị này.')
-            elif expires and expires <= now:
-                messages.error(request, 'Thời điểm hết hạn phải ở tương lai.')
-            else:
-                with transaction.atomic():
-                    access = (DeviceAccess.objects.select_for_update()
-                              .filter(device=device, user=target, is_active=True)
-                              .order_by('-created_at').first())
-                    if access:
-                        access.expires_at = expires
-                        access.accepted = True
-                        access.save(update_fields=['expires_at', 'accepted'])
-                    else:
-                        access = DeviceAccess.objects.create(
-                            device=device, user=target, created_by=user, accepted=True,
-                            source='DIRECT', expires_at=expires)
-                    access.permissions.set(perms)
-                _audit(request, 'ACCESS_GRANTED', device=device, target_user=target,
-                       metadata={'access_id': str(access.id), 'permissions': perm_codes,
-                                 'expires_at': expires.isoformat() if expires else None})
-                _notify(target, 'Bạn được cấp quyền thiết bị',
-                        f'{user.username} đã cấp quyền cho bạn trên "{device.name}".',
-                        device=device, type_='ACCESS')
-                messages.success(request, f'Đã cấp quyền cho {target.username}.')
-        elif action in ('update', 'revoke'):
-            access = (DeviceAccess.objects.select_related('user')
-                      .filter(id=_parse_uuid(request.POST.get('access_id')),
-                              device=device, is_active=True).first())
-            if not access:
-                _audit(request, 'ACCESS_NOT_FOUND', device=device, success=False, severity='warning',
-                       metadata={'action': str(action)})
-                messages.error(request, 'Không tìm thấy quyền truy cập.')
-            elif action == 'update':
-                old_codes = sorted(p.code for p in access.permissions.all())
-                access.permissions.set(perms)
-                _audit(request, 'ACCESS_UPDATED', device=device, target_user=access.user,
-                       metadata={'access_id': str(access.id), 'from': old_codes, 'to': perm_codes})
-                messages.success(request, 'Đã cập nhật quyền.')
-            else:
-                access.is_active = False
-                access.revoked_at = timezone.now()
-                access.save()
-                # Lệnh đang chờ do người bị thu hồi gửi không được phép chạy tiếp.
-                cancelled = DeviceCommand.objects.filter(
-                    device=device, issued_by=access.user, status='pending').update(status='failed')
-                _audit(request, 'ACCESS_REVOKED', device=device, target_user=access.user,
-                       severity='warning',
-                       metadata={'access_id': str(access.id), 'cancelled_commands': cancelled})
-                _notify(access.user, 'Quyền truy cập bị thu hồi',
-                        f'Quyền của bạn trên "{device.name}" đã bị thu hồi.',
-                        severity='warning', device=device, type_='ACCESS')
-                messages.success(request, 'Đã thu hồi quyền.')
-        return back()
-
-    accesses = []
-    if device:
-        accesses = list(DeviceAccess.objects.filter(device=device, is_active=True)
-                        .select_related('user').prefetch_related('permissions').order_by('-created_at'))
-        for a in accesses:
-            a.perm_codes = [p.code for p in a.permissions.all()]
-
-    context = {
-        'device_list': devices,
-        'device': device,
-        'permissions': Permission.objects.order_by('name'),
-        'accesses': accesses,
-    }
-    return _render(request, 'permissions', context)
-
-
-# ====================== AUTOMATION RULES ======================
-@auth_required
-def automation_rules_manage(request):
-    """Trang quản lý AutomationRule của owner hiện tại: tạo / sửa / bật-tắt / xoá.
-    device=None nghĩa là luật áp dụng cho mọi thiết bị của owner (xem services.py, mục Rule engine)."""
-    user = request.user
-    is_post = request.method == 'POST'
-    devices = Device.objects.filter(owner=user).order_by('name')
-
-    valid_triggers = {c for c, _ in AutomationRule.TRIGGER_CHOICES}
-    valid_actions = {c for c, _ in AutomationRule.ACTION_CHOICES}
-    valid_severities = {'info', 'warning', 'critical'}
-
-    def back():
-        return redirect('smartlock:automation-rules')
-
-    def resolve_device(raw_id):
-        """Trả về (device, ok). raw_id rỗng => (None, True) = áp dụng mọi thiết bị.
-        raw_id không khớp thiết bị nào của user => (None, False) = lỗi."""
-        raw_id = (raw_id or '').strip()
-        if not raw_id:
-            return None, True
-        dev = devices.filter(id=_parse_uuid(raw_id)).first()
-        return (dev, True) if dev else (None, False)
-
-    def read_form():
-        return {
-            'name': (request.POST.get('name') or '').strip()[:150],
-            'trigger_type': request.POST.get('trigger_type'),
-            'action_type': request.POST.get('action_type') or AutomationRule.ACTION_NOTIFY_ONLY,
-            'notify_severity': request.POST.get('notify_severity') or 'warning',
-            'threshold_value': _parse_decimal(request.POST.get('threshold_value')),
-            'threshold_window_seconds': _parse_int(request.POST.get('threshold_window_seconds')),
-            'cooldown_seconds': _parse_int(request.POST.get('cooldown_seconds')) or 300,
-        }
-
-    def form_errors(data):
-        if not data['name']:
-            return 'Vui lòng nhập tên luật.'
-        if data['trigger_type'] not in valid_triggers:
-            return 'Loại điều kiện kích hoạt không hợp lệ.'
-        if data['action_type'] not in valid_actions:
-            return 'Hành động không hợp lệ.'
-        if data['notify_severity'] not in valid_severities:
-            return 'Mức độ thông báo không hợp lệ.'
-        if data['cooldown_seconds'] is None or data['cooldown_seconds'] < 0:
-            return 'Thời gian cooldown không hợp lệ.'
-        return None
-
-    if is_post:
-        action = request.POST.get('action')
-
-        if action == 'create':
-            device, dev_ok = resolve_device(request.POST.get('device'))
-            if not dev_ok:
-                messages.error(request, 'Không tìm thấy thiết bị của bạn.')
-                return back()
-            data = read_form()
-            err = form_errors(data)
-            if err:
-                messages.error(request, err)
-                return back()
-            rule = AutomationRule.objects.create(owner=user, device=device, **data)
-            _audit(request, 'AUTOMATION_RULE_CREATED', device=device,
-                   metadata={'rule_id': str(rule.id), 'trigger_type': rule.trigger_type,
-                             'action_type': rule.action_type})
-            messages.success(request, f'Đã tạo luật "{rule.name}".')
-            return back()
-
-        # update / toggle / delete: phải đúng luật thuộc về user hiện tại
-        rule = AutomationRule.objects.filter(
-            id=_parse_uuid(request.POST.get('rule_id')), owner=user
-        ).first()
-        if not rule:
-            _audit(request, 'AUTOMATION_RULE_NOT_FOUND', success=False, severity='warning',
-                   metadata={'action': str(action)})
-            messages.error(request, 'Không tìm thấy luật.')
-            return back()
-
-        if action == 'toggle':
-            rule.is_active = not rule.is_active
-            rule.save(update_fields=['is_active'])
-            _audit(request, 'AUTOMATION_RULE_TOGGLED', device=rule.device,
-                   metadata={'rule_id': str(rule.id), 'is_active': rule.is_active})
-            messages.success(request, f'Đã {"bật" if rule.is_active else "tắt"} luật "{rule.name}".')
-
-        elif action == 'update':
-            device, dev_ok = resolve_device(request.POST.get('device'))
-            if not dev_ok:
-                messages.error(request, 'Không tìm thấy thiết bị của bạn.')
-                return back()
-            data = read_form()
-            err = form_errors(data)
-            if err:
-                messages.error(request, err)
-                return back()
-            for field, value in data.items():
-                setattr(rule, field, value)
-            rule.device = device
-            rule.save()
-            _audit(request, 'AUTOMATION_RULE_UPDATED', device=device,
-                   metadata={'rule_id': str(rule.id)})
-            messages.success(request, f'Đã cập nhật luật "{rule.name}".')
-
-        elif action == 'delete':
-            rule_name, rule_device, rule_id = rule.name, rule.device, str(rule.id)
-            rule.delete()
-            _audit(request, 'AUTOMATION_RULE_DELETED', device=rule_device, severity='warning',
-                   metadata={'rule_id': rule_id})
-            messages.success(request, f'Đã xoá luật "{rule_name}".')
-
-        else:
-            messages.error(request, 'Hành động không hợp lệ.')
-
-        return back()
-
-    rules = (AutomationRule.objects.filter(owner=user)
-             .select_related('device').order_by('-created_at'))
-
-    context = {
-        'device_list': devices,
-        'rules': rules,
-        'trigger_choices': AutomationRule.TRIGGER_CHOICES,
-        'action_choices': AutomationRule.ACTION_CHOICES,
-    }
-    return _render(request, 'automation_rules', context)
-
-
-# ====================== SETTINGS / PROFILE / LOGS ======================
-@auth_required
-def settings_system(request):
-    if not _is_admin(request.user):
-        _audit(request, 'SETTINGS_ACCESS_DENIED', success=False, severity='warning')
-        messages.error(request, 'Bạn không có quyền truy cập trang này.')
-        return redirect('smartlock:dashboard')
-
-    st = _settings()
-    if request.method == 'POST':
-        try:
-            expiry = int(request.POST.get('verification_token_expiry_minutes'))
-            share = int(request.POST.get('share_code_expiry_minutes'))
-            timeout = int(request.POST.get('session_timeout_hours'))
-            stages = [int(x) for x in re.split(r'[,\s]+', (request.POST.get('lockout_stages') or '').strip()) if x]
-            if not stages or min(stages + [expiry, share, timeout]) <= 0:
-                raise ValueError
-            if expiry > 10080 or share > 1440 or timeout > 720 or max(stages) > 1440:
-                raise ValueError
-        except (TypeError, ValueError):
-            messages.error(request, 'Giá trị không hợp lệ (số nguyên dương; token ≤ 10080 phút, '
-                                    'mã chia sẻ ≤ 1440 phút, phiên ≤ 720 giờ, khóa ≤ 1440 phút).')
-            return redirect('smartlock:settings-system')
-
-        white, bad_w = _clean_ip_lines(request.POST.get('ip_whitelist'))
-        black, bad_b = _clean_ip_lines(request.POST.get('ip_blacklist'))
-        if bad_w or bad_b:
-            messages.error(request, 'IP không hợp lệ: ' + ', '.join((bad_w + bad_b)[:5]))
-            return redirect('smartlock:settings-system')
-        if _client_ip(request) in black:
-            messages.error(request, 'Không thể chặn chính IP bạn đang dùng.')
-            return redirect('smartlock:settings-system')
-
-        tracked = ('registration_enabled', 'verification_token_expiry_minutes', 'share_code_expiry_minutes',
-                   'session_timeout_hours', 'login_lockout_stage_minutes', 'ip_whitelist', 'ip_blacklist')
-        before = {f: getattr(st, f) for f in tracked}
-
-        st.registration_enabled = 'registration_enabled' in request.POST
-        st.verification_token_expiry_minutes = expiry
-        st.share_code_expiry_minutes = share
-        st.session_timeout_hours = timeout
-        st.login_lockout_stage_minutes = stages
-        st.ip_whitelist = '\n'.join(white)
-        st.ip_blacklist = '\n'.join(black)
-        st.updated_by = request.user
-        st.save()
-        changes = {f: [before[f], getattr(st, f)] for f in tracked if before[f] != getattr(st, f)}
-        _audit(request, 'SETTINGS_UPDATED', severity='warning', metadata={'changes': changes})
-        messages.success(request, 'Đã lưu cài đặt hệ thống.')
-        return redirect('smartlock:settings-system')
-
-    context = {
-        'system_settings': st,
-        'stages_text': ', '.join(str(x) for x in (st.login_lockout_stage_minutes or [])),
-    }
-    return _render(request, 'settings_system', context)
-
-
-@auth_required
-def announcements_manage(request):
-    """Quản lý thông báo hệ thống (banner trên dashboard) + tùy chọn gửi email broadcast.
-    Chỉ admin được truy cập."""
-    if not _is_admin(request.user):
-        _audit(request, 'ANNOUNCEMENTS_ACCESS_DENIED', success=False, severity='warning')
-        messages.error(request, 'Bạn không có quyền truy cập trang này.')
-        return redirect('smartlock:dashboard')
-
-    if request.method == 'POST':
-        action = request.POST.get('action')
-
-        if action == 'create':
-            title = (request.POST.get('title') or '').strip()[:200]
-            body = (request.POST.get('body') or '').strip()
-            level = request.POST.get('level') or 'info'
-            if level not in ('info', 'warning', 'danger'):
-                level = 'info'
-            if not title or not body:
-                messages.error(request, 'Vui lòng nhập đầy đủ tiêu đề và nội dung.')
-                return redirect('smartlock:announcements-manage')
-
-            ann = Announcement.objects.create(
-                title=title, body=body, level=level, created_by=request.user, is_active=True,
-            )
-            _audit(request, 'ANNOUNCEMENT_CREATED', metadata={'id': str(ann.id), 'title': title})
-
-            msg = f'Đã tạo thông báo "{title}".'
-            if 'send_email' in request.POST:
-                # Gửi đồng bộ trong request — chấp nhận được với vài trăm user. Nếu hệ thống có
-                # nhiều user và cần gửi hàng loạt, nên chuyển sang tác vụ nền (Celery/RQ...).
-                recipients = User.objects.filter(is_active=True).exclude(email='')
-                ctx = {'title': title, 'body': body}
-                subject, html, plain_text = render_email('system_announcement.html', ctx)
-                sent = failed = 0
-                for u in recipients:
-                    if _send_mail(subject, plain_text, html, u.email):
-                        sent += 1
-                    else:
-                        failed += 1
-                _audit(request, 'ANNOUNCEMENT_EMAIL_BROADCAST',
-                       metadata={'id': str(ann.id), 'sent': sent, 'failed': failed})
-                msg += f' Đã gửi email tới {sent} người dùng' + (f', {failed} thất bại.' if failed else '.')
-            messages.success(request, msg)
-
-        elif action == 'toggle':
-            ann = Announcement.objects.filter(id=_parse_uuid(request.POST.get('id'))).first()
-            if ann:
-                ann.is_active = not ann.is_active
-                ann.save(update_fields=['is_active'])
-                _audit(request, 'ANNOUNCEMENT_TOGGLED', metadata={'id': str(ann.id), 'is_active': ann.is_active})
-                messages.success(request, 'Đã cập nhật trạng thái thông báo.')
-            else:
-                messages.error(request, 'Không tìm thấy thông báo.')
-
-        elif action == 'delete':
-            ann = Announcement.objects.filter(id=_parse_uuid(request.POST.get('id'))).first()
-            if ann:
-                info = {'id': str(ann.id), 'title': ann.title}
-                ann.delete()
-                _audit(request, 'ANNOUNCEMENT_DELETED', metadata=info)
-                messages.success(request, 'Đã xóa thông báo.')
-            else:
-                messages.error(request, 'Không tìm thấy thông báo.')
-
-        return redirect('smartlock:announcements-manage')
-
-    context = {'announcements': Announcement.objects.select_related('created_by').order_by('-created_at')[:100]}
-    return _render(request, 'announcements', context)
 
 
 @auth_required
@@ -1872,13 +941,6 @@ def public_system_logs_api(request):
         'reader': n.reader.id and str(n.reader) if n.reader else '—',
     } for n in nfc_logs]
 
-    rule_logs = AutomationRuleLog.objects.select_related('rule', 'device').order_by('-triggered_at')[:LOG_ROW_LIMIT]
-    rule_rows = [{
-        'time': r.triggered_at.isoformat(), 'rule': r.rule.name if r.rule else '—',
-        'device': r.device.name if r.device else '—', 'action_taken': r.action_taken,
-        'measured_value': str(r.measured_value) if r.measured_value is not None else None,
-    } for r in rule_logs]
-
     audit_logs = (AuditLog.objects.select_related('device', 'actor_user', 'target_user')
                   .order_by('-created_at')[:LOG_ROW_LIMIT])
     audit_rows = [{
@@ -1909,7 +971,6 @@ def public_system_logs_api(request):
     _, audit_fail_series = _bucketed_counts(AuditLog.objects.filter(success=False), 'created_at')
     _, login_ok_series = _bucketed_counts(AuditLog.objects.filter(action__in=_LOGIN_OK_ACTIONS), 'created_at')
     _, login_fail_series = _bucketed_counts(AuditLog.objects.filter(action__in=_LOGIN_FAIL_ACTIONS), 'created_at')
-    _, rule_fire_series = _bucketed_counts(AutomationRuleLog.objects.all(), 'triggered_at')
     _, status_report_series = _bucketed_counts(DeviceStatusLog.objects.all(), 'recorded_at')
     _, tamper_series = _bucketed_counts(DeviceStatusLog.objects.filter(tamper_detected=True), 'recorded_at')
     _, avg_battery_series = _bucketed_avg(DeviceStatusLog.objects.all(), 'recorded_at', 'battery_level')
@@ -1923,7 +984,6 @@ def public_system_logs_api(request):
         'total_commands': DeviceCommand.objects.count(),
         'total_status_logs': DeviceStatusLog.objects.count(),
         'total_nfc_logs': NfcLog.objects.count(),
-        'total_rule_logs': AutomationRuleLog.objects.count(),
         'total_audit_logs': AuditLog.objects.count(),
         'total_login_attempts': _login_attempts().count(),
         'failed_audit_24h': AuditLog.objects.filter(success=False, created_at__gte=since_24h).count(),
@@ -1938,7 +998,7 @@ def public_system_logs_api(request):
         'commands': command_rows,
         'status_logs': status_rows,
         'nfc_logs': nfc_rows,
-        'rule_logs': rule_rows,
+        'rule_logs': [],      # đã bỏ tự động hoá - xoá panel này trong public/system_logs.html
         'audit_logs': audit_rows,
         'login_attempts': login_rows,
         'chart': {
@@ -1946,7 +1006,7 @@ def public_system_logs_api(request):
             'nfc_ok': nfc_ok_series, 'nfc_fail': nfc_fail_series,
             'audit_total': audit_total_series, 'audit_fail': audit_fail_series,
             'login_ok': login_ok_series, 'login_fail': login_fail_series,
-            'rule_fires': rule_fire_series, 'status_reports': status_report_series,
+            'rule_fires': [0] * len(labels), 'status_reports': status_report_series,
             'tamper_events': tamper_series,
             'avg_battery': avg_battery_series, 'avg_temp': avg_temp_series,
         },
@@ -2671,153 +1731,10 @@ def two_factor_context(request, user):
         }
     return ctx
 
-# ==================== A2: QUẢN LÝ MÃ PIN CỬA ====================
-@auth_required
-def door_pins(request):
-    """Trang cho chủ nhà cấp/thu hồi PIN cho khách thuê. Chỉ chủ thiết bị (hoặc
-    người có quyền 'manage_pins') mới được cấp PIN mới."""
-    devices = _accessible_devices(request.user)
-    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
-                          strict=request.method == 'POST')
- 
-    if request.method == 'POST':
-        if not device:
-            messages.error(request, 'Không tìm thấy thiết bị.')
-            return redirect('smartlock:door-pins')
-        if not _has_permission(request.user, device, 'manage_pins'):
-            _audit(request, 'DOOR_PIN_CREATE_DENIED', device=device, success=False, severity='warning')
-            messages.error(request, 'Bạn không có quyền cấp mã PIN cho thiết bị này.')
-            return _redirect_with('smartlock:door-pins', device=device.id)
- 
-        action = request.POST.get('action')
-        if action == 'issue':
-            try:
-                ttl_minutes = max(1, min(int(request.POST.get('ttl_minutes') or 1440), 43200))  # tối đa 30 ngày
-                max_uses = max(0, int(request.POST.get('max_uses') or 1))
-            except (TypeError, ValueError):
-                messages.error(request, 'Thời hạn hoặc số lần dùng không hợp lệ.')
-                return _redirect_with('smartlock:door-pins', device=device.id)
- 
-            label = (request.POST.get('label') or '').strip()[:100]
-            try:
-                pin, plain_pin = services.issue_unique_door_pin(
-                    device=device, created_by=request.user,
-                    ttl_minutes=ttl_minutes, label=label, max_uses=max_uses,
-                )
-            except RuntimeError as exc:
-                messages.error(request, str(exc))
-                return _redirect_with('smartlock:door-pins', device=device.id)
-            _audit(request, 'DOOR_PIN_CREATED', device=device, metadata={'pin_id': str(pin.id), 'label': label})
-            # plain_pin CHỈ xuất hiện 1 lần duy nhất ở đây - không lưu, không log lại
-            # dạng thô. Chủ nhà tự chụp màn hình / copy để gửi cho khách.
-            messages.success(request, f'Đã tạo mã PIN mới: {plain_pin} (hết hạn sau {ttl_minutes} phút).')
-            return _redirect_with('smartlock:door-pins', device=device.id)
- 
-        if action == 'revoke':
-            pin = DoorPinCode.objects.filter(id=_parse_uuid(request.POST.get('pin_id')), device=device).first()
-            if not pin:
-                messages.error(request, 'Không tìm thấy mã PIN.')
-            else:
-                pin.revoke()
-                _audit(request, 'DOOR_PIN_REVOKED', device=device, metadata={'pin_id': str(pin.id)})
-                messages.success(request, 'Đã thu hồi mã PIN.')
-            return _redirect_with('smartlock:door-pins', device=device.id)
- 
-    pins = (DoorPinCode.objects.filter(device=device).order_by('-created_at')[:50]
-            if device else DoorPinCode.objects.none())
-    context = {'device_list': devices, 'device': device, 'door_pins': pins}
-    return _render(request, 'door_pins', context)
  
  
-# ==================== A2: ĐĂNG KÝ KHUÔN MẶT ====================
-@auth_required
-def face_profiles(request):
-    """
-    Trang đăng ký/quản lý khuôn mặt được phép mở cửa. Việc TRÍCH XUẤT embedding từ
-    ảnh (face_recognition/InsightFace) chạy ở dịch vụ suy luận riêng (theo đúng thiết
-    kế "công nghệ theo từng lớp" của đề tài A2: backend FastAPI/Flask chạy mô hình);
-    view Django này chỉ NHẬN embedding đã tính sẵn (list số thực) qua form/AJAX rồi
-    lưu mã hoá, không tự chạy suy luận nặng trong tiến trình web.
-    """
-    devices = _accessible_devices(request.user)
-    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
-                          strict=request.method == 'POST')
- 
-    if request.method == 'POST':
-        if not device:
-            messages.error(request, 'Không tìm thấy thiết bị.')
-            return redirect('smartlock:face-profiles')
-        action = request.POST.get('action')
- 
-        if action == 'register':
-            if not _has_permission(request.user, device, 'manage_face_profiles'):
-                _audit(request, 'FACE_PROFILE_CREATE_DENIED', device=device, success=False, severity='warning')
-                messages.error(request, 'Bạn không có quyền đăng ký khuôn mặt cho thiết bị này.')
-                return _redirect_with('smartlock:face-profiles', device=device.id)
- 
-            if not request.POST.get('consent_confirmed'):
-                messages.error(request, 'Cần xác nhận người được đăng ký đã đồng ý thu thập dữ liệu khuôn mặt.')
-                return _redirect_with('smartlock:face-profiles', device=device.id)
- 
-            raw_embedding = request.POST.get('embedding_json') or '[]'
-            try:
-                embedding = json.loads(raw_embedding)
-                assert isinstance(embedding, list) and len(embedding) >= 32
-            except Exception:
-                _audit(request, 'FACE_PROFILE_INVALID_EMBEDDING', device=device, success=False, severity='warning')
-                messages.error(request, 'Dữ liệu khuôn mặt không hợp lệ. Hãy chụp lại.')
-                return _redirect_with('smartlock:face-profiles', device=device.id)
- 
-            name = (request.POST.get('name') or request.user.full_name or request.user.username)[:100]
-            services.register_face(device=device, user=request.user, embedding=embedding,
-                                          name=name, consent_confirmed=True)
-            messages.success(request, 'Đã đăng ký khuôn mặt.')
-            return _redirect_with('smartlock:face-profiles', device=device.id)
- 
-        if action == 'toggle':
-            profile = FaceProfile.objects.filter(
-                id=_parse_uuid(request.POST.get('profile_id')), device=device
-            ).first()
-            # Chủ thiết bị bật/tắt được hồ sơ của mọi người; người khác chỉ hồ sơ của chính mình.
-            if profile and profile.user_id != request.user.id and device.owner_id != request.user.id:
-                profile = None
-            if not profile:
-                messages.error(request, 'Không tìm thấy hồ sơ khuôn mặt.')
-            else:
-                profile.is_active = not profile.is_active
-                profile.save(update_fields=['is_active', 'updated_at'])
-                _audit(request, 'FACE_PROFILE_TOGGLED', device=device, target_user=profile.user,
-                       metadata={'face_profile_id': str(profile.id), 'is_active': profile.is_active})
-                messages.success(request, 'Đã cập nhật trạng thái.')
-            return _redirect_with('smartlock:face-profiles', device=device.id)
- 
-    profiles = (FaceProfile.objects.filter(device=device).select_related('user').order_by('-created_at')
-                if device else FaceProfile.objects.none())
-    context = {'device_list': devices, 'device': device, 'face_profiles': profiles}
-    return _render(request, 'face_profiles', context)
  
  
-# ==================== A2: LỊCH SỬ RA VÀO (RFID + PIN + KHUÔN MẶT) ====================
-@auth_required
-def access_events_history(request):
-    """Trang 'xem lịch sử ra vào kèm ảnh chụp' mà đề tài A2 yêu cầu - hợp nhất cả 3
-    kênh RFID/PIN/khuôn mặt trên cùng 1 danh sách, có thể lọc theo thiết bị/kênh."""
-    devices = _accessible_devices(request.user)
-    device = _pick_device(devices, request.GET.get('device'))
-    qs = AccessEvent.objects.filter(device__in=devices).select_related(
-        'device', 'user', 'access_card', 'door_pin', 'face_profile'
-    ).order_by('-created_at')
-    if device:
-        qs = qs.filter(device=device)
-    method = request.GET.get('method')
-    if method in dict(AccessEvent.METHOD_CHOICES):
-        qs = qs.filter(method=method)
- 
-    context = {
-        'device_list': devices, 'device': device, 'method': method or '',
-        'access_events': _page(request, qs),
-    }
-    return _render(request, 'access_history', context)
 
 
 # ====================== DEVICES: USER TỰ THÊM KHOÁ (gộp từ views_device.py) ======================
@@ -2866,3 +1783,653 @@ def face_profile_delete(request, profile_id):
                    severity='warning', metadata=info)
     messages.success(request, 'Đã xoá hồ sơ khuôn mặt.')
     return redirect(f"{reverse('smartlock:face-profiles')}?device={device.id}")
+
+
+# =====================================================================================================
+#  PHẦN TÍNH NĂNG KHOÁ (viết lại) - dành cho USER thường (chủ khoá + người được chia sẻ)
+#
+#  Kênh thao tác:
+#    * TRÌNH DUYỆT  -> qua Wi-Fi/Internet: mở/khoá từ xa (device_command), quản lý thẻ, PIN, khuôn mặt,
+#                      chia sẻ, xem lịch sử. KHÔNG dùng Bluetooth/NFC.
+#    * ĐIỆN THOẠI   -> app xin "vé" qua mạng, rồi dùng Bluetooth (BLE) hoặc NFC giả lập thẻ (HCE)
+#                      để mở khi đứng gần cửa. Quyền BLE/NFC là quyền của hệ điều hành điện thoại.
+#  Mỗi tính năng có 1 quyền riêng (services.PERMISSION_CATALOG); chủ khoá có đủ, người được chia sẻ
+#  chỉ có quyền chủ đã chọn. Giao diện dùng `caps` (services.capabilities) để hiện/ẩn từng khối.
+# =====================================================================================================
+
+# ====================== DASHBOARD ======================
+@auth_required
+def dashboard(request):
+    user = request.user
+    devices = _accessible_devices(user).order_by('name')
+    current = _pick_device(devices, request.GET.get('device'))
+
+    caps = None
+    if current:
+        last_log = DeviceStatusLog.objects.filter(device=current).order_by('-recorded_at').first()
+        current.lock_state = last_log.lock_state if last_log else 'unknown'
+        caps = services.capabilities(user, current)
+
+    today = timezone.localdate()
+    days = [today - timedelta(days=i) for i in range(6, -1, -1)]
+    counts = {
+        r['d']: r['c'] for r in
+        _visible_logs(user).filter(created_at__date__gte=days[0])
+        .annotate(d=TruncDate('created_at')).values('d').annotate(c=Count('id'))
+    }
+    context = {
+        'devices': devices,
+        'current_device': current,
+        'caps': caps,
+        'total_devices': devices.count(),
+        'online_devices': devices.filter(status='online').count(),
+        'unread_count': Notification.objects.filter(user=user, is_read=False).count(),
+        'recent_notifications': Notification.objects.filter(user=user).order_by('-created_at')[:4],
+        'recent_logs': _visible_logs(user).select_related('device').order_by('-created_at')[:6],
+        'announcements': Announcement.objects.filter(is_active=True).order_by('-created_at')[:3],
+        'chart_data': {'labels': [d.strftime('%d/%m') for d in days],
+                       'values': [counts.get(d, 0) for d in days]},
+    }
+    return _render(request, 'dashboard', context)
+
+
+# ====================== DEVICE DETAIL ======================
+@auth_required
+def device_detail(request, device_id):
+    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
+    is_owner = device.owner_id == request.user.id
+
+    if request.method == 'POST':
+        if not is_owner:
+            _audit(request, 'DEVICE_UPDATE_DENIED', device=device, success=False, severity='warning')
+            messages.error(request, 'Chỉ chủ thiết bị mới được chỉnh sửa.')
+            return redirect('smartlock:device-detail', device_id=device.id)
+        name = (request.POST.get('name') or '').strip()
+        if not name:
+            messages.error(request, 'Tên thiết bị không được để trống.')
+        else:
+            fields = ('name', 'location', 'wifi_enabled', 'bluetooth_enabled', 'nfc_enabled')
+            before = {f: getattr(device, f) for f in fields}
+            device.name = name[:100]
+            device.location = (request.POST.get('location') or '').strip()[:255] or None
+            device.wifi_enabled = 'wifi_enabled' in request.POST
+            device.bluetooth_enabled = 'bluetooth_enabled' in request.POST
+            device.nfc_enabled = 'nfc_enabled' in request.POST
+            device.save()
+            changes = {f: [before[f], getattr(device, f)] for f in fields if before[f] != getattr(device, f)}
+            _audit(request, 'DEVICE_UPDATED', device=device, metadata={'changes': changes} if changes else None)
+            messages.success(request, 'Đã cập nhật thiết bị.')
+        return redirect('smartlock:device-detail', device_id=device.id)
+
+    last_log = DeviceStatusLog.objects.filter(device=device).order_by('-recorded_at').first()
+    device.lock_state = last_log.lock_state if last_log else 'unknown'
+    caps = services.capabilities(request.user, device)
+    accesses = []
+    if is_owner:
+        accesses = (DeviceAccess.objects.filter(device=device, is_active=True)
+                    .select_related('user').prefetch_related('permissions'))
+    context = {
+        'device': device,
+        'is_owner': is_owner,
+        'caps': caps,
+        'last_log': last_log,
+        'recent_commands': DeviceCommand.objects.filter(device=device)
+                           .select_related('issued_by').order_by('-created_at')[:6],
+        'accesses': accesses,
+    }
+    return _render(request, 'device_detail', context)
+
+
+# ====================== MỞ / KHOÁ TỪ XA (trình duyệt, qua Wi-Fi/Internet) ======================
+COMMAND_LABELS = {'LOCK': 'Khóa', 'UNLOCK': 'Mở khóa', 'REBOOT': 'Khởi động lại'}
+
+
+def _command_reply(ok, message, status=200, **extra):
+    """JSON cho JS: `popup` để hiện popup trong trang (SmartLockPopup.show), không dùng thông báo trình duyệt."""
+    popup = {'title': 'Thành công' if ok else 'Không thực hiện được', 'message': message,
+             'severity': 'info' if ok else 'warning'}
+    return JsonResponse({'ok': ok, 'message': message, 'popup': popup, **extra}, status=status)
+
+
+@auth_required
+@require_POST
+def device_command(request, device_id):
+    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
+    command = (request.POST.get('command') or '').upper()
+    if command not in ALLOWED_COMMANDS:
+        _audit(request, 'CMD_INVALID', device=device, success=False, severity='warning',
+               metadata={'command': command[:30]})
+        return _command_reply(False, 'Lệnh không hợp lệ.', 400)
+
+    needed = ALLOWED_COMMANDS[command]
+    allowed = (device.owner_id == request.user.id) if needed is None \
+        else _has_permission(request.user, device, needed)
+    if not allowed:
+        _audit(request, f'CMD_{command}_DENIED', device=device, success=False, severity='warning')
+        return _command_reply(False, 'Bạn không có quyền thực hiện lệnh này.', 403)
+    if not device.wifi_enabled:
+        return _command_reply(False, 'Wi-Fi của khoá đang tắt nên không điều khiển từ xa được.', 409)
+    if device.status != 'online':
+        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
+               metadata={'reason': 'device_not_online', 'status': device.status})
+        return _command_reply(False, 'Thiết bị đang không online.', 409)
+
+    now = timezone.now()
+    # 'sent' cũng là trạng thái chưa xong (đã publish, chờ ack) -> phải tính vào hết hạn & chống trùng.
+    DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'),
+                                 expires_at__lte=now).update(status='expired')
+    if DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'), command_type=command,
+                                    created_at__gte=now - timedelta(seconds=10)).exists():
+        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
+               metadata={'reason': 'duplicate_pending'})
+        return _command_reply(False, 'Lệnh này vừa được gửi, vui lòng chờ vài giây.', 429)
+
+    cmd = services.dispatch_command(device, command, source='web', issued_by=request.user,
+                                    ttl=COMMAND_TTL_SECONDS)
+    if cmd.status != 'sent':
+        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
+               metadata={'reason': 'mqtt_publish_failed', 'error': cmd.publish_error})
+        return _command_reply(False, 'Không kết nối được tới thiết bị. Vui lòng thử lại.', 502)
+
+    _audit(request, f'CMD_{command}', device=device, metadata={'command_id': str(cmd.id)})
+    return _command_reply(True, f'Đã gửi lệnh {COMMAND_LABELS.get(command, command)} tới "{device.name}".',
+                          command_id=str(cmd.id))
+
+
+# ====================== ĐIỆN THOẠI: VÉ BLUETOOTH / NFC GIẢ LẬP THẺ ======================
+def _phone_ticket(request, device_id, kind):
+    """App (đang có mạng) xin vé; đến gần cửa thì đưa vé cho khoá qua BLE hoặc qua NFC (HCE).
+    Khoá tự kiểm tra chữ ký + hạn, không cần mạng (xem services.issue_phone_ticket)."""
+    cfg = services.PHONE_CHANNELS[kind]
+    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
+    if not getattr(device, cfg['flag']) or device.status not in ('online', 'offline'):
+        return JsonResponse({'ok': False, 'message': f"Thiết bị không dùng được {cfg['name']} lúc này."},
+                            status=409)
+    if not _has_permission(request.user, device, cfg['permission']):
+        _audit(request, f"{cfg['prefix']}_TICKET_DENIED", device=device, success=False, severity='warning')
+        return JsonResponse({'ok': False, 'message': f"Bạn không có quyền mở khóa bằng {cfg['name']}."},
+                            status=403)
+    ticket, exp = services.issue_phone_ticket(device, request.user, kind)
+    _audit(request, f"{cfg['prefix']}_TICKET_ISSUED", device=device, metadata={'expires_at': exp})
+    return JsonResponse({'ok': True, 'ticket': ticket, 'expires_at': exp, 'device_code': device.device_code})
+
+
+@auth_required
+@require_POST
+def device_ble_ticket(request, device_id):
+    return _phone_ticket(request, device_id, 'ble')
+
+
+@auth_required
+@require_POST
+def device_nfc_ticket(request, device_id):
+    return _phone_ticket(request, device_id, 'nfc')
+
+
+# ====================== THẺ NFC ======================
+@auth_required
+def nfc_tags(request):
+    """Thẻ của MÌNH (đổi tên/bật-tắt/xoá) + thẻ đang gắn vào các khoá mình có quyền manage_nfc
+    (chủ khoá hoặc người được chia sẻ quyền này được bật/tắt thẻ đó TRÊN KHOÁ của họ)."""
+    user = request.user
+    managed_ids = set(services.devices_with_permission(user, 'manage_nfc').values_list('id', flat=True))
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        card = AccessCard.objects.filter(id=_parse_uuid(request.POST.get('card_id'))).first()
+        mine = bool(card and card.user_id == user.id)
+        if not card:
+            _audit(request, 'CARD_NOT_FOUND', success=False, severity='warning',
+                   metadata={'card_id': str(request.POST.get('card_id'))[:64], 'action': str(action)[:30]})
+            messages.error(request, 'Không tìm thấy thẻ.')
+        elif action in ('toggle', 'rename', 'delete') and not mine:
+            _audit(request, 'CARD_ACTION_DENIED', success=False, severity='warning',
+                   metadata={'card_id': str(card.id), 'action': action})
+            messages.error(request, 'Đây không phải thẻ của bạn.')
+        elif action == 'toggle':
+            card.is_active = not card.is_active
+            card.save()
+            _audit(request, 'CARD_ENABLED' if card.is_active else 'CARD_DISABLED',
+                   metadata={'card_id': str(card.id), 'name': card.name})
+            messages.success(request, 'Đã kích hoạt thẻ.' if card.is_active else 'Đã vô hiệu hóa thẻ.')
+        elif action == 'rename':
+            old_name = card.name
+            card.name = (request.POST.get('name') or '').strip()[:100] or None
+            card.save()
+            _audit(request, 'CARD_RENAMED', metadata={'card_id': str(card.id), 'from': old_name, 'to': card.name})
+            messages.success(request, 'Đã đổi tên thẻ.')
+        elif action == 'delete':
+            info = {'card_id': str(card.id), 'name': card.name,
+                    'devices': [str(d) for d in card.carddeviceaccess_set.values_list('device_id', flat=True)]}
+            card.delete()
+            _audit(request, 'CARD_DELETED', metadata=info)
+            messages.success(request, 'Đã xóa thẻ.')
+        elif action == 'toggle_link':
+            # Bật/tắt thẻ trên MỘT khoá cụ thể - dành cho người quản lý khoá đó.
+            device_id = _parse_uuid(request.POST.get('device_id'))
+            link = (CardDeviceAccess.objects.select_related('device')
+                    .filter(access_card=card, device_id=device_id).first())
+            if not link or link.device_id not in managed_ids:
+                _audit(request, 'CARD_LINK_DENIED', success=False, severity='warning',
+                       metadata={'card_id': str(card.id), 'device_id': str(device_id)})
+                messages.error(request, 'Bạn không có quyền quản lý thẻ trên khoá này.')
+            else:
+                link.is_active = not link.is_active
+                link.save(update_fields=['is_active'])
+                _audit(request, 'CARD_LINK_ENABLED' if link.is_active else 'CARD_LINK_DISABLED',
+                       device=link.device, target_user=card.user, metadata={'card_id': str(card.id)})
+                messages.success(request, 'Đã bật thẻ trên khoá này.' if link.is_active
+                                 else 'Đã tắt thẻ trên khoá này.')
+        return redirect('smartlock:nfc-tags')
+
+    cards = list(AccessCard.objects
+                 .filter(Q(user=user) | Q(carddeviceaccess__device_id__in=managed_ids)).distinct()
+                 .select_related('user').prefetch_related('carddeviceaccess_set__device')
+                 .order_by('-created_at'))
+    for c in cards:
+        c.is_mine = c.user_id == user.id
+        # Thẻ của người khác: chỉ hiện các khoá mà mình quản lý, không lộ khoá khác của họ.
+        c.visible_links = [l for l in c.carddeviceaccess_set.all() if c.is_mine or l.device_id in managed_ids]
+    return _render(request, 'nfc_tags', {'access_cards': cards, 'can_manage_any': bool(managed_ids)})
+
+
+@auth_required
+def nfc_reader(request):
+    """Đăng ký thẻ NFC cho khoá. Chủ khoá còn quản lý đầu đọc + bật chế độ đăng ký bằng quẹt thẻ
+    (chế độ này gắn thẻ cho CHỦ khoá nên người được chia sẻ không được bật)."""
+    user = request.user
+    is_post = request.method == 'POST'
+    devices = services.devices_with_permission(user, 'manage_nfc').order_by('name')
+    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'), strict=is_post)
+    is_owner = bool(device and device.owner_id == user.id)
+
+    if is_post:
+        if not device:
+            _audit(request, 'NFC_DEVICE_NOT_FOUND', success=False, severity='warning',
+                   metadata={'device': str(request.POST.get('device') or request.GET.get('device'))[:64]})
+            messages.error(request, 'Không tìm thấy thiết bị hoặc bạn không có quyền quản lý thẻ NFC.')
+            return redirect('smartlock:devices-list')
+
+        action = request.POST.get('action')
+        back = lambda: _redirect_with('smartlock:nfc-reader', device=device.id)
+
+        if not device.nfc_enabled:
+            messages.error(request, 'NFC của khoá đang tắt.')
+            return back()
+
+        if action in ('add_reader', 'toggle_reader', 'toggle_auto') and not is_owner:
+            _audit(request, 'NFC_READER_DENIED', device=device, success=False, severity='warning',
+                   metadata={'action': action})
+            messages.error(request, 'Chỉ chủ khoá mới được cấu hình đầu đọc.')
+            return back()
+
+        if action == 'add_reader':
+            name = (request.POST.get('name') or '').strip()[:100] or 'Đầu đọc mô phỏng'
+            with transaction.atomic():
+                reader = NfcReader.objects.create(device=device, reader_mode='simulated',
+                                                  name=name, is_active=True)
+                NfcLog.objects.create(reader=reader, device=device, user=user,
+                                      event_type='READER_CONNECTED', ip_address=_client_ip(request),
+                                      user_agent=_user_agent(request))
+            _audit(request, 'NFC_READER_ADDED', device=device, metadata={'reader_id': str(reader.id), 'name': name})
+            messages.success(request, 'Đã thêm đầu đọc.')
+            return back()
+
+        if action in ('toggle_reader', 'toggle_auto'):
+            reader = NfcReader.objects.filter(id=_parse_uuid(request.POST.get('reader_id')), device=device).first()
+            if not reader:
+                _audit(request, 'NFC_READER_NOT_FOUND', device=device, success=False, severity='warning')
+                messages.error(request, 'Không tìm thấy đầu đọc.')
+                return back()
+            if action == 'toggle_reader':
+                reader.is_active = not reader.is_active
+                reader.save()
+                event = 'READER_CONNECTED' if reader.is_active else 'READER_DISCONNECTED'
+                audit_action = 'NFC_READER_ENABLED' if reader.is_active else 'NFC_READER_DISABLED'
+            else:
+                reader.auto_register = not reader.auto_register
+                reader.save()
+                event = 'CONFIG_UPDATED'
+                audit_action = 'NFC_AUTO_REGISTER_ON' if reader.auto_register else 'NFC_AUTO_REGISTER_OFF'
+            NfcLog.objects.create(reader=reader, device=device, user=user, event_type=event,
+                                  ip_address=_client_ip(request), user_agent=_user_agent(request))
+            _audit(request, audit_action, device=device, metadata={'reader_id': str(reader.id)})
+            messages.success(request, 'Đã cập nhật đầu đọc.')
+            return back()
+
+        if action == 'register_card':
+            uid = services.normalize_uid(request.POST.get('uid'))
+            name = (request.POST.get('name') or '').strip()[:100] or None
+            if len(uid) < 4:
+                messages.error(request, 'UID thẻ không hợp lệ.')
+                return back()
+            try:
+                with transaction.atomic():
+                    if AccessCard.objects.filter(card_uid_hash=_hash_token(uid)).exists():
+                        raise IntegrityError('card uid already registered (legacy hash)')
+                    card = AccessCard.objects.create(
+                        card_uid_hash=_hash_card_uid(uid), user=user, name=name, is_active=True)
+                    CardDeviceAccess.objects.create(access_card=card, device=device)
+            except IntegrityError:
+                _audit(request, 'CARD_REGISTER_FAILED', device=device, success=False,
+                       severity='warning', metadata={'reason': 'duplicate'})
+                messages.error(request, 'Thẻ này đã được đăng ký.')
+                return back()
+            reader = NfcReader.objects.filter(device=device, is_active=True).first()
+            NfcLog.objects.create(reader=reader, nfc_tag=card, device=device, user=user,
+                                  event_type='CARD_REGISTER', ip_address=_client_ip(request),
+                                  user_agent=_user_agent(request))
+            _audit(request, 'CARD_REGISTERED', device=device, metadata={'card_id': str(card.id), 'name': name})
+            if not is_owner:      # người được chia sẻ thêm thẻ -> báo chủ khoá (popup + push)
+                _notify(device.owner, 'Có thẻ NFC mới trên khoá của bạn',
+                        f'{user.username} vừa đăng ký thẻ "{name or "không tên"}" cho "{device.name}".',
+                        device=device, type_='CARD')
+            messages.success(request, 'Đã đăng ký thẻ NFC.')
+            return back()
+        return back()
+
+    context = {
+        'device_list': devices,
+        'device': device,
+        'is_owner': is_owner,
+        'readers': NfcReader.objects.filter(device=device).order_by('-created_at') if device else [],
+        'nfc_logs': NfcLog.objects.filter(device=device).select_related('nfc_tag', 'reader')
+                    .order_by('-created_at')[:10] if device else [],
+    }
+    return _render(request, 'nfc_reader', context)
+
+
+# ====================== CHIA SẺ KHOÁ (thay cho tab "mã chia sẻ 6 số" + trang cấp quyền) ======================
+# Chủ khoá nhập email/username người nhận + chọn quyền + (tuỳ chọn) hạn dùng -> quyền có hiệu lực NGAY,
+# KHÔNG cần người nhận xác nhận. Người nhận được báo bằng EMAIL + thông báo/popup trong app.
+# Mã 6 số trước đây không còn: đó là PIN bấm trên bàn phím, nay nằm ở trang "Mã PIN" (door_pins).
+@auth_required
+def shares_manage(request):
+    user = request.user
+    services.ensure_default_permissions()
+    is_post = request.method == 'POST'
+    owned = Device.objects.filter(owner=user).order_by('name')
+    device = _pick_device(owned, request.POST.get('device') or request.GET.get('device'), strict=is_post)
+
+    if is_post:
+        action = request.POST.get('action')
+
+        # Người được chia sẻ tự rời khỏi 1 khoá (không cần là chủ).
+        if action == 'leave':
+            access = (DeviceAccess.objects.select_related('device', 'device__owner')
+                      .filter(id=_parse_uuid(request.POST.get('access_id')), user=user, is_active=True).first())
+            if not access:
+                messages.error(request, 'Không tìm thấy quyền truy cập.')
+            else:
+                access.is_active = False
+                access.revoked_at = timezone.now()
+                access.save(update_fields=['is_active', 'revoked_at'])
+                _audit(request, 'ACCESS_LEFT', device=access.device, target_user=access.device.owner,
+                       metadata={'access_id': str(access.id)})
+                if access.device.owner_id:
+                    _notify(access.device.owner, 'Người dùng đã rời khỏi khoá được chia sẻ',
+                            f'{user.username} không còn dùng khoá "{access.device.name}" nữa.',
+                            device=access.device, type_='SHARE')
+                messages.success(request, 'Bạn đã rời khỏi khoá này.')
+            return redirect('smartlock:shares')
+
+        if not device:
+            _audit(request, 'ACCESS_DEVICE_NOT_FOUND', success=False, severity='warning',
+                   metadata={'device': str(request.POST.get('device') or request.GET.get('device'))[:64]})
+            messages.error(request, 'Không tìm thấy thiết bị của bạn.')
+            return redirect('smartlock:shares')
+
+        back = lambda: _redirect_with('smartlock:shares', device=device.id)
+        perms = list(Permission.objects.filter(code__in=request.POST.getlist('permissions')))
+        perm_codes = sorted(p.code for p in perms)
+
+        if action == 'grant':
+            identifier = request.POST.get('identifier')
+            target = _find_user(identifier)
+            raw_exp = (request.POST.get('expires_at') or '').strip()
+            expires = _parse_dt(raw_exp)
+            now = timezone.now()
+            if raw_exp and expires is None:
+                messages.error(request, 'Định dạng thời điểm hết hạn không hợp lệ.')
+            elif not target or not target.is_active:
+                _audit(request, 'ACCESS_GRANT_FAILED', device=device, success=False,
+                       username_attempt=(identifier or '')[:150], metadata={'reason': 'user_not_found'})
+                messages.error(request, 'Không tìm thấy người dùng (email hoặc username).')
+            elif target.id == user.id:
+                messages.error(request, 'Bạn đã là chủ thiết bị này.')
+            elif expires and expires <= now:
+                messages.error(request, 'Thời điểm hết hạn phải ở tương lai.')
+            elif not perms:
+                messages.error(request, 'Hãy chọn ít nhất một quyền để chia sẻ.')
+            else:
+                access, created = services.grant_access(device, user, target, perms, expires)
+                _audit(request, 'ACCESS_GRANTED' if created else 'ACCESS_UPDATED', device=device,
+                       target_user=target,
+                       metadata={'access_id': str(access.id), 'permissions': perm_codes,
+                                 'expires_at': expires.isoformat() if expires else None})
+                emailed = services.notify_access_shared(request, access, created)
+                msg = f'Đã chia sẻ khoá "{device.name}" cho {target.username}'
+                messages.success(request, msg + (' và gửi email thông báo.' if emailed else '.'))
+                if not emailed:
+                    messages.warning(request, 'Không gửi được email cho người nhận (họ vẫn thấy thông báo trong app).')
+
+        elif action in ('update', 'revoke'):
+            access = (DeviceAccess.objects.select_related('user')
+                      .filter(id=_parse_uuid(request.POST.get('access_id')), device=device, is_active=True).first())
+            if not access:
+                _audit(request, 'ACCESS_NOT_FOUND', device=device, success=False, severity='warning',
+                       metadata={'action': str(action)})
+                messages.error(request, 'Không tìm thấy quyền truy cập.')
+            elif action == 'update':
+                old_codes = sorted(p.code for p in access.permissions.all())
+                access.permissions.set(perms)
+                _audit(request, 'ACCESS_UPDATED', device=device, target_user=access.user,
+                       metadata={'access_id': str(access.id), 'from': old_codes, 'to': perm_codes})
+                services.notify_access_shared(request, access, created=False)
+                messages.success(request, 'Đã cập nhật quyền.')
+            else:
+                access.is_active = False
+                access.revoked_at = timezone.now()
+                access.save(update_fields=['is_active', 'revoked_at'])
+                # Lệnh đang chờ do người bị thu hồi gửi không được phép chạy tiếp.
+                cancelled = DeviceCommand.objects.filter(
+                    device=device, issued_by=access.user, status='pending').update(status='failed')
+                _audit(request, 'ACCESS_REVOKED', device=device, target_user=access.user, severity='warning',
+                       metadata={'access_id': str(access.id), 'cancelled_commands': cancelled})
+                _notify(access.user, 'Quyền truy cập bị thu hồi',
+                        f'Quyền của bạn trên "{device.name}" đã bị thu hồi.',
+                        severity='warning', device=device, type_='SHARE')
+                messages.success(request, 'Đã thu hồi quyền.')
+        return back()
+
+    accesses = []
+    if device:
+        accesses = list(DeviceAccess.objects.filter(device=device, is_active=True)
+                        .select_related('user').prefetch_related('permissions').order_by('-created_at'))
+        for a in accesses:
+            a.perm_codes = [p.code for p in a.permissions.all()]
+
+    now = timezone.now()
+    my_accesses = (DeviceAccess.objects.filter(user=user, is_active=True)
+                   .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+                   .select_related('device', 'created_by').prefetch_related('permissions').order_by('-created_at'))
+    context = {
+        'device_list': owned,
+        'device': device,
+        'permissions': Permission.objects.order_by('name'),
+        'accesses': accesses,          # những người ĐANG được mình chia sẻ (khoá đang chọn)
+        'my_accesses': my_accesses,    # những khoá được CHIA SẺ CHO mình
+    }
+    return _render(request, 'shares', context)
+
+
+# ====================== MÃ PIN (bấm trực tiếp trên bàn phím của khoá) ======================
+@auth_required
+def door_pins(request):
+    """Chủ khoá (hoặc người có quyền manage_pins) cấp PIN cho khách; khách bấm PIN trên bàn phím
+    ma trận của khoá để mở cửa. PIN KHÔNG phải thứ để nhập vào web/app."""
+    devices = services.devices_with_permission(request.user, 'manage_pins').order_by('name')
+    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
+                          strict=request.method == 'POST')
+
+    if request.method == 'POST':
+        if not device:
+            _audit(request, 'DOOR_PIN_CREATE_DENIED', success=False, severity='warning')
+            messages.error(request, 'Không tìm thấy thiết bị hoặc bạn không có quyền quản lý mã PIN.')
+            return redirect('smartlock:door-pins')
+
+        action = request.POST.get('action')
+        if action == 'issue':
+            try:
+                ttl_minutes = max(1, min(int(request.POST.get('ttl_minutes') or 1440), 43200))  # tối đa 30 ngày
+                max_uses = max(0, int(request.POST.get('max_uses') or 1))
+            except (TypeError, ValueError):
+                messages.error(request, 'Thời hạn hoặc số lần dùng không hợp lệ.')
+                return _redirect_with('smartlock:door-pins', device=device.id)
+
+            label = (request.POST.get('label') or '').strip()[:100]
+            try:
+                pin, plain_pin = services.issue_unique_door_pin(
+                    device=device, created_by=request.user,
+                    ttl_minutes=ttl_minutes, label=label, max_uses=max_uses)
+            except RuntimeError as exc:
+                messages.error(request, str(exc))
+                return _redirect_with('smartlock:door-pins', device=device.id)
+            _audit(request, 'DOOR_PIN_CREATED', device=device, metadata={'pin_id': str(pin.id), 'label': label})
+            # plain_pin CHỈ hiện 1 lần ở đây - không lưu, không log dạng thô.
+            messages.success(request, f'Mã PIN mới: {plain_pin} — khách bấm trên bàn phím của khoá '
+                                      f'(hết hạn sau {ttl_minutes} phút).')
+            return _redirect_with('smartlock:door-pins', device=device.id)
+
+        if action == 'revoke':
+            pin = DoorPinCode.objects.filter(id=_parse_uuid(request.POST.get('pin_id')), device=device).first()
+            if not pin:
+                messages.error(request, 'Không tìm thấy mã PIN.')
+            else:
+                pin.revoke()
+                _audit(request, 'DOOR_PIN_REVOKED', device=device, metadata={'pin_id': str(pin.id)})
+                messages.success(request, 'Đã thu hồi mã PIN.')
+            return _redirect_with('smartlock:door-pins', device=device.id)
+        return _redirect_with('smartlock:door-pins', device=device.id)
+
+    pins = (DoorPinCode.objects.filter(device=device).select_related('created_by').order_by('-created_at')[:50]
+            if device else DoorPinCode.objects.none())
+    return _render(request, 'door_pins', {'device_list': devices, 'device': device, 'door_pins': pins})
+
+
+# ====================== KHUÔN MẶT ======================
+@auth_required
+def face_profiles(request):
+    """Đăng ký/quản lý khuôn mặt được phép mở cửa. Embedding do client/dịch vụ suy luận tính sẵn;
+    view chỉ nhận rồi lưu mã hoá (NĐ 13/2023). Người có quyền manage_face_profiles thấy mọi hồ sơ
+    trên khoá đó; người khác chỉ thấy hồ sơ của chính mình."""
+    user = request.user
+    devices = services.devices_with_permission(user, 'manage_face_profiles').order_by('name')
+    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
+                          strict=request.method == 'POST')
+
+    if request.method == 'POST':
+        if not device:
+            _audit(request, 'FACE_PROFILE_CREATE_DENIED', success=False, severity='warning')
+            messages.error(request, 'Không tìm thấy thiết bị hoặc bạn không có quyền quản lý khuôn mặt.')
+            return redirect('smartlock:face-profiles')
+        action = request.POST.get('action')
+
+        if action == 'register':
+            if not request.POST.get('consent_confirmed'):
+                messages.error(request, 'Cần xác nhận người được đăng ký đã đồng ý thu thập dữ liệu khuôn mặt.')
+                return _redirect_with('smartlock:face-profiles', device=device.id)
+            try:
+                embedding = json.loads(request.POST.get('embedding_json') or '[]')
+                assert isinstance(embedding, list) and len(embedding) >= 32
+                embedding = [float(x) for x in embedding]
+                assert all(math.isfinite(x) for x in embedding)
+            except Exception:
+                _audit(request, 'FACE_PROFILE_INVALID_EMBEDDING', device=device, success=False, severity='warning')
+                messages.error(request, 'Dữ liệu khuôn mặt không hợp lệ. Hãy chụp lại.')
+                return _redirect_with('smartlock:face-profiles', device=device.id)
+            name = (request.POST.get('name') or user.full_name or user.username)[:100]
+            services.register_face(device=device, user=user, embedding=embedding,
+                                   name=name, consent_confirmed=True, request=request)
+            if device.owner_id != user.id:
+                _notify(device.owner, 'Có khuôn mặt mới trên khoá của bạn',
+                        f'{user.username} vừa đăng ký khuôn mặt cho "{device.name}".',
+                        device=device, type_='FACE')
+            messages.success(request, 'Đã đăng ký khuôn mặt.')
+            return _redirect_with('smartlock:face-profiles', device=device.id)
+
+        if action == 'toggle':
+            profile = FaceProfile.objects.filter(id=_parse_uuid(request.POST.get('profile_id')),
+                                                 device=device).first()
+            # Chủ khoá bật/tắt được hồ sơ của mọi người; người khác chỉ hồ sơ của chính mình.
+            if profile and profile.user_id != user.id and device.owner_id != user.id:
+                profile = None
+            if not profile:
+                messages.error(request, 'Không tìm thấy hồ sơ khuôn mặt.')
+            else:
+                profile.is_active = not profile.is_active
+                profile.save(update_fields=['is_active', 'updated_at'])
+                _audit(request, 'FACE_PROFILE_TOGGLED', device=device, target_user=profile.user,
+                       metadata={'face_profile_id': str(profile.id), 'is_active': profile.is_active})
+                messages.success(request, 'Đã cập nhật trạng thái.')
+            return _redirect_with('smartlock:face-profiles', device=device.id)
+        return _redirect_with('smartlock:face-profiles', device=device.id)
+
+    profiles = FaceProfile.objects.none()
+    if device:
+        profiles = FaceProfile.objects.filter(device=device).select_related('user').order_by('-created_at')
+        if device.owner_id != user.id:
+            profiles = profiles.filter(user=user)
+    return _render(request, 'face_profiles', {'device_list': devices, 'device': device, 'face_profiles': profiles})
+
+
+# ====================== LỊCH SỬ RA VÀO ======================
+@auth_required
+def access_events_history(request):
+    """Lịch sử mở cửa hợp nhất mọi kênh (thẻ, PIN, khuôn mặt, Bluetooth, NFC điện thoại).
+    Chỉ chủ khoá hoặc người có quyền view_history."""
+    devices = services.devices_with_permission(request.user, 'view_history').order_by('name')
+    device = _pick_device(devices, request.GET.get('device'))
+    qs = AccessEvent.objects.filter(device__in=devices).select_related(
+        'device', 'user', 'access_card', 'door_pin', 'face_profile').order_by('-created_at')
+    if device:
+        qs = qs.filter(device=device)
+    method = request.GET.get('method')
+    if method in dict(AccessEvent.METHOD_CHOICES):
+        qs = qs.filter(method=method)
+    context = {'device_list': devices, 'device': device, 'method': method or '',
+               'method_choices': AccessEvent.METHOD_CHOICES, 'access_events': _page(request, qs)}
+    return _render(request, 'access_history', context)
+
+
+# ====================== POPUP TRÊN MÀN HÌNH (poll) ======================
+EVENTS_MAX_BACKLOG_SECONDS = 300     # tab mở lại sau lâu: không dội cả đống popup cũ
+EVENTS_BATCH = 10
+
+
+@auth_required
+def events_poll(request):
+    """JS (static/smartlock/js/popup.js) gọi mỗi vài giây. Trả các Notification MỚI của user kể từ
+    `cursor` để hiện popup trong trang. Lần đầu (chưa có cursor) chỉ trả cursor, không trả popup cũ."""
+    now = timezone.now()
+    raw = (request.GET.get('cursor') or '').strip()
+    since = parse_datetime(raw) if raw else None
+    if since is not None and timezone.is_naive(since):
+        since = timezone.make_aware(since)
+    unread = Notification.objects.filter(user=request.user, is_read=False).count()
+    if since is None:
+        resp = JsonResponse({'events': [], 'cursor': now.isoformat(), 'unread_count': unread})
+        resp['Cache-Control'] = 'no-store'
+        return resp
+    since = max(since, now - timedelta(seconds=EVENTS_MAX_BACKLOG_SECONDS))
+
+    rows = list(Notification.objects.filter(user=request.user, created_at__gt=since)
+                .order_by('created_at')[:EVENTS_BATCH])
+    cursor = rows[-1].created_at if rows else since
+    events = [{
+        'id': str(n.id), 'type': n.type, 'title': n.title, 'message': n.message, 'severity': n.severity,
+        'device_id': str(n.device_id) if n.device_id else None, 'created_at': n.created_at.isoformat(),
+    } for n in rows]
+    resp = JsonResponse({'events': events, 'cursor': cursor.isoformat(), 'unread_count': unread})
+    resp['Cache-Control'] = 'no-store'
+    return resp

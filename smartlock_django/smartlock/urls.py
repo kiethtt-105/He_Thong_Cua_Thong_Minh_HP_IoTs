@@ -19,7 +19,8 @@ urlpatterns = [
     path('devices/add/', views.device_add, name='device-add'),
     path('devices/claim/', views.device_claim, name='device-claim'),   # user tự thêm khoá bằng code + secret
     path('devices/<uuid:device_id>/command/', views.device_command, name='device-command'),
-    path('devices/<uuid:device_id>/ble-ticket/', views.device_ble_ticket, name='device-ble-ticket'),
+    path('devices/<uuid:device_id>/ble-ticket/', views.device_ble_ticket, name='device-ble-ticket'),   # app: vé Bluetooth
+    path('devices/<uuid:device_id>/nfc-ticket/', views.device_nfc_ticket, name='device-nfc-ticket'),   # app: vé NFC giả lập thẻ
 
     # ====================== SYNC: cache mã hoá về máy sau login ======================
     path('api/sync/', views.sync_bootstrap, name='sync-bootstrap'),
@@ -35,18 +36,11 @@ urlpatterns = [
     path('access/face-profiles/<uuid:profile_id>/delete/', views.face_profile_delete, name='face-profile-delete'),
     path('access/history/', views.access_events_history, name='access-history'),
 
-    path('share/codes/', views.share_codes, name='share-codes'),
-    path('share/request/', views.share_request, name='share-request'),
+    # Chia sẻ khoá: chủ nhập email/username + chọn quyền -> có hiệu lực ngay, người nhận được báo qua email + app.
+    path('shares/', views.shares_manage, name='shares'),
 
-    path('support/requests/', views.support_requests, name='support-requests'),
-    path('support/requests/<uuid:request_id>/', views.support_request_detail, name='support-request-detail'),
-
-    path('permissions/manage/', views.permissions_manage, name='permissions-manage'),
-    path('automation-rules/', views.automation_rules_manage, name='automation-rules'),
-
-    path('settings/system/', views.settings_system, name='settings-system'),
-    path('settings/announcements/', views.announcements_manage, name='announcements-manage'),
     path('notifications/', views.notifications_list, name='notifications'),
+    path('api/events/', views.events_poll, name='events'),          # popup trong trang (poll)
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
 
