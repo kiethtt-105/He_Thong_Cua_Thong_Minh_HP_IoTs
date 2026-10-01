@@ -38,7 +38,7 @@ from django.utils.html import linebreaks, strip_tags, urlize
 from .models import (
     AccessCard, AccessEvent, AuditLog, AutomationRule, AutomationRuleLog, Device, DeviceAccess,
     DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, Notification, OneTimeCode,
-    SystemSettings, User,
+    SystemSettings, User, hash_card_uid,
 )
 
 logger = logging.getLogger('smartlock.services')
@@ -76,10 +76,15 @@ def valid_ip(value):
 
 def client_ip(request) -> str:
     """Chỉ tin X-Forwarded-For khi settings.TRUST_PROXY_HEADERS = True (đứng sau proxy).
+    Phần tử ĐẦU của XFF do client tự đặt được -> lấy IP do proxy TIN CẬY ghi, tức phần tử thứ
+    TRUST_PROXY_COUNT tính từ cuối (mặc định 1 = proxy ngay phía trước).
     Luôn trả về IP hợp lệ để không làm hỏng ghi log / GenericIPAddressField."""
     ip = None
     if getattr(settings, 'TRUST_PROXY_HEADERS', False):
-        ip = valid_ip((request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',')[0])
+        parts = [p.strip() for p in (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',') if p.strip()]
+        n = max(1, int(getattr(settings, 'TRUST_PROXY_COUNT', 1) or 1))
+        if parts:
+            ip = valid_ip(parts[-n] if len(parts) >= n else parts[0])
     return ip or valid_ip(request.META.get('REMOTE_ADDR')) or '0.0.0.0'
 
 
@@ -378,7 +383,10 @@ def dispatch_command(device, command, *, source, issued_by=None, ttl=30, extra=N
 # (kịch bản demo: quẹt thẻ lạ 3 lần -> khoá tạm 60 giây, còi kêu, báo cho chủ nhà).
 BURST_FAIL_THRESHOLD = 3
 BURST_FAIL_WINDOW_SECONDS = 60
-BURST_LOCKOUT_SECONDS = 60
+BURST_LOCKOUT_SECONDS = 60                 # mức khoá đầu tiên (giữ tên cũ cho tương thích)
+BURST_LOCKOUT_STAGES = (60, 300, 1800)     # luỹ tiến: lần 1 -> 1 phút, lần 2 -> 5 phút, từ lần 3 -> 30 phút
+BURST_STAGE_WINDOW_SECONDS = 24 * 3600     # số lần khoá trong 24h quyết định mức khoá
+BURST_NOTIFY_COOLDOWN_SECONDS = 600        # tối đa 1 thông báo ACCESS_BURST / 10 phút / thiết bị
 LOCKOUT_ACTION = 'ACCESS_BURST_LOCKOUT'
 # Không tính vào bộ đếm: bị chặn do đang khoá (nếu tính sẽ tự gia hạn khoá mãi) và lỗi MQTT.
 NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED')
@@ -397,8 +405,15 @@ def count_recent_failures(device, window_seconds) -> int:
 
 
 def in_lockout(device) -> bool:
-    since = timezone.now() - timedelta(seconds=BURST_LOCKOUT_SECONDS)
-    return AuditLog.objects.filter(device=device, action=LOCKOUT_ACTION, created_at__gte=since).exists()
+    """Đang bị khoá? Chỉ lần khoá GẦN NHẤT quyết định; thời lượng nằm trong metadata của log."""
+    now = timezone.now()
+    since = now - timedelta(seconds=max(BURST_LOCKOUT_STAGES))
+    last = (AuditLog.objects.filter(device=device, action=LOCKOUT_ACTION, created_at__gte=since)
+            .order_by('-created_at').first())
+    if not last:
+        return False
+    secs = (last.metadata or {}).get('lockout_seconds', BURST_LOCKOUT_SECONDS)
+    return last.created_at + timedelta(seconds=secs) > now
 
 
 def start_lockout(device, metadata=None):
@@ -407,23 +422,32 @@ def start_lockout(device, metadata=None):
 
 
 def _handle_burst_if_needed(device):
-    """Sau mỗi lần thất bại: vượt ngưỡng trong cửa sổ thời gian thì khoá tạm + báo còi
-    (lệnh MQTT riêng cho firmware) + thông báo cho chủ nhà."""
+    """Sau mỗi lần thất bại: vượt ngưỡng trong cửa sổ thời gian thì khoá tạm LUỸ TIẾN + báo còi
+    (lệnh MQTT riêng cho firmware) + thông báo cho chủ nhà (có giới hạn tần suất)."""
     if in_lockout(device):
         return
     if count_recent_failures(device, BURST_FAIL_WINDOW_SECONDS) < BURST_FAIL_THRESHOLD:
         return
-    start_lockout(device, {'threshold': BURST_FAIL_THRESHOLD, 'window_seconds': BURST_FAIL_WINDOW_SECONDS})
+    now = timezone.now()
+    stage = AuditLog.objects.filter(
+        device=device, action=LOCKOUT_ACTION,
+        created_at__gte=now - timedelta(seconds=BURST_STAGE_WINDOW_SECONDS)).count()
+    lockout_seconds = BURST_LOCKOUT_STAGES[min(stage, len(BURST_LOCKOUT_STAGES) - 1)]
+    start_lockout(device, {'threshold': BURST_FAIL_THRESHOLD, 'window_seconds': BURST_FAIL_WINDOW_SECONDS,
+                           'lockout_seconds': lockout_seconds, 'stage': stage + 1})
     try:
         publish_command(device.device_code, {'command': 'BUZZER_ALERT', 'reason': 'ACCESS_BURST'})
     except MqttPublishError:
         pass  # còi là phụ trợ; lỗi MQTT không được làm hỏng luồng khoá tạm
-    if device.owner_id:
+    if device.owner_id and not Notification.objects.filter(
+            device=device, type='ACCESS_BURST',
+            created_at__gte=now - timedelta(seconds=BURST_NOTIFY_COOLDOWN_SECONDS)).exists():
         Notification.objects.create(
             user=device.owner, device=device, type='ACCESS_BURST', severity='critical',
             title='Cảnh báo: nhiều lần mở cửa sai liên tiếp'[:150],
             message=(f'Thiết bị "{device.name}" bị {BURST_FAIL_THRESHOLD}+ lần mở cửa sai '
-                     f'trong {BURST_FAIL_WINDOW_SECONDS}s. Đã khoá tạm {BURST_LOCKOUT_SECONDS}s.'),
+                     f'trong {BURST_FAIL_WINDOW_SECONDS}s. Đã khoá tạm {lockout_seconds}s '
+                     f'(lần khoá thứ {stage + 1} trong 24 giờ).'),
         )
 
 
@@ -445,7 +469,9 @@ def verify_rfid_tap(device, raw_uid: str, ip_address=None) -> AccessEvent:
             return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
                               reason='DEVICE_LOCKED_OUT', ip_address=ip_address)
         card = AccessCard.objects.filter(
-            card_uid_hash=hash_token(normalize_uid(raw_uid)), is_active=True,
+            card_uid_hash__in=[hash_card_uid(normalize_uid(raw_uid)),
+                               hash_token(normalize_uid(raw_uid))],   # hash cũ (SHA-256 trần) còn dùng được
+            is_active=True,
             carddeviceaccess__device=device, carddeviceaccess__is_active=True,
         ).first()
         if not card:
@@ -526,6 +552,9 @@ def _euclidean_distance(a, b) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
+FACE_MAX_THRESHOLD = 0.6   # trần phía server: FaceProfile.threshold cao hơn cũng bị kẹp về mức này
+
+
 def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None) -> AccessEvent:
     """embedding do thiết bị biên/dịch vụ suy luận tính sẵn; server chỉ so khoảng cách Euclid
     với các FaceProfile đang active VÀ đã có xác nhận đồng ý của device này."""
@@ -539,11 +568,12 @@ def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None
         if d < best_distance:
             best_profile, best_distance = profile, d
 
-    if not best_profile or best_distance > best_profile.threshold:
+    limit = min(float(best_profile.threshold), FACE_MAX_THRESHOLD) if best_profile else 0.0
+    if not best_profile or best_distance > limit:
         return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False,
                           reason='NO_MATCH', snapshot_url=snapshot_url, ip_address=ip_address)
 
-    confidence = max(0.0, 1 - (best_distance / best_profile.threshold))
+    confidence = max(0.0, 1 - (best_distance / limit))
     cmd = dispatch_command(device, 'UNLOCK', source='face', extra={'face_profile_id': str(best_profile.id)})
     ok = cmd.status == 'sent'
     return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=ok,
@@ -572,7 +602,7 @@ def register_face(device, user, embedding: list, name: str = '', consent_confirm
 #   key  = HMAC_SHA256(key=sha256_hex(provisioning_secret) [chuỗi ASCII], msg="ble-ticket-v1")
 #   sig  = HMAC_SHA256(key, "<device_code>|<user_hex>|<exp>") -> hex, lấy 32 ký tự đầu
 #   vé   = "<user_hex>.<exp>.<sig>"          (user_hex = UUID user bỏ dấu '-', exp = unix giây)
-BLE_TICKET_TTL_SECONDS = 24 * 3600
+BLE_TICKET_TTL_SECONDS = int(getattr(settings, 'BLE_TICKET_TTL_SECONDS', 3600))   # mặc định 1 giờ (trước: 24h)
 
 
 def _ble_sig(device, user_hex: str, exp: int) -> str:

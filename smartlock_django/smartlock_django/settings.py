@@ -121,18 +121,11 @@ INSTALLED_APPS = [
     'rest_framework',
     'allauth',
     'allauth.account',
-    'django_extensions',  
     'manage_sys'
 ]
-# 
-REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework.authentication.SessionAuthentication'],  # session + CSRF
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
-    'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
-    'DEFAULT_PARSER_CLASSES': ['rest_framework.parsers.JSONParser'],
-    'DEFAULT_THROTTLE_CLASSES': ['rest_framework.throttling.UserRateThrottle'],
-    'DEFAULT_THROTTLE_RATES': {'user': '240/min', 'command': '30/min', 'redeem': '10/min'},
-}
+if DEBUG:
+    INSTALLED_APPS.append('django_extensions')   # chỉ dùng khi dev (shell_plus...)
+
 
 # ==================== MIDDLEWARE CONFIGURATION ====================
 MIDDLEWARE = [
@@ -143,7 +136,6 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'smartlock.admin_audit.AuditRequestMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
@@ -232,7 +224,6 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL")
 EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
 EMAIL_BATCH_SIZE = env_int("EMAIL_BATCH_SIZE", 100)
 
-#
 PASSWORD_RESET_TIMEOUT = env_int("PASSWORD_RESET_TIMEOUT_MINUTES", 5) * 60
 
 # ==================== INTERNATIONALIZATION CONFIGURATION ====================
@@ -289,9 +280,53 @@ LOGGING = {
     },
 }
 
-#
 MANAGE_SYS_URL_PREFIX = '/manage-sys/'
 MANAGE_SYS_SESSION_SECONDS = 2 * 60 * 60
 
 
-TRUST_PROXY_HEADERS=True
+TRUST_PROXY_HEADERS = True   # đứng sau proxy (Vercel/nginx): tin X-Forwarded-For
+# Số proxy TIN CẬY phía trước app: IP client = phần tử thứ N tính từ cuối của X-Forwarded-For
+# (phần tử đầu do client tự đặt được). Vercel = 1; nginx -> gunicorn = 1.
+TRUST_PROXY_COUNT = env_int("TRUST_PROXY_COUNT", 1)
+
+# Vé Bluetooth offline không thu hồi được -> giữ hạn ngắn (mặc định 1 giờ).
+BLE_TICKET_TTL_SECONDS = env_int("BLE_TICKET_TTL_SECONDS", 3600)
+
+# ==================== HTTPS HARDENING (production) ====================
+if not DEBUG and SECURE_COOKIES:
+    SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 60 * 60 * 24 * 30)   # 30 ngày
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
+    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)   # Vercel đã tự redirect; bật nếu tự host
+    SECURE_REDIRECT_EXEMPT = [r"api/mqtt/"]   # broker gọi webhook server-to-server, không bị 301
+    SECURE_REFERRER_POLICY = "same-origin"
+
+
+# ==================== REST FRAMEWORK (API cho app di động) ====================
+REST_FRAMEWORK = {
+    # Bearer (app) đứng trước, Session (web) đứng sau. Session vẫn bị kiểm tra CSRF; Bearer thì không cần CSRF.
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'smartlock.api.mobile_auth.MobileTokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
+    'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
+    'DEFAULT_THROTTLE_RATES': {
+        'command': '30/min',       # gửi lệnh khoá/mở
+        'redeem': '10/min',        # nhập mã chia sẻ
+        'auth_login': '10/min',    # theo IP
+        'auth_2fa': '10/min',
+        'auth_register': '5/min',
+        'auth_reset': '5/min',
+        'auth_refresh': '30/min',
+    },
+    'NUM_PROXIES': env_int('DRF_NUM_PROXIES', 1),
+    'EXCEPTION_HANDLER': 'smartlock.api.common.api_exception_handler',
+    'DEFAULT_PAGINATION_CLASS': 'smartlock.api.common.StandardPagination',  
+}
+
+# ==================== APP DI ĐỘNG ====================
+MOBILE_ACCESS_TOKEN_SECONDS = 15 * 60
+MOBILE_REFRESH_TOKEN_DAYS = 30
+MOBILE_MAX_SESSIONS_PER_USER = 10
+MOBILE_MIN_APP_VERSION = '1.0.0'       # app thấp hơn -> hiện màn hình bắt cập nhật
+MOBILE_LATEST_APP_VERSION = '1.0.0'

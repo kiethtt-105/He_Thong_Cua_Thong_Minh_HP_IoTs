@@ -8,12 +8,13 @@ mosquitto_pub để test end-to-end. Chạy lại nhiều lần được (update
 """
 import secrets
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from smartlock import services
-from smartlock.models import AccessCard, CardDeviceAccess, Device, NfcReader
+from smartlock.models import AccessCard, CardDeviceAccess, Device, NfcReader, hash_card_uid
 
 User = get_user_model()
 PROVISIONING_SECRET = 'test-secret-please-change'
@@ -26,6 +27,9 @@ class Command(BaseCommand):
         parser.add_argument('--owner', type=str, default='', help='Email của user làm owner.')
 
     def handle(self, *args, **options):
+        # Secret cố định + thiết bị giả: tuyệt đối không chạy trên production.
+        if not settings.DEBUG:
+            raise CommandError('seed_test_devices chỉ chạy khi DEBUG=True (dữ liệu test dùng secret cố định).')
         owner = self._resolve_owner(options['owner'])
         self.stdout.write(self.style.SUCCESS(f'Dùng owner: {owner.email}'))
 
@@ -50,7 +54,7 @@ class Command(BaseCommand):
 
         raw_uid = secrets.token_hex(4).upper()
         card, _ = AccessCard.objects.update_or_create(
-            card_uid_hash=services.hash_token(raw_uid),
+            card_uid_hash=hash_card_uid(raw_uid),
             defaults={'user': owner, 'name': 'Thẻ test tự động', 'is_active': True},
         )
         CardDeviceAccess.objects.get_or_create(access_card=card, device=devices[0])

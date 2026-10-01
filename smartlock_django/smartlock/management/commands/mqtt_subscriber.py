@@ -7,6 +7,7 @@ MQTT subscriber thường trực (thay cho mqtt_bridge + mark_offline_devices c�
 
 Đây là tiến trình chạy liên tục: KHÔNG chạy được trên Vercel (serverless), hãy chạy trên laptop/VPS.
 """
+import hmac
 import json
 import logging
 import signal
@@ -151,20 +152,21 @@ class Command(BaseCommand):
                            event_type, device.device_code)
             return
         if event_type == 'rfid_tap':
-            uid = str(payload.get('uid') or '')
+            uid = str(payload.get('uid') or '')[:64]
             if uid:
                 services.verify_rfid_tap(device, uid)
         elif event_type == 'pin_entry':
-            pin = str(payload.get('pin') or '')
+            pin = str(payload.get('pin') or '')[:16]
             if pin:
                 services.verify_door_pin(device, pin)
         elif event_type == 'face_result':
             embedding = payload.get('embedding')
-            if isinstance(embedding, list) and embedding:
+            if (isinstance(embedding, list) and 0 < len(embedding) <= 512
+                    and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in embedding)):
                 services.verify_face(device, embedding, snapshot_url=payload.get('snapshot_url', ''))
         elif event_type == 'ble_unlock':
             services.record_ble_unlock(
-                device, ticket=str(payload.get('ticket') or ''),
+                device, ticket=str(payload.get('ticket') or '')[:200],
                 ok=payload.get('result', 'ok') == 'ok', reason=payload.get('reason'), at=payload.get('at'))
         else:
             logger.warning('mqtt_subscriber: event type không rõ từ %s: %r', device.device_code, event_type)
@@ -179,8 +181,10 @@ class Command(BaseCommand):
             logger.info('mqtt_subscriber: ack cho lệnh không còn chờ, command_id=%s', command_id)
             return
         token = payload.get('token')
-        if token and token != cmd.command_token_hash:     # chống ack giả mạo / nhầm lệnh
-            logger.warning('mqtt_subscriber: token ack không khớp, command_id=%s', command_id)
+        # BẮT BUỘC có token và so sánh hằng-thời-gian (trước đây ack không kèm token vẫn được nhận).
+        if (not isinstance(token, str) or not token
+                or not hmac.compare_digest(token, cmd.command_token_hash)):
+            logger.warning('mqtt_subscriber: token ack thiếu/không khớp, command_id=%s', command_id)
             return
         cmd.status = 'failed' if payload.get('result', 'ok') == 'failed' else 'acknowledged'
         cmd.acknowledged_at = timezone.now()

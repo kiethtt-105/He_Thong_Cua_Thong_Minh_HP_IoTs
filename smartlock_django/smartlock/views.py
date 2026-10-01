@@ -55,7 +55,7 @@ from webauthn.helpers.structs import (
 from .services import (
     accessible_devices as _accessible_devices, admins as _admins, audit as _audit,
     client_ip as _client_ip, find_user as _find_user, has_permission as _has_permission,
-    hash_token as _hash_token, ip_blacklisted as _ip_blacklisted, is_admin as _is_admin,
+    hash_card_uid as _hash_card_uid, hash_token as _hash_token, ip_blacklisted as _ip_blacklisted, is_admin as _is_admin,
     notify as _notify, parse_dt as _parse_dt, parse_uuid as _parse_uuid, pick_device as _pick_device,
     register_failure as _register_failure, render_email, reset_lockout as _reset_lockout,
     send_mail as _send_mail, send_verification as _send_verification,
@@ -761,11 +761,15 @@ def device_ble_ticket(request, device_id):
 
 def _mqtt_webhook_authorized(request) -> bool:
     """Broker phải gửi header X-Webhook-Secret khớp settings.MQTT_WEBHOOK_SECRET.
-    Nếu chưa cấu hình secret thì bỏ qua kiểm tra (chỉ nên như vậy khi dev/test)."""
+    Chưa cấu hình secret: chỉ bỏ qua kiểm tra khi DEBUG, còn lại từ chối (fail-closed)."""
     secret = getattr(dj_settings, 'MQTT_WEBHOOK_SECRET', None)
     if not secret:
-        logger.warning('MQTT_WEBHOOK_SECRET chưa được đặt: webhook MQTT đang không được bảo vệ.')
-        return True
+        # Fail-closed: chỉ cho qua khi DEBUG (dev/test). Production thiếu secret -> từ chối.
+        if dj_settings.DEBUG:
+            logger.warning('MQTT_WEBHOOK_SECRET chưa được đặt: webhook MQTT không được bảo vệ (DEBUG).')
+            return True
+        logger.error('MQTT_WEBHOOK_SECRET chưa được đặt: từ chối mọi webhook MQTT.')
+        return False
     return hmac.compare_digest(str(request.META.get('HTTP_X_WEBHOOK_SECRET', '')), str(secret))
 
 
@@ -935,8 +939,10 @@ def nfc_reader(request):
                 return back()
             try:
                 with transaction.atomic():
+                    if AccessCard.objects.filter(card_uid_hash=_hash_token(uid)).exists():
+                        raise IntegrityError('card uid already registered (legacy hash)')
                     card = AccessCard.objects.create(
-                        card_uid_hash=_hash_token(uid), user=request.user, name=name, is_active=True)
+                        card_uid_hash=_hash_card_uid(uid), user=request.user, name=name, is_active=True)
                     CardDeviceAccess.objects.create(access_card=card, device=device)
             except IntegrityError:
                 _audit(request, 'CARD_REGISTER_FAILED', device=device, success=False,
@@ -1073,14 +1079,18 @@ def share_request(request):
         fails = (AuditLog.objects
                  .filter(action='SHARE_CODE_REDEEM_FAILED', created_at__gte=now - timedelta(minutes=15))
                  .filter(Q(actor_user=user) | Q(ip_address=ip)).count())
-        if fails >= 5:
+        fails_day = (AuditLog.objects
+                     .filter(action='SHARE_CODE_REDEEM_FAILED', created_at__gte=now - timedelta(hours=24))
+                     .filter(Q(actor_user=user) | Q(ip_address=ip)).count())
+        if fails >= 5 or fails_day >= 20:
             _audit(request, 'SHARE_CODE_RATE_LIMITED', success=False, severity='critical')
             messages.error(request, 'Bạn nhập sai quá nhiều lần. Vui lòng thử lại sau 15 phút.')
             return redirect('smartlock:share-request')
 
         match = None
         if len(plain) == 6:
-            match = ShareAccessCode.find_active_by_code(plain)
+            match = ShareAccessCode.find_active_by_code(
+                plain, device_code=(request.POST.get('device_code') or '').strip()[:50] or None)
 
         if not match:
             _audit(request, 'SHARE_CODE_REDEEM_FAILED', success=False, severity='warning')
@@ -1775,17 +1785,22 @@ def public_system_logs_api(request):
     """JSON snapshot mới nhất của TOÀN BỘ log trong hệ thống - client gọi lại mỗi 2s.
     Chỉ đọc (GET), không có tham số nào làm thay đổi dữ liệu."""
     _require_demo_logs()
-    devices = Device.objects.select_related('owner').order_by('name')
+    _ls = DeviceStatusLog.objects.filter(device=OuterRef('pk')).order_by('-recorded_at')
+    devices = (Device.objects.select_related('owner')
+               .annotate(l_lock=Subquery(_ls.values('lock_state')[:1]),
+                         l_tamper=Subquery(_ls.values('tamper_detected')[:1]),
+                         l_temp=Subquery(_ls.values('temperature')[:1]),
+                         l_sig=Subquery(_ls.values('signal_strength')[:1]))
+               .order_by('name'))
     device_rows = []
     for d in devices:
-        latest = DeviceStatusLog.objects.filter(device=d).order_by('-recorded_at').first()
         device_rows.append({
             'id': str(d.id), 'name': d.name, 'code': d.device_code, 'status': d.status,
             'battery_level': d.battery_level,
-            'lock_state': latest.lock_state if latest else None,
-            'tamper_detected': bool(latest and latest.tamper_detected),
-            'temperature': str(latest.temperature) if latest and latest.temperature is not None else None,
-            'signal_strength': latest.signal_strength if latest else None,
+            'lock_state': d.l_lock,
+            'tamper_detected': bool(d.l_tamper),
+            'temperature': str(d.l_temp) if d.l_temp is not None else None,
+            'signal_strength': d.l_sig,
             'last_seen_at': d.last_seen_at.isoformat() if d.last_seen_at else None,
             'owner': d.owner.username if d.owner else None,
             'bluetooth_enabled': d.bluetooth_enabled, 'wifi_enabled': d.wifi_enabled,

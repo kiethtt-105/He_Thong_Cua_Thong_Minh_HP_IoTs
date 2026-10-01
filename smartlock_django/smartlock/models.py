@@ -24,17 +24,33 @@ if not FERNET_KEY:
 
 fernet = Fernet(FERNET_KEY.encode())
 
-# Pepper riêng cho hash mã chia sẻ 6 số. Nếu chưa khai báo, tạm dùng FERNET_KEY để không
-# crash, nhưng nên set SHARE_CODE_PEPPER riêng trong .env để tách biệt 2 loại secret.
+# Pepper riêng (bí mật server) cho hash PIN cửa / mã chia sẻ / UID thẻ. BẮT BUỘC khai báo
+# SHARE_CODE_PEPPER trong .env và phải KHÁC FERNET_KEY (tách khoá: lộ 1 khoá không kéo theo khoá kia).
+# Chỉ khi DEBUG=True mới cho phép pepper tạm (dẫn xuất từ FERNET_KEY) để dev không bị kẹt.
 SHARE_CODE_PEPPER = os.environ.get('SHARE_CODE_PEPPER')
 if not SHARE_CODE_PEPPER:
-    import warnings
-    warnings.warn(
-        "SHARE_CODE_PEPPER chưa được khai báo trong .env, đang tạm dùng chung FERNET_KEY làm pepper. "
-        "Nên set SHARE_CODE_PEPPER riêng cho production.",
-        RuntimeWarning,
-    )
-    SHARE_CODE_PEPPER = FERNET_KEY
+    if os.environ.get('DEBUG', '').strip().lower() in ('1', 'true', 'yes', 'on'):
+        import warnings
+        warnings.warn("SHARE_CODE_PEPPER chưa khai báo: đang dùng pepper tạm (chỉ chấp nhận khi DEBUG).",
+                      RuntimeWarning)
+        SHARE_CODE_PEPPER = 'dev-only:' + FERNET_KEY
+    else:
+        raise RuntimeError(
+            "Thiếu biến môi trường SHARE_CODE_PEPPER (chuỗi bí mật riêng, khác FERNET_KEY). "
+            "Tạo bằng: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+        )
+elif SHARE_CODE_PEPPER == FERNET_KEY:
+    raise RuntimeError("SHARE_CODE_PEPPER không được trùng FERNET_KEY.")
+
+
+def _pepper_hmac(namespace: str, value: str) -> str:
+    """HMAC-SHA256 keyed bằng pepper (thay cho SHA-256 nối chuỗi)."""
+    return hmac.new(SHARE_CODE_PEPPER.encode(), f'{namespace}:{value}'.encode(), hashlib.sha256).hexdigest()
+
+
+def hash_card_uid(uid: str) -> str:
+    """Hash UID thẻ RFID (UID chỉ ~4 byte nên SHA-256 trần đảo ngược được ngay nếu lộ DB)."""
+    return _pepper_hmac('carduid', uid)
 
 
 def default_lockout_stage_minutes():
@@ -307,7 +323,7 @@ def _hash_share_code(plain_6_digit_code: str) -> str:
     cách cũ vừa lộ logic dò vét cạn, vừa tăng tải CPU khi số mã chia sẻ tăng lên.
     Một chiều nên không cần lo lộ mã gốc nếu lộ DB, giống cách xử lý mật khẩu/OTP.
     """
-    return hashlib.sha256(f'{SHARE_CODE_PEPPER}:{plain_6_digit_code}'.encode()).hexdigest()
+    return _pepper_hmac('sharecode', plain_6_digit_code)
 
 
 class ShareAccessCode(models.Model):
@@ -339,12 +355,12 @@ class ShareAccessCode(models.Model):
         ).exists()
 
     @classmethod
-    def find_active_by_code(cls, plain_6_digit_code: str):
+    def find_active_by_code(cls, plain_6_digit_code: str, device_code=None):
         """Tra cứu O(1) qua SQL Index trên code_hash - thay cho vòng lặp giải mã Fernet cũ."""
-        return (cls.objects
-                .filter(code_hash=_hash_share_code(plain_6_digit_code), expires_at__gt=timezone.now())
-                .select_related('device')
-                .first())
+        qs = cls.objects.filter(code_hash=_hash_share_code(plain_6_digit_code), expires_at__gt=timezone.now())
+        if device_code:   # người dùng nhập kèm mã thiết bị -> thu hẹp không gian đoán mã
+            qs = qs.filter(device__device_code=device_code)
+        return qs.select_related('device').first()
 
 
 # ==================== NHÓM D: NFC READER & THẺ TỪ ====================
@@ -704,7 +720,7 @@ def _hash_door_pin(device_id, plain_pin: str) -> str:
     server) để một PIN giống nhau ở 2 thiết bị khác nhau vẫn ra hash khác nhau, và kẻ
     tấn công không dò được bằng rainbow table dựng sẵn cho 1.000.000 mã 6 số.
     """
-    return hashlib.sha256(f'{SHARE_CODE_PEPPER}:doorpin:{device_id}:{plain_pin}'.encode()).hexdigest()
+    return _pepper_hmac(f'doorpin:{device_id}', plain_pin)
 
 
 class DoorPinCode(models.Model):
