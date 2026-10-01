@@ -1,53 +1,67 @@
 #include <Arduino.h>
 /*
- * SmartLock ESP32 firmware - chạy được trên Wokwi VÀ trên ESP32 thật.
+ * SmartLock ESP32 firmware v1.2 - chạy được trên Wokwi (VS Code) VÀ trên ESP32 thật.
  *
  * Giao thức MQTT (khớp mqtt_subscriber.py):
- *   Gửi:  smartlock/<DEVICE_CODE>/status  {battery_level, signal_strength, lock_state, tamper_detected}
- *         smartlock/<DEVICE_CODE>/event   {type: rfid_tap|pin_entry|ble_unlock, ...}
- *         smartlock/<DEVICE_CODE>/ack     {command_id, token, result}
- *   Nhận: smartlock/<DEVICE_CODE>/<command>  {action: unlock|lock|deny|status|reboot,
- *                                             command_id, token, duration(giây, tuỳ chọn)}
+ *   Gửi:  smartlock/<DEVICE_CODE>/status  {battery_level, signal_strength, lock_state, tamper_detected, ...}
+ *         smartlock/<DEVICE_CODE>/event   {type: rfid_tap|pin_entry|face_result|ble_unlock, ...}
+ *         smartlock/<DEVICE_CODE>/ack     {command_id, token, result: ok|failed}
+ *   Nhận: smartlock/<DEVICE_CODE>/cmd  {command: UNLOCK|LOCK|REBOOT|BUZZER_ALERT|RESET,
+ *                                       command_id, token, source, reason}
+ *   (ACL của broker: thiết bị chỉ được subscribe đúng topic .../cmd, và chỉ ghi status/event/ack)
  *
- * Thiết bị KHÔNG tự mở cửa khi quẹt thẻ/nhập PIN: nó gửi event lên server,
- * server xác thực rồi gửi lệnh "unlock" xuống.
+ * DEVICE_SECRET = provisioning secret gốc (hiện 1 lần khi thêm thiết bị trên web). Dùng làm
+ * password MQTT và để tự kiểm tra vé Bluetooth OFFLINE (key = HMAC(sha256hex(secret), "ble-ticket-v1")).
  *
- * Thư viện: PubSubClient, ArduinoJson (v7), ESP32Servo, Keypad
- * (+ MFRC522 nếu USE_MFRC522=1).
+ * Nguyên tắc: thiết bị KHÔNG tự quyết mở cửa. Quẹt thẻ / PIN / khuôn mặt / Bluetooth
+ * chỉ gửi event lên server; server xác thực rồi gửi lệnh "unlock" xuống.
+ *
+ * lock_state: locked | unlocked | jammed  (jammed = chốt bị kẹt, đọc từ công tắc chân 35)
  */
 
 // ======================= CẤU HÌNH (chỉ sửa phần này) =======================
 #define DEVICE_CODE    "DEV-SIM-001"
-#define DEVICE_SECRET  "test-secret-please-change"
+#define DEVICE_SECRET  "test-secret-please-change"   // ESP32 thật: provisioning secret (32 ký tự hex) của thiết bị
 
 #define WIFI_SSID      "Wokwi-GUEST"   // ESP32 thật: tên wifi của bạn
 #define WIFI_PASS      ""              // ESP32 thật: mật khẩu wifi
-#define WIFI_CHANNEL   6               // Wokwi: 6 (nhanh hơn). ESP32 thật: đổi thành 0
+#define WIFI_CHANNEL   6               // Wokwi: 6. ESP32 thật: đổi thành 0
 
-#define MQTT_HOST      "broker.hivemq.com"  // broker công khai chỉ để thử; dùng broker riêng có user/pass
+#define MQTT_HOST      "broker.hivemq.com"  // chỉ để thử; dùng broker riêng có user/password
 #define MQTT_PORT      1883                 // TLS thường là 8883
 #define USE_TLS        0                    // 1 = MQTT qua TLS (setInsecure, chỉ để test)
 
-#define USE_MFRC522    0   // 1 = đầu đọc RFID RC522 thật (Wokwi không có RC522 -> dùng lệnh Serial "rfid ...")
-#define USE_BLE        0   // 1 = nhận vé Bluetooth qua BLE (điện thoại ghi vé vào characteristic)
-#define SIMULATE_BATTERY 1 // 1 = đọc pin từ biến trở (Wokwi). 0 = đọc cầu phân áp pin thật ở chân 34
+#define USE_MFRC522    0   // 1 = đầu đọc RFID RC522 thật (Wokwi không có -> dùng Serial "rfid ...")
+#define USE_BLE        0   // 1 = nhận vé Bluetooth qua BLE
+#define SIMULATE_BATTERY 1 // 1 = pin từ biến trở (Wokwi). 0 = cầu phân áp pin thật ở chân 34
 
+#define FW_VERSION     "1.2"
 // ======================= CHÂN =======================
 #define PIN_SERVO      13
 #define PIN_LED_G      4
 #define PIN_LED_R      21
 #define PIN_BUZZER     2
-#define PIN_TAMPER     15   // công tắc chống phá: nối xuống GND = bị tác động
+#define PIN_TAMPER     15   // công tắc chống phá: nối GND = bị tác động
 #define PIN_BATTERY    34
+#define PIN_JAM        35   // HIGH = chốt bị kẹt/vướng (chân chỉ-đọc, ESP32 thật cần điện trở kéo xuống)
 #define PIN_RFID_SS    5    // RC522: SCK=18, MISO=19, MOSI=23, RST=22
 #define PIN_RFID_RST   22
 
 #define ANGLE_LOCKED        0
 #define ANGLE_UNLOCKED      90
+#define SERVO_MOVE_MS       500
 #define DEFAULT_UNLOCK_MS   5000
+#define MAX_UNLOCK_SEC      300
 #define STATUS_INTERVAL_MS  30000
 #define PIN_TIMEOUT_MS      15000
 #define PIN_MAX_LEN         16
+#define PIN_MIN_INTERVAL_MS 1000
+#define LOW_BATTERY_PCT     15
+#define FACE_MAX            512
+#define MQTT_BUFFER         8192
+#define LOCKOUT_LOCAL_MS    60000   // khoá bàn phím/thẻ cục bộ sau BUZZER_ALERT(ACCESS_BURST); server vẫn quyết định mức khoá thật
+#define BLE_QUEUE           10      // số sự kiện BLE giữ lại khi mất mạng (RAM)
+#define BLE_MIN_INTERVAL_MS 1000
 // ===========================================================================
 
 #include <WiFi.h>
@@ -59,6 +73,7 @@
 #include <ESP32Servo.h>
 #include <Keypad.h>
 #include <time.h>
+#include "mbedtls/md.h"
 
 #if USE_MFRC522
 #include <SPI.h>
@@ -104,12 +119,13 @@ WiFiClient netClient;
 PubSubClient mqtt(netClient);
 Servo lockServo;
 
-char T_STATUS[64], T_EVENT[64], T_ACK[64], T_SUB[64];
+char T_STATUS[64], T_EVENT[64], T_ACK[64], T_CMD[64];
 const char* lockState = "locked";
 bool tamper = false;
 uint32_t relockAt = 0;
 uint32_t lastStatusAt = 0;
 uint32_t lastKeyAt = 0;
+uint32_t lastPinAt = 0;
 String pinBuf;
 bool ntpStarted = false;
 
@@ -119,6 +135,20 @@ void beep(uint16_t ms) {
     digitalWrite(PIN_BUZZER, HIGH); delayMicroseconds(250);
     digitalWrite(PIN_BUZZER, LOW);  delayMicroseconds(250);
   }
+}
+
+void showLockLeds() {
+  bool open = strcmp(lockState, "unlocked") == 0;
+  digitalWrite(PIN_LED_G, open ? HIGH : LOW);
+  digitalWrite(PIN_LED_R, open ? LOW : HIGH);
+}
+
+void errorBeep() {
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(PIN_LED_R, LOW); beep(60);
+    digitalWrite(PIN_LED_R, HIGH); delay(60);
+  }
+  showLockLeds();
 }
 
 uint32_t epochNow() {
@@ -136,15 +166,19 @@ int readBattery() {
 #endif
 }
 
-bool publishJson(const char* topic, JsonDocument& d) {
-  if (!mqtt.connected()) {
-    Serial.println("[mqtt] chưa kết nối, bỏ qua bản tin");
-    return false;
-  }
-  char buf[768];
-  size_t n = serializeJson(d, buf, sizeof(buf));
-  Serial.printf("[tx] %s %s\n", topic, buf);
-  return mqtt.publish(topic, (const uint8_t*)buf, n, false);
+// logBody=false cho event/ack: không in PIN, UID thẻ, vé, token ra Serial.
+bool publishJson(const char* topic, JsonDocument& d, bool logBody) {
+  if (!mqtt.connected()) return false;
+  size_t n = measureJson(d);
+  char* buf = (char*)malloc(n + 1);
+  if (!buf) { Serial.println("[mqtt] hết bộ nhớ"); return false; }
+  serializeJson(d, buf, n + 1);
+  if (logBody) Serial.printf("[tx] %s %s\n", topic, buf);
+  else         Serial.printf("[tx] %s (%u byte)\n", topic, (unsigned)n);
+  bool ok = mqtt.publish(topic, (const uint8_t*)buf, n, false);
+  free(buf);
+  if (!ok) Serial.println("[mqtt] publish thất bại (bản tin quá lớn?)");
+  return ok;
 }
 
 void publishStatus() {
@@ -153,90 +187,291 @@ void publishStatus() {
   d["signal_strength"] = WiFi.RSSI();
   d["lock_state"] = lockState;
   d["tamper_detected"] = tamper;
-  publishJson(T_STATUS, d);
+  d["fw"] = FW_VERSION;
+  d["mac"] = WiFi.macAddress();
+  d["uptime_s"] = millis() / 1000;
+  publishJson(T_STATUS, d, true);
   lastStatusAt = millis();
 }
 
+bool blockActive = false;
+uint32_t blockEnd = 0;
+
+bool inputBlocked() {
+  if (blockActive && (int32_t)(millis() - blockEnd) >= 0) blockActive = false;
+  return blockActive;
+}
+
+// Server quyết định mở cửa, nên khi mất mạng thì từ chối ngay và báo lỗi (không xếp hàng, không phát lại).
+bool linkOk() {
+  if (mqtt.connected()) return true;
+  Serial.println("[mqtt] đang offline -> không gửi được, báo lỗi");
+  errorBeep();
+  return false;
+}
+
 void sendEvent(const char* type, const char* key, const String& val) {
+  if (inputBlocked()) { Serial.println("[lockout] đang khoá tạm cục bộ"); errorBeep(); return; }
+  if (!linkOk()) return;
   JsonDocument d;
   d["type"] = type;
   d[key] = val;
-  if (!strcmp(type, "ble_unlock")) {
-    uint32_t at = epochNow();
-    if (at) d["at"] = at;
-  }
-  publishJson(T_EVENT, d);
+  publishJson(T_EVENT, d, false);
+}
+
+void sendRfid(String uid) {
+  static String lastUid;
+  static uint32_t lastAt = 0;
+  uid.trim();
+  uid.replace(":", "");
+  uid.replace(" ", "");
+  uid.toUpperCase();
+  if (!uid.length()) return;
+  if (uid == lastUid && millis() - lastAt < 1500) return;   // chống quẹt lặp
+  lastUid = uid; lastAt = millis();
+  beep(40);
+  sendEvent("rfid_tap", "uid", uid);
+}
+
+// Gọi hàm này từ pipeline nhận diện khuôn mặt (ESP32-CAM). Embedding 1..512 số thực.
+void sendFace(const float* emb, int n, const char* snapshotUrl = "") {
+  if (n <= 0 || n > FACE_MAX) { Serial.println("[face] embedding không hợp lệ"); return; }
+  if (inputBlocked()) { Serial.println("[lockout] đang khoá tạm cục bộ"); errorBeep(); return; }
+  if (!linkOk()) return;
+  JsonDocument d;
+  d["type"] = "face_result";
+  JsonArray a = d["embedding"].to<JsonArray>();
+  for (int i = 0; i < n; i++) a.add(emb[i]);
+  if (snapshotUrl && *snapshotUrl) d["snapshot_url"] = snapshotUrl;
+  beep(40);
+  publishJson(T_EVENT, d, false);
 }
 
 // ---------------------------------------------------------------- khoá
-void setLock(bool unlock, uint32_t holdMs = 0) {
-  if (unlock) {
-    lockServo.write(ANGLE_UNLOCKED);
-    lockState = "unlocked";
-    relockAt = millis() + (holdMs ? holdMs : DEFAULT_UNLOCK_MS);
-    if (relockAt == 0) relockAt = 1;
-    digitalWrite(PIN_LED_G, HIGH);
-    digitalWrite(PIN_LED_R, LOW);
-    beep(200);
-  } else {
-    lockServo.write(ANGLE_LOCKED);
-    lockState = "locked";
-    relockAt = 0;
-    digitalWrite(PIN_LED_G, LOW);
-    digitalWrite(PIN_LED_R, HIGH);
-    beep(60);
+bool moveLock(bool unlock) {
+  lockServo.write(unlock ? ANGLE_UNLOCKED : ANGLE_LOCKED);
+  delay(SERVO_MOVE_MS);
+  if (digitalRead(PIN_JAM) == HIGH) {            // chốt vướng: trả servo về vị trí cũ
+    lockServo.write(unlock ? ANGLE_LOCKED : ANGLE_UNLOCKED);
+    return false;
   }
-  Serial.printf("[lock] %s\n", lockState);
-  publishStatus();
+  return true;
 }
 
-// ---------------------------------------------------------------- lệnh từ server
+bool setLock(bool unlock, uint32_t holdMs = 0) {
+  if (!moveLock(unlock)) {
+    lockState = "jammed";
+    relockAt = 0;
+    Serial.println("[lock] KẸT chốt!");
+    errorBeep();
+    publishStatus();
+    return false;
+  }
+  lockState = unlock ? "unlocked" : "locked";
+  relockAt = unlock ? millis() + (holdMs ? holdMs : DEFAULT_UNLOCK_MS) : 0;
+  if (unlock && relockAt == 0) relockAt = 1;
+  showLockLeds();
+  beep(unlock ? 200 : 60);
+  Serial.printf("[lock] %s\n", lockState);
+  publishStatus();
+  return true;
+}
+
+void jamTask() {   // hết kẹt thì tự khoá lại
+  static uint32_t last = 0;
+  if (strcmp(lockState, "jammed") != 0) return;
+  if (millis() - last < 1000) return;
+  last = millis();
+  if (digitalRead(PIN_JAM) == LOW) {
+    Serial.println("[lock] hết kẹt, thử khoá lại");
+    setLock(false);
+  }
+}
+
+// ---------------------------------------------------------------- Bluetooth: tự kiểm tra vé OFFLINE
+// Vé = "<user_hex>.<exp>.<sig>"; sig = HMAC_SHA256(key, "<device_code>|<user_hex>|<exp>") hex 32 ký tự đầu
+// key = HMAC_SHA256(key = sha256_hex(secret) [chuỗi ASCII], msg = "ble-ticket-v1")  (xem services.py)
+uint8_t bleKey[32];
+
+void hmacSha256(const uint8_t* key, size_t klen, const uint8_t* msg, size_t mlen, uint8_t out[32]) {
+  mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), key, klen, msg, mlen, out);
+}
+
+void initBleKey() {
+  uint8_t h[32];
+  char hex[65];
+  mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), (const uint8_t*)DEVICE_SECRET, strlen(DEVICE_SECRET), h);
+  for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", h[i]);
+  hmacSha256((const uint8_t*)hex, 64, (const uint8_t*)"ble-ticket-v1", 13, bleKey);
+}
+
+// 0 = hợp lệ, 1 = sai định dạng/chữ ký, 2 = hết hạn, 3 = chưa có giờ (chưa đồng bộ NTP)
+int verifyBleTicket(const String& ticket) {
+  int d1 = ticket.indexOf('.');
+  int d2 = d1 < 0 ? -1 : ticket.indexOf('.', d1 + 1);
+  if (d1 <= 0 || d2 <= d1 + 1 || ticket.indexOf('.', d2 + 1) >= 0) return 1;
+  String userHex = ticket.substring(0, d1);
+  String expS = ticket.substring(d1 + 1, d2);
+  String sig = ticket.substring(d2 + 1);
+  if (sig.length() != 32 || expS.length() < 1 || expS.length() > 10 || userHex.length() > 40) return 1;
+  for (size_t i = 0; i < expS.length(); i++) if (!isDigit(expS[i])) return 1;
+  uint32_t expT = strtoul(expS.c_str(), nullptr, 10);
+
+  String msg = String(DEVICE_CODE) + "|" + userHex + "|" + String((unsigned long)expT);
+  uint8_t mac[32];
+  hmacSha256(bleKey, 32, (const uint8_t*)msg.c_str(), msg.length(), mac);
+  char hex[65];
+  for (int i = 0; i < 32; i++) sprintf(hex + 2 * i, "%02x", mac[i]);
+  uint8_t diff = 0;                                   // so sánh hằng-thời-gian
+  for (int i = 0; i < 32; i++) diff |= (uint8_t)(sig[i] ^ hex[i]);
+  if (diff) return 1;
+
+  uint32_t now = epochNow();
+  if (!now) return 3;
+  return expT < now ? 2 : 0;
+}
+
+struct BleEv { String ticket; bool ok; const char* reason; uint32_t at; };
+BleEv bleQ[BLE_QUEUE];
+int bleHead = 0, bleCount = 0;
+
+bool publishBle(const BleEv& e) {
+  JsonDocument d;
+  d["type"] = "ble_unlock";
+  d["ticket"] = e.ticket;
+  d["result"] = e.ok ? "ok" : "failed";
+  if (e.reason) d["reason"] = e.reason;
+  if (e.at) d["at"] = e.at;                          // giờ xảy ra thật (server nhận sự kiện trễ tới 7 ngày)
+  return publishJson(T_EVENT, d, false);
+}
+
+void reportBle(const String& ticket, bool ok, const char* reason, uint32_t at) {
+  BleEv e = {ticket, ok, reason, at};
+  if (bleCount == 0 && publishBle(e)) return;
+  if (bleCount == BLE_QUEUE) { bleHead = (bleHead + 1) % BLE_QUEUE; bleCount--; }   // đầy: bỏ cái cũ nhất
+  bleQ[(bleHead + bleCount) % BLE_QUEUE] = e;
+  bleCount++;
+  Serial.printf("[ble] mất mạng, giữ lại %d sự kiện chờ gửi\n", bleCount);
+}
+
+void bleFlushTask() {
+  if (!bleCount || !mqtt.connected()) return;
+  if (publishBle(bleQ[bleHead])) { bleHead = (bleHead + 1) % BLE_QUEUE; bleCount--; }
+}
+
+// Điện thoại đưa vé qua BLE (hoặc Serial "ble <vé>"): thiết bị TỰ quyết định mở, rồi báo server ghi log.
+void handleBleTicket(String t) {
+  static uint32_t lastAt = 0;
+  t.trim();
+  if (!t.length() || t.length() > 200) return;
+  if (lastAt && millis() - lastAt < BLE_MIN_INTERVAL_MS) return;
+  lastAt = millis();
+  uint32_t at = epochNow();
+  int r = verifyBleTicket(t);
+  if (r == 0) {
+    Serial.println("[ble] vé hợp lệ -> mở cửa cục bộ");
+    bool ok = setLock(true);
+    reportBle(t, ok, ok ? nullptr : "BLE_JAMMED", at);
+  } else {
+    Serial.printf("[ble] vé bị từ chối (mã %d)\n", r);
+    errorBeep();
+    reportBle(t, false, r == 2 ? "BLE_TICKET_EXPIRED" : r == 3 ? "BLE_NO_TIME" : "BLE_INVALID_TICKET", at);
+  }
+}
+
+// ---------------------------------------------------------------- lệnh từ server (topic .../cmd)
+struct SeenCmd { String id; bool ok; };
+SeenCmd seenCmds[8];
+uint8_t seenN = 0;
+
+int findSeen(const String& id) {
+  for (int i = 0; i < 8; i++) if (seenCmds[i].id == id) return i;
+  return -1;
+}
+
+void sendAck(JsonDocument& cmd, bool ok, const char* reason = nullptr) {
+  JsonDocument a;
+  a["command_id"] = cmd["command_id"];
+  if (!cmd["token"].isNull()) a["token"] = cmd["token"];   // server so token này với command_token_hash
+  a["result"] = ok ? "ok" : "failed";
+  if (reason) a["reason"] = reason;
+  publishJson(T_ACK, a, false);
+}
+
 String getStr(JsonDocument& d, const char* k) {
   const char* s = d[k] | "";
   return String(s);
 }
 
+void alarm() {
+  for (int i = 0; i < 4; i++) {
+    digitalWrite(PIN_LED_R, LOW); beep(300);
+    digitalWrite(PIN_LED_R, HIGH); delay(150);
+  }
+  showLockLeds();
+}
+
 void handleCommand(JsonDocument& doc) {
-  String action = getStr(doc, "action");
-  if (!action.length()) action = getStr(doc, "command");
-  if (!action.length()) action = getStr(doc, "type");
-  action.toLowerCase();
+  bool hasId = !doc["command_id"].isNull();
+  String cid = hasId ? doc["command_id"].as<String>() : String("");
 
-  int dur = doc["duration"] | 0;
-  if (!dur) dur = doc["duration_seconds"] | 0;
-
-  bool ok = true;
-  bool reboot = false;
-  if (action.indexOf("unlock") >= 0 || action == "open") {
-    setLock(true, dur > 0 ? (uint32_t)dur * 1000UL : 0);
-  } else if (action.indexOf("lock") >= 0 || action == "close") {
-    setLock(false);
-  } else if (action.indexOf("deny") >= 0) {
-    for (int i = 0; i < 3; i++) { digitalWrite(PIN_LED_R, LOW); beep(80); digitalWrite(PIN_LED_R, HIGH); delay(60); }
-  } else if (action == "status" || action == "ping" || action == "status_request") {
-    publishStatus();
-  } else if (action == "reboot" || action == "restart") {
-    reboot = true;
-  } else {
-    Serial.printf("[cmd] không hỗ trợ action=\"%s\"\n", action.c_str());
-    ok = false;
+  // MQTT QoS1 có thể giao lặp: đã xử lý thì chỉ ack lại, không chạy lại lệnh.
+  if (hasId) {
+    int k = findSeen(cid);
+    if (k >= 0) {
+      Serial.printf("[cmd] lệnh %s đã xử lý, chỉ ack lại\n", cid.c_str());
+      sendAck(doc, seenCmds[k].ok);
+      return;
+    }
   }
 
-  if (!doc["command_id"].isNull()) {
-    JsonDocument a;
-    a["command_id"] = doc["command_id"];
-    if (!doc["token"].isNull()) a["token"] = doc["token"];
-    a["result"] = ok ? "ok" : "failed";
-    publishJson(T_ACK, a);
+  String name = getStr(doc, "command");
+  if (!name.length()) name = getStr(doc, "action");
+  name.toUpperCase();
+  String source = getStr(doc, "source");
+  Serial.printf("[cmd] %s (nguồn: %s)\n", name.c_str(), source.length() ? source.c_str() : "-");
+
+  int dur = doc["duration"] | 0;
+  if (dur < 0) dur = 0;
+  if (dur > MAX_UNLOCK_SEC) dur = MAX_UNLOCK_SEC;
+
+  bool ok = true, reboot = false;
+  const char* reason = nullptr;
+
+  if (name == "UNLOCK") {
+    ok = setLock(true, (uint32_t)dur * 1000UL);
+    if (!ok) reason = "jammed";
+  } else if (name == "LOCK") {
+    ok = setLock(false);
+    if (!ok) reason = "jammed";
+  } else if (name == "BUZZER_ALERT") {                       // server gửi khi khoá tạm do nhập sai nhiều lần
+    alarm();
+    if (getStr(doc, "reason") == "ACCESS_BURST") {
+      blockActive = true;
+      blockEnd = millis() + LOCKOUT_LOCAL_MS;
+      Serial.println("[lockout] khoá tạm bàn phím/thẻ cục bộ");
+    }
+  } else if (name == "REBOOT" || name == "RESET") {
+    reboot = true;
+  } else if (name == "STATUS" || name == "PING") {
+    publishStatus();
+  } else {                                                   // ADD_CARD, REMOVE_CARD, OTA_UPDATE, ...
+    Serial.printf("[cmd] chưa hỗ trợ: %s\n", name.c_str());
+    ok = false;
+    reason = "unsupported";
+  }
+
+  if (hasId) {                                               // BUZZER_ALERT không kèm command_id nên không ack
+    seenCmds[seenN % 8].id = cid;
+    seenCmds[seenN % 8].ok = ok;
+    seenN++;
+    sendAck(doc, ok, reason);
   }
   if (reboot) { delay(300); ESP.restart(); }
 }
 
 void onMqtt(char* topic, byte* payload, unsigned int len) {
-  String t(topic);
-  String kind = t.substring(t.lastIndexOf('/') + 1);
-  if (kind == "status" || kind == "event" || kind == "ack") return;  // bản tin do chính mình gửi
-  Serial.printf("[rx] %s %.*s\n", topic, (int)len, (const char*)payload);
+  Serial.printf("[rx] %s (%u byte)\n", topic, len);
   JsonDocument doc;
   if (deserializeJson(doc, payload, len)) {
     Serial.println("[rx] không phải JSON hợp lệ");
@@ -272,8 +507,8 @@ void mqttEnsure() {
   last = millis();
   Serial.printf("[mqtt] kết nối %s:%d ...\n", MQTT_HOST, MQTT_PORT);
   if (mqtt.connect(DEVICE_CODE, DEVICE_CODE, DEVICE_SECRET)) {
-    mqtt.subscribe(T_SUB, 1);
-    Serial.printf("[mqtt] OK, đã subscribe %s\n", T_SUB);
+    mqtt.subscribe(T_CMD, 1);
+    Serial.printf("[mqtt] OK, đã subscribe %s\n", T_CMD);
     publishStatus();
   } else {
     Serial.printf("[mqtt] lỗi rc=%d\n", mqtt.state());
@@ -297,37 +532,28 @@ void keypadTask() {
     pinBuf = "";
     Serial.println("[pin] đã xoá");
   } else if (k == '#') {
-    if (pinBuf.length()) {
-      sendEvent("pin_entry", "pin", pinBuf);
+    if (!pinBuf.length()) return;
+    if (millis() - lastPinAt < PIN_MIN_INTERVAL_MS) {   // chống dò PIN bằng cách bấm dồn dập
       pinBuf = "";
-      beep(80);
+      errorBeep();
+      return;
     }
+    lastPinAt = millis();
+    sendEvent("pin_entry", "pin", pinBuf);
+    pinBuf = "";
+    beep(80);
   }
-}
-
-void sendRfid(String uid) {
-  uid.trim();
-  uid.replace(":", "");
-  uid.replace(" ", "");
-  uid.toUpperCase();
-  if (!uid.length()) return;
-  beep(40);
-  sendEvent("rfid_tap", "uid", uid);
 }
 
 void rfidTask() {
 #if USE_MFRC522
-  static uint32_t lastTap = 0;
   if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return;
-  if (millis() - lastTap > 1500) {
-    lastTap = millis();
-    String uid;
-    for (byte i = 0; i < rfid.uid.size; i++) {
-      if (rfid.uid.uidByte[i] < 0x10) uid += "0";
-      uid += String(rfid.uid.uidByte[i], HEX);
-    }
-    sendRfid(uid);
+  String uid;
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    if (rfid.uid.uidByte[i] < 0x10) uid += "0";
+    uid += String(rfid.uid.uidByte[i], HEX);
   }
+  sendRfid(uid);
   rfid.PICC_HaltA();
   rfid.PCD_StopCrypto1();
 #endif
@@ -339,25 +565,36 @@ void bleTask() {
     bleHasTicket = false;
     String t = bleTicket;
     t.trim();
-    if (t.length()) sendEvent("ble_unlock", "ticket", t);
+    if (t.length()) handleBleTicket(t);
   }
 #endif
 }
 
-void tamperTask() {
-  static uint32_t lastChange = 0;
-  bool now = digitalRead(PIN_TAMPER) == LOW;
-  if (now != tamper && millis() - lastChange > 50) {
-    lastChange = millis();
-    tamper = now;
+void tamperTask() {   // có chống dội 50ms
+  static bool lastRaw = false;
+  static uint32_t rawAt = 0;
+  bool raw = digitalRead(PIN_TAMPER) == LOW;
+  if (raw != lastRaw) { lastRaw = raw; rawAt = millis(); }
+  if (millis() - rawAt > 50 && raw != tamper) {
+    tamper = raw;
     Serial.printf("[tamper] %s\n", tamper ? "BỊ TÁC ĐỘNG" : "bình thường");
     if (tamper) { beep(150); delay(80); beep(150); }
     publishStatus();
   }
 }
 
-// Mô phỏng qua Serial Monitor (hữu ích trên Wokwi, không có RC522 / BLE):
-//   rfid A1B2C3D4 | pin 123456 | ble <ticket> | status
+void batteryTask() {
+  static uint32_t last = 0;
+  if (millis() - last < 60000) return;
+  last = millis();
+  if (readBattery() <= LOW_BATTERY_PCT) {
+    Serial.println("[battery] pin yếu!");
+    beep(40); delay(80); beep(40);
+  }
+}
+
+// Mô phỏng qua Serial Monitor (Wokwi không có RC522 / BLE / camera):
+//   rfid <uid> | pin <mã> | ble <vé> | face <v1,v2,...> | status
 void serialTask() {
   if (!Serial.available()) return;
   String l = Serial.readStringUntil('\n');
@@ -365,41 +602,58 @@ void serialTask() {
   if (!l.length()) return;
   if (l.startsWith("rfid "))      sendRfid(l.substring(5));
   else if (l.startsWith("pin "))  sendEvent("pin_entry", "pin", l.substring(4));
-  else if (l.startsWith("ble "))  sendEvent("ble_unlock", "ticket", l.substring(4));
+  else if (l.startsWith("ble "))  handleBleTicket(l.substring(4));
+  else if (l.startsWith("face ")) {
+    static float emb[FACE_MAX];
+    int n = 0, start = 5;
+    while (start <= (int)l.length() && n < FACE_MAX) {
+      int c = l.indexOf(',', start);
+      String tok = c < 0 ? l.substring(start) : l.substring(start, c);
+      tok.trim();
+      if (tok.length()) emb[n++] = tok.toFloat();
+      if (c < 0) break;
+      start = c + 1;
+    }
+    sendFace(emb, n);
+  }
   else if (l == "status")         publishStatus();
-  else Serial.println("Lệnh: rfid <uid> | pin <mã> | ble <vé> | status");
+  else Serial.println("Lệnh: rfid <uid> | pin <mã> | ble <vé> | face <v1,v2,...> | status");
 }
 
 // ---------------------------------------------------------------- setup / loop
 void setup() {
+  Serial.setRxBufferSize(8192);
   Serial.begin(115200);
   Serial.setTimeout(50);
   delay(200);
-  Serial.printf("\n=== SmartLock %s ===\n", DEVICE_CODE);
+  Serial.printf("\n=== SmartLock %s fw %s ===\n", DEVICE_CODE, FW_VERSION);
 
   pinMode(PIN_LED_G, OUTPUT);
   pinMode(PIN_LED_R, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
   pinMode(PIN_TAMPER, INPUT_PULLUP);
+  pinMode(PIN_JAM, INPUT);
   analogReadResolution(12);
 
   ESP32PWM::allocateTimer(0);
   lockServo.setPeriodHertz(50);
   lockServo.attach(PIN_SERVO, 500, 2400);
   lockServo.write(ANGLE_LOCKED);
-  digitalWrite(PIN_LED_R, HIGH);
+  showLockLeds();
 
   snprintf(T_STATUS, sizeof(T_STATUS), "smartlock/%s/status", DEVICE_CODE);
   snprintf(T_EVENT,  sizeof(T_EVENT),  "smartlock/%s/event",  DEVICE_CODE);
   snprintf(T_ACK,    sizeof(T_ACK),    "smartlock/%s/ack",    DEVICE_CODE);
-  snprintf(T_SUB,    sizeof(T_SUB),    "smartlock/%s/#",      DEVICE_CODE);
+  snprintf(T_CMD,    sizeof(T_CMD),    "smartlock/%s/cmd",    DEVICE_CODE);
 
+  initBleKey();
+  WiFi.mode(WIFI_STA);
 #if USE_TLS
   netClient.setInsecure();  // test thôi; production nên dùng setCACert()
 #endif
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(onMqtt);
-  mqtt.setBufferSize(1024);
+  mqtt.setBufferSize(MQTT_BUFFER);
   mqtt.setKeepAlive(30);
   mqtt.setSocketTimeout(5);
 
@@ -420,7 +674,7 @@ void setup() {
   BLEDevice::startAdvertising();
 #endif
 
-  Serial.println("Serial: rfid <uid> | pin <mã> | ble <vé> | status");
+  Serial.println("Serial: rfid <uid> | pin <mã> | ble <vé> | face <v1,v2,...> | status");
 }
 
 void loop() {
@@ -429,9 +683,12 @@ void loop() {
   keypadTask();
   rfidTask();
   bleTask();
+  bleFlushTask();
   tamperTask();
+  jamTask();
+  batteryTask();
   serialTask();
 
-  if (relockAt && (int32_t)(millis() - relockAt) >= 0) setLock(false);
+  if (relockAt && (int32_t)(millis() - relockAt) >= 0) { relockAt = 0; setLock(false); }
   if (millis() - lastStatusAt > STATUS_INTERVAL_MS) publishStatus();
 }
