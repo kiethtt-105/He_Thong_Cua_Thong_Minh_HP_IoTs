@@ -1,0 +1,12 @@
+{
+  "lock_state": "locked",
+  "battery_level": 100,
+  "tamper_detected": false,
+  "temperature": 27.0,
+  "ble_on": true,
+  "nfc_on": true,
+  "cards": [],
+  "outbox": [],
+  "boot_count": 1,
+  "firmware_version": "1.0.0-virtual"
+}

@@ -1,0 +1,11 @@
+{
+  "device_code": "DEV-F3A6683A",
+  "secret": "4f2d381bc0667e448d338c6ed02d090a",
+  "device_id": "d9626df4-587f-408b-a5a8-f3b18eb2c519",
+  "name": "Khoá ảo",
+  "mac_address": "02:BA:E7:54:FA:79",
+  "firmware_version": "1.0.0-virtual",
+  "location": "",
+  "mqtt_host": "localhost",
+  "mqtt_port": 1883
+}
