@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "author": "smartlock",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-membrane-keypad", "id": "keypad1", "top": -280, "left": 120, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo1", "top": -130, "left": -230, "attrs": {} },
+    { "type": "wokwi-led", "id": "ledG", "top": 220, "left": -120, "attrs": { "color": "green" } },
+    { "type": "wokwi-led", "id": "ledR", "top": 220, "left": -60, "attrs": { "color": "red" } },
+    { "type": "wokwi-resistor", "id": "rG", "top": 290, "left": -125, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "rR", "top": 290, "left": -65, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-buzzer", "id": "bz1", "top": 220, "left": 20, "attrs": { "volume": "0.1" } },
+    { "type": "wokwi-pushbutton", "id": "btn1", "top": 220, "left": 130, "attrs": { "color": "red", "label": "TAMPER" } },
+    { "type": "wokwi-potentiometer", "id": "pot1", "top": 200, "left": 230, "attrs": {} }
+  ],
+  "connections": [
+    ["keypad1:R1", "esp:32", "green", []],
+    ["keypad1:R2", "esp:33", "green", []],
+    ["keypad1:R3", "esp:25", "green", []],
+    ["keypad1:R4", "esp:26", "green", []],
+    ["keypad1:C1", "esp:27", "blue", []],
+    ["keypad1:C2", "esp:14", "blue", []],
+    ["keypad1:C3", "esp:16", "blue", []],
+    ["keypad1:C4", "esp:17", "blue", []],
+
+    ["servo1:PWM", "esp:13", "orange", []],
+    ["servo1:V+", "esp:5V", "red", []],
+    ["servo1:GND", "esp:GND.1", "black", []],
+
+    ["esp:4", "rG:1", "green", []],
+    ["rG:2", "ledG:A", "green", []],
+    ["ledG:C", "esp:GND.2", "black", []],
+
+    ["esp:21", "rR:1", "red", []],
+    ["rR:2", "ledR:A", "red", []],
+    ["ledR:C", "esp:GND.2", "black", []],
+
+    ["esp:2", "bz1:2", "purple", []],
+    ["bz1:1", "esp:GND.2", "black", []],
+
+    ["esp:15", "btn1:1.l", "yellow", []],
+    ["btn1:2.l", "esp:GND.2", "black", []],
+
+    ["pot1:SIG", "esp:34", "gray", []],
+    ["pot1:VCC", "esp:3V3", "red", []],
+    ["pot1:GND", "esp:GND.2", "black", []]
+  ],
+  "dependencies": {}
+}
