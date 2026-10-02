@@ -1,0 +1,8 @@
+Trong smartlock/management/commands/mqtt_subscriber.py, hàm _handle_event, thêm ngay sau nhánh 'ble_unlock':
+
+        elif event_type == 'nfc_unlock':
+            services.record_nfc_phone_unlock(
+                device, ticket=str(payload.get('ticket') or '')[:200],
+                ok=payload.get('result', 'ok') == 'ok', reason=payload.get('reason'), at=payload.get('at'))
+
+(services.record_nfc_phone_unlock đã có sẵn nhưng subscriber chưa gọi tới nó.)

@@ -1,0 +1,23 @@
+{
+  "version": 1, "author": "smartlock", "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-membrane-keypad", "id": "kp", "top": -280, "left": 120, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo", "top": 120, "left": 200, "attrs": {} },
+    { "type": "wokwi-buzzer", "id": "bz", "top": 20, "left": -120, "attrs": { "volume": "0.1" } },
+    { "type": "wokwi-led", "id": "ledr", "top": -60, "left": -130, "attrs": { "color": "red" } },
+    { "type": "wokwi-led", "id": "ledg", "top": -60, "left": -90, "attrs": { "color": "green" } }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ], [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+    [ "kp:R1", "esp:D19", "green", [] ], [ "kp:R2", "esp:D18", "green", [] ],
+    [ "kp:R3", "esp:D5", "green", [] ],  [ "kp:R4", "esp:TX2", "green", [] ],
+    [ "kp:C1", "esp:RX2", "blue", [] ],  [ "kp:C2", "esp:D4", "blue", [] ],
+    [ "kp:C3", "esp:D2", "blue", [] ],   [ "kp:C4", "esp:D15", "blue", [] ],
+    [ "servo:PWM", "esp:D13", "orange", [] ], [ "servo:V+", "esp:VIN", "red", [] ], [ "servo:GND", "esp:GND.1", "black", [] ],
+    [ "bz:1", "esp:D12", "red", [] ], [ "bz:2", "esp:GND.2", "black", [] ],
+    [ "ledr:A", "esp:D26", "red", [] ], [ "ledr:C", "esp:GND.2", "black", [] ],
+    [ "ledg:A", "esp:D27", "green", [] ], [ "ledg:C", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}

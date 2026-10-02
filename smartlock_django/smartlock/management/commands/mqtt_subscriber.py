@@ -10,6 +10,7 @@ MQTT subscriber thường trực (thay cho mqtt_bridge + mark_offline_devices c�
 import hmac
 import json
 import logging
+import re
 import signal
 import sys
 import threading
@@ -26,6 +27,7 @@ logger = logging.getLogger('smartlock.mqtt_subscriber')
 
 OFFLINE_CHECK_INTERVAL_SECONDS = 60
 LOCK_STATES = ('locked', 'unlocked', 'jammed', 'unknown')
+MAC_RE = re.compile(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$')   # cùng regex với Device.mac_address
 
 
 class Command(BaseCommand):
@@ -42,7 +44,10 @@ class Command(BaseCommand):
             self.stderr.write(self.style.ERROR('Chưa cài paho-mqtt (pip install "paho-mqtt<2").'))
             sys.exit(1)
 
-        client = mqtt.Client(client_id='django-sub-worker')
+        try:    # paho-mqtt 2.x bắt buộc chỉ định phiên bản callback; 1.x thì không có CallbackAPIVersion
+            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id='django-sub-worker')
+        except AttributeError:
+            client = mqtt.Client(client_id='django-sub-worker')
         if services.MQTT_PUBLISHER_USERNAME:
             client.username_pw_set(services.MQTT_PUBLISHER_USERNAME, services.MQTT_PUBLISHER_PASSWORD)
         if services.MQTT_USE_TLS:
@@ -110,6 +115,11 @@ class Command(BaseCommand):
             if not isinstance(payload, dict):
                 return
 
+            # Mọi tin từ thiết bị (kể cả event/ack) đều chứng tỏ khoá đang sống -> cập nhật last_seen_at
+            # (khoá chưa có chủ chỉ được ghi last_seen, không bị đặt online). status tự cập nhật ở _handle_status.
+            if kind in ('event', 'ack'):
+                services.touch_device(device)
+
             if kind == 'status':
                 self._handle_status(device, payload)
             elif kind == 'event':
@@ -130,20 +140,28 @@ class Command(BaseCommand):
         lock_state = payload.get('lock_state', 'unknown')
         if lock_state not in LOCK_STATES:
             lock_state = 'unknown'
+        signal = payload.get('signal_strength')     # cột IntegerField: giá trị lạ (chuỗi, bool...) sẽ làm lỗi INSERT
+        if isinstance(signal, bool) or not isinstance(signal, (int, float)) or not (-200 <= signal <= 0):
+            signal = None
 
-        status_log = DeviceStatusLog.objects.create(
-            device=device, battery_level=int(battery), signal_strength=payload.get('signal_strength'),
+        DeviceStatusLog.objects.create(
+            device=device, battery_level=int(battery), signal_strength=int(signal) if signal is not None else None,
             lock_state=lock_state, tamper_detected=bool(payload.get('tamper_detected', False)),
             raw_payload=payload,
         )
-        fields = {'last_seen_at': timezone.now(), 'battery_level': int(battery)}
+        fields = {'last_seen_at': timezone.now(), 'updated_at': timezone.now(), 'battery_level': int(battery)}
+        firmware = payload.get('firmware')
+        if isinstance(firmware, str) and firmware.strip():
+            fields['firmware_version'] = firmware.strip()[:30]
+        mac = payload.get('mac')
+        if isinstance(mac, str) and MAC_RE.match(mac.strip().upper()):
+            fields['mac_address'] = mac.strip().upper()
         # Chỉ tự chuyển 'online' khi thiết bị đang online/offline. Nếu ép 'online' cho thiết bị
         # provisioning/revoked (owner = NULL) sẽ vi phạm constraint chk_devices_owner_vs_status,
         # và cũng ghi đè quyết định của admin (maintenance).
         if device.status in ('online', 'offline'):
             fields['status'] = 'online'
         Device.objects.filter(pk=device.pk).update(**fields)
-        services.evaluate_device_status(device, status_log)
 
     def _handle_event(self, device, payload):
         event_type = payload.get('type')
@@ -163,19 +181,26 @@ class Command(BaseCommand):
             embedding = payload.get('embedding')
             if (isinstance(embedding, list) and 0 < len(embedding) <= 512
                     and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in embedding)):
-                services.verify_face(device, embedding, snapshot_url=payload.get('snapshot_url', ''))
+                snapshot = payload.get('snapshot_url')
+                if not (isinstance(snapshot, str) and snapshot.startswith(('http://', 'https://')) and len(snapshot) <= 512):
+                    snapshot = ''      # AccessEvent.snapshot_url là URLField(max_length=512)
+                services.verify_face(device, embedding, snapshot_url=snapshot)
         elif event_type == 'ble_unlock':
             services.record_ble_unlock(
+                device, ticket=str(payload.get('ticket') or '')[:200],
+                ok=payload.get('result', 'ok') == 'ok', reason=payload.get('reason'), at=payload.get('at'))
+        elif event_type == 'nfc_unlock':     # điện thoại chạm đầu đọc NFC (HCE), khoá đã tự xác thực vé tại chỗ
+            services.record_nfc_phone_unlock(
                 device, ticket=str(payload.get('ticket') or '')[:200],
                 ok=payload.get('result', 'ok') == 'ok', reason=payload.get('reason'), at=payload.get('at'))
         else:
             logger.warning('mqtt_subscriber: event type không rõ từ %s: %r', device.device_code, event_type)
 
     def _handle_ack(self, device, payload):
-        command_id = payload.get('command_id')
+        command_id = services.parse_uuid(payload.get('command_id'))   # id không phải UUID -> bỏ, không ném lỗi DB
         if not command_id:
             return
-        cmd = DeviceCommand.objects.filter(
+        cmd = DeviceCommand.objects.select_related('issued_by', 'device').filter(
             pk=command_id, device=device, status__in=('pending', 'sent')).first()
         if not cmd:
             logger.info('mqtt_subscriber: ack cho lệnh không còn chờ, command_id=%s', command_id)
@@ -189,3 +214,8 @@ class Command(BaseCommand):
         cmd.status = 'failed' if payload.get('result', 'ok') == 'failed' else 'acknowledged'
         cmd.acknowledged_at = timezone.now()
         cmd.save(update_fields=['status', 'acknowledged_at'])
+        # Popup "Cửa đã khoá/mở khoá" cho người gửi lệnh + người theo dõi cửa (chỉ LOCK/UNLOCK, lệnh khác tự bỏ qua).
+        try:
+            services.announce_command_result(cmd, ok=cmd.status == 'acknowledged')
+        except Exception:
+            logger.exception('mqtt_subscriber: không tạo được thông báo kết quả lệnh, command_id=%s', command_id)

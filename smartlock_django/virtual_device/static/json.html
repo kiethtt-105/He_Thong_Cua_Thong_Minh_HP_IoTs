@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JSON live - khoá ảo</title>
+<style>
+:root{--bg:#fafbfc;--ink:#1c2630;--mute:#5d6b78;--line:#cfd6dc;--k:#0d7a85;--s:#9a3b1a;--n:#2f6fb3;--b:#8a3fa0}
+@media(prefers-color-scheme:dark){:root{--bg:#12181e;--ink:#e6ebef;--mute:#93a1ad;--line:#38444f;--k:#3cc2cf;--s:#f0a074;--n:#7db4ee;--b:#d29be6}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.5 Consolas,monospace;display:grid;grid-template-columns:1fr 1fr;height:100vh}
+@media(max-width:800px){body{grid-template-columns:1fr;height:auto}}
+section{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line)}
+h2{margin:0;padding:10px 14px;font:600 14px system-ui;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}
+h2 span{color:var(--mute);font-weight:400}
+pre{margin:0;padding:12px 14px;overflow:auto;flex:1;white-space:pre-wrap;word-break:break-all}
+.k{color:var(--k)}.s{color:var(--s)}.n{color:var(--n)}.b{color:var(--b)}
+.m{border-bottom:1px dotted var(--line);padding:6px 0}.m small{color:var(--mute)}
+#msgs{padding:8px 14px;overflow:auto;flex:1}
+</style></head><body>
+<section><h2>Trạng thái (state.json) <span id="u"></span></h2><pre id="state">đang tải…</pre></section>
+<section><h2>Bản tin MQTT + log <span id="c"></span></h2><div id="msgs"></div></section>
+<script>
+const hl=j=>JSON.stringify(j,null,2).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/("(\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,m=>{let c='n';if(/^"/.test(m))c=/:$/.test(m)?'k':'s';else if(/true|false|null/.test(m))c='b';return `<span class="${c}">${m}</span>`});
+const base=location.protocol==='file:'?'http://localhost:8765':'';let n=0;
+const es=new EventSource(base+'/events');
+es.addEventListener('state',e=>{const s=JSON.parse(e.data);document.getElementById('state').innerHTML=hl(s);document.getElementById('u').textContent=s.updated_at});
+es.addEventListener('msg',e=>{const m=JSON.parse(e.data),box=document.getElementById('msgs'),d=document.createElement('div'),stick=box.scrollTop+box.clientHeight>=box.scrollHeight-30;
+  d.className='m';d.innerHTML=`<small>${m.t.slice(11,19)} ${m.kind}${m.topic?' '+m.topic:''}</small><br>${hl(m.kind==='log'?{level:m.level,text:m.text}:m.payload)}`;box.appendChild(d);
+  document.getElementById('c').textContent=(++n)+' bản tin';if(stick)box.scrollTop=box.scrollHeight});
+</script></body></html>
