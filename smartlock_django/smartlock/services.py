@@ -137,8 +137,15 @@ def find_user(identifier):
     return User.objects.filter(Q(email__iexact=identifier) | Q(username__iexact=identifier)).first()
 
 
+class AuditWriteError(Exception):
+    """Không ghi được AuditLog cho thao tác bắt buộc phải có log (audit(..., strict=True))."""
+
+
 def audit(request, action, *, device=None, target_user=None, success=True,
-          severity='info', metadata=None, actor='auto', username_attempt=None):
+          severity='info', metadata=None, actor='auto', username_attempt=None, strict=False):
+    """Ghi AuditLog. Mặc định NUỐT lỗi ghi log (không làm hỏng luồng chính).
+    strict=True (thao tác nhạy cảm: cấp quyền, gán/gỡ chủ, xoay secret...) -> ném AuditWriteError để
+    view đặt thao tác + audit trong cùng transaction.atomic() và HUỶ thao tác khi không ghi được log."""
     if actor == 'auto':
         actor = request.user if request.user.is_authenticated else None
     snapshot = dict(metadata or {})
@@ -155,19 +162,16 @@ def audit(request, action, *, device=None, target_user=None, success=True,
                 username_attempt=username_attempt, severity=severity, success=success,
                 ip_address=client_ip(request), user_agent=user_agent(request), metadata=snapshot or None,
             )
-    except Exception:
+    except Exception as exc:
         logger.exception('audit: không ghi được log %s', action)
+        if strict:
+            raise AuditWriteError(action) from exc
 
 
 def notify(user, title, message, severity='info', device=None, type_='SYSTEM'):
     Notification.objects.create(
         user=user, device=device, type=type_, title=title[:150], message=message, severity=severity,
     )
-
-
-def ip_blacklisted(ip) -> bool:
-    lines = [l.strip() for l in (system_settings().ip_blacklist or '').splitlines()]
-    return ip in [l for l in lines if l]
 
 
 def accessible_devices(user):
@@ -1115,6 +1119,9 @@ def claim_device(device_id, new_owner, *, by_admin: bool) -> Device:
             raise ClaimError('BAD_STATE', 'Trạng thái thiết bị không cho phép gán chủ.')
         if not new_owner.is_active:
             raise ClaimError('OWNER_INACTIVE', 'Tài khoản chủ sở hữu đang bị vô hiệu hoá.')
+        if is_admin(new_owner):
+            raise ClaimError('OWNER_IS_ADMIN',
+                             'Tài khoản quản trị không được làm chủ khoá. Hãy dùng tài khoản người dùng thường.')
         if by_admin and device.status != 'provisioning':
             raise ClaimError('ADMIN_CANNOT_REASSIGN',
                              'Khoá đã bị gỡ chủ (revoked): quản trị viên không được gán lại. '

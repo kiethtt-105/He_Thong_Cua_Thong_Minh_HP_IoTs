@@ -56,7 +56,7 @@ from webauthn.helpers.structs import (
 from .services import (
     accessible_devices as _accessible_devices, admins as _admins, audit as _audit,
     client_ip as _client_ip, find_user as _find_user, has_permission as _has_permission,
-    hash_card_uid as _hash_card_uid, hash_token as _hash_token, ip_blacklisted as _ip_blacklisted, is_admin as _is_admin,
+    hash_card_uid as _hash_card_uid, hash_token as _hash_token, is_admin as _is_admin,
     notify as _notify, parse_dt as _parse_dt, parse_uuid as _parse_uuid, pick_device as _pick_device,
     register_failure as _register_failure, render_email, reset_lockout as _reset_lockout,
     send_mail as _send_mail, send_verification as _send_verification,
@@ -167,13 +167,7 @@ def login_view(request):
         messages.error(request, 'Vui lòng điền đầy đủ thông tin.')
         return _render(request, 'login', ctx)
 
-    ip = _client_ip(request)
-    if _ip_blacklisted(ip):
-        _audit(request, 'LOGIN_BLOCKED_IP', success=False, severity='warning',
-               username_attempt=identifier[:150])
-        messages.error(request, 'Địa chỉ IP của bạn đã bị chặn.')
-        return _render(request, 'login', ctx)
-
+    ip = _client_ip(request)   # chỉ để ghi nhận IP lượt sai (không còn chặn/giới hạn theo IP)
     user = _find_user(identifier)
     now = timezone.now()
 
@@ -793,8 +787,8 @@ def profile(request):
 @auth_required
 def audit_logs(request):
     user = request.user
-    show_all = _is_admin(user) and request.GET.get('all') == '1'
-    base = AuditLog.objects.all() if show_all else _visible_logs(user)
+    # Tài khoản quản trị không dùng trang user; xem log toàn hệ thống chỉ ở cổng manage_sys.
+    base = _visible_logs(user)
     qs = base.select_related('device', 'actor_user', 'target_user').order_by('-created_at')
 
     status = request.GET.get('status')
@@ -806,10 +800,9 @@ def audit_logs(request):
     if q:
         qs = qs.filter(action__icontains=q)
 
-    extra = ''.join('&' + urlencode({k: v}) for k, v in
-                    (('status', status), ('q', q), ('all', '1' if show_all else '')) if v)
-    context = {'audit_logs': _page(request, qs), 'show_all': show_all,
-               'status': status or '', 'q': q, 'qs': extra, 'can_see_all': _is_admin(user)}
+    extra = ''.join('&' + urlencode({k: v}) for k, v in (('status', status), ('q', q)) if v)
+    context = {'audit_logs': _page(request, qs), 'show_all': False,
+               'status': status or '', 'q': q, 'qs': extra, 'can_see_all': False}
     return _render(request, 'audit_logs', context)
 
 

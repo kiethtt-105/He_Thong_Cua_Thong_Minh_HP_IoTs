@@ -33,18 +33,20 @@ from smartlock.models import (
 from .decorators import manage_required
 from .helpers import (
     LOGIN_FAIL_ACTIONS, action_denied_reason, audit, burn_password_hash, check_reauth, client_ip,
-    decorate_login_attempt, has_manage_role, ip_throttled, is_manager, is_new_login_ip,
+    decorate_login_attempt, has_manage_role, is_manager, is_new_login_ip,
     lock_remaining_minutes, login_attempts_qs, modify_denied_reason, notify, paginate, pop_secret,
     register_failure, reset_lockout, revoke_mobile_sessions, stash_secret,
 )
 
 logger = logging.getLogger('smartlock.manage_sys')
 
-# MỘT thông báo duy nhất cho mọi kiểu thất bại (sai mật khẩu, không phải admin, tài khoản đang khóa,
-# IP bị giới hạn) để người ngoài không dò được email nào là admin / đang bị khóa.
+# MỘT thông báo duy nhất cho mọi kiểu thất bại (sai mật khẩu, không phải admin, tài khoản đang khóa)
+# để người ngoài không dò được email nào là admin / đang bị khóa.
 LOGIN_ERROR = ('Đăng nhập không thành công. Kiểm tra lại thông tin hoặc thử lại sau ít phút '
                '(đăng nhập có thể đang bị hạn chế tạm thời).')
 REAUTH_ERROR = 'Mật khẩu xác nhận không đúng. Thao tác chưa được thực hiện.'
+AUDIT_ERROR = 'Không ghi được nhật ký nên thao tác đã bị huỷ. Vui lòng thử lại.'
+ADMIN_OWNER_ERROR = 'Tài khoản quản trị không được làm chủ khoá. Hãy dùng tài khoản người dùng thường.'
 SESSION_SECONDS = getattr(dj_settings, 'MANAGE_SYS_SESSION_SECONDS', 2 * 3600)
 URL_PREFIX = getattr(dj_settings, 'MANAGE_SYS_URL_PREFIX', '/manage-sys/')
 
@@ -106,14 +108,6 @@ def login_view(request):
         return _render(request, 'login', ctx)
 
     ip = client_ip(request)
-
-    # Giới hạn theo IP (ngoài khóa theo tài khoản): chặn dò nhiều email từ cùng 1 nguồn.
-    if ip_throttled(ip):
-        burn_password_hash(password)
-        audit(request, 'MANAGE_LOGIN_THROTTLED', actor=None, success=False,
-              severity='warning', username_attempt=identifier[:150])
-        messages.error(request, LOGIN_ERROR)
-        return _render(request, 'login', ctx)
 
     user = _find_user(identifier)
     is_manager_account = bool(user and has_manage_role(user))
@@ -236,6 +230,9 @@ def users_list(request):
         qs = qs.filter(Q(email__icontains=q) | Q(username__icontains=q)
                        | Q(full_name__icontains=q) | Q(phone__icontains=q))
 
+    if q and not request.GET.get('page'):   # tìm kiếm lộ email/SĐT -> ghi vết (chuyển trang không ghi)
+        audit(request, 'MANAGE_SEARCH_USERS', metadata={'q': q[:80]})
+
     status = request.GET.get('status') or ''
     now = timezone.now()
     if status == 'active':
@@ -318,18 +315,35 @@ def user_detail(request, user_id):
                 if not target.is_active:
                     messages.error(request, 'Hãy kích hoạt tài khoản trước khi cấp quyền quản trị.')
                     return back
-                target.is_admin = True
-                target.save(update_fields=['is_admin', 'updated_at'])
-                audit(request, 'MANAGE_ROLE_GRANTED', target_user=target, severity='critical')
+                owned = Device.objects.filter(owner=target).count()
+                if owned:
+                    messages.error(request, f'Tài khoản đang là chủ của {owned} khoá. Tài khoản quản trị không được '
+                                            'làm chủ khoá nên hãy gỡ chủ các khoá đó trước khi cấp quyền.')
+                    return back
+                try:
+                    with transaction.atomic():
+                        target.is_admin = True
+                        target.save(update_fields=['is_admin', 'updated_at'])
+                        audit(request, 'MANAGE_ROLE_GRANTED', target_user=target, severity='critical', strict=True)
+                except services.AuditWriteError:
+                    messages.error(request, AUDIT_ERROR)
+                    return back
                 messages.success(request, 'Đã cấp quyền quản trị.')
             else:
-                with transaction.atomic():
-                    if _would_orphan_superusers(target):
-                        messages.error(request, 'Không thể thu hồi quyền của superuser cuối cùng của hệ thống.')
-                        return back
-                    target.is_admin = target.is_staff = target.is_superuser = False
-                    target.save(update_fields=['is_admin', 'is_staff', 'is_superuser', 'updated_at'])
-                audit(request, 'MANAGE_ROLE_REVOKED', target_user=target, severity='critical')
+                if not has_manage_role(target):
+                    messages.info(request, 'Tài khoản này không có quyền quản trị để thu hồi.')
+                    return back
+                try:
+                    with transaction.atomic():
+                        if _would_orphan_superusers(target):
+                            messages.error(request, 'Không thể thu hồi quyền của superuser cuối cùng của hệ thống.')
+                            return back
+                        target.is_admin = target.is_staff = target.is_superuser = False
+                        target.save(update_fields=['is_admin', 'is_staff', 'is_superuser', 'updated_at'])
+                        audit(request, 'MANAGE_ROLE_REVOKED', target_user=target, severity='critical', strict=True)
+                except services.AuditWriteError:
+                    messages.error(request, AUDIT_ERROR)
+                    return back
                 messages.success(request, 'Đã thu hồi quyền quản trị.')
         else:
             messages.error(request, 'Hành động không hợp lệ.')
@@ -396,6 +410,8 @@ def device_create(request):
             error = 'Không tìm thấy người dùng với email/username này.'
         elif owner and not owner.is_active:
             error = 'Tài khoản chủ sở hữu đang bị vô hiệu hóa.'
+        elif owner and has_manage_role(owner):
+            error = ADMIN_OWNER_ERROR
         elif Device.objects.filter(device_code=code).exists():
             error = 'Mã thiết bị đã tồn tại.'
 
@@ -429,6 +445,8 @@ def devices_list(request):
         qs = qs.filter(Q(name__icontains=q) | Q(device_code__icontains=q)
                        | Q(mac_address__icontains=q) | Q(owner__email__icontains=q)
                        | Q(owner__username__icontains=q))
+        if not request.GET.get('page'):
+            audit(request, 'MANAGE_SEARCH_DEVICES', metadata={'q': q[:80]})
     status = request.GET.get('status') or ''
     if status in dict(Device._meta.get_field('status').choices):
         qs = qs.filter(status=status)
@@ -448,6 +466,7 @@ def _device_actions(request, device):
     back = redirect('manage_sys:device-detail', device_id=device.id)
     action = request.POST.get('action')
     confirm = (request.POST.get('confirm') or '').strip().upper()
+    expected = (device.device_code or '').upper()
 
     denied = action_denied_reason(request.user, action)
     if denied:
@@ -492,33 +511,42 @@ def _device_actions(request, device):
             messages.error(request, 'Không tìm thấy người dùng để gán làm chủ.')
             return back
         try:
-            services.claim_device(device.id, owner, by_admin=True)
+            with transaction.atomic():
+                services.claim_device(device.id, owner, by_admin=True)   # tự từ chối tài khoản quản trị
+                audit(request, 'MANAGE_DEVICE_CLAIMED', device=device, target_user=owner, severity='critical',
+                      metadata={'owner_email': owner.email}, strict=True)
         except services.ClaimError as exc:
             audit(request, 'MANAGE_DEVICE_CLAIM_FAILED', device=device, target_user=owner, success=False,
                   severity='warning', metadata={'code': exc.code})
             messages.error(request, exc.message)
             return back
-        audit(request, 'MANAGE_DEVICE_CLAIMED', device=device, target_user=owner, severity='critical',
-              metadata={'owner_email': owner.email})
+        except services.AuditWriteError:
+            messages.error(request, AUDIT_ERROR)
+            return back
         notify(owner, 'Bạn đã trở thành chủ khoá',
                f'Quản trị viên đã gán khoá "{device.name}" cho tài khoản của bạn.', device=device, type_='DEVICE')
         messages.success(request, f'Đã gán khoá cho {owner.email}.')
         return back
 
     if action == 'remove_owner':
-        if confirm != device.device_code:
+        if confirm != expected:
             messages.error(request, 'Nhập đúng mã thiết bị vào ô xác nhận để gỡ chủ.')
             return back
         if not check_reauth(request):
             messages.error(request, REAUTH_ERROR)
             return back
         try:
-            _dev, previous, counts = services.release_device(device.id)
+            with transaction.atomic():
+                _dev, previous, counts = services.release_device(device.id)
+                audit(request, 'MANAGE_DEVICE_OWNER_REMOVED', device=device, target_user=previous,
+                      severity='critical', metadata={'previous_owner': previous.email, 'revoked': counts},
+                      strict=True)
         except services.ClaimError as exc:
             messages.error(request, exc.message)
             return back
-        audit(request, 'MANAGE_DEVICE_OWNER_REMOVED', device=device, target_user=previous, severity='critical',
-              metadata={'previous_owner': previous.email, 'revoked': counts})
+        except services.AuditWriteError:
+            messages.error(request, AUDIT_ERROR)
+            return back
         notify(previous, 'Khoá đã bị gỡ khỏi tài khoản của bạn',
                f'Quản trị viên đã gỡ chủ sở hữu khoá "{device.name}". Mọi quyền truy cập, thẻ, mã PIN và '
                'khuôn mặt của khoá đã bị vô hiệu hoá. Bạn có thể tự thêm lại bằng mã thiết bị + secret.',
@@ -527,14 +555,20 @@ def _device_actions(request, device):
         return back
 
     if action == 'rotate_secret':
-        if confirm != device.device_code:
+        if confirm != expected:
             messages.error(request, 'Nhập đúng mã thiết bị vào ô xác nhận để xoay secret.')
             return back
         if not check_reauth(request):
             messages.error(request, REAUTH_ERROR)
             return back
-        dev, secret = services.rotate_secret(device.id)
-        audit(request, 'MANAGE_DEVICE_SECRET_ROTATED', device=dev, target_user=dev.owner, severity='critical')
+        try:
+            with transaction.atomic():
+                dev, secret = services.rotate_secret(device.id)
+                audit(request, 'MANAGE_DEVICE_SECRET_ROTATED', device=dev, target_user=dev.owner,
+                      severity='critical', strict=True)
+        except services.AuditWriteError:
+            messages.error(request, AUDIT_ERROR)
+            return back
         if dev.owner_id:
             notify(dev.owner, 'Secret thiết bị đã được đổi',
                    f'Quản trị viên đã đổi secret kết nối của "{dev.name}". Thiết bị cần được nạp lại secret mới.',
@@ -735,6 +769,12 @@ def settings_system(request):
     st = services.system_settings()
 
     if request.method == 'POST':
+        denied = action_denied_reason(request.user, 'update_settings')
+        if denied:
+            audit(request, 'MANAGE_ACTION_DENIED', success=False, severity='warning',
+                  metadata={'action': 'update_settings'})
+            messages.error(request, denied)
+            return redirect('manage_sys:settings')
         try:
             expiry = int(request.POST.get('verification_token_expiry_minutes'))
             share = int(request.POST.get('share_code_expiry_minutes'))
@@ -764,21 +804,27 @@ def settings_system(request):
         before = {'expiry': st.verification_token_expiry_minutes, 'share': st.share_code_expiry_minutes,
                   'timeout': st.session_timeout_hours, 'stages': st.login_lockout_stage_minutes}
         was_registration = st.registration_enabled
-        st.registration_enabled = 'registration_enabled' in request.POST
-        st.verification_token_expiry_minutes = expiry
-        st.share_code_expiry_minutes = share
-        st.session_timeout_hours = timeout
-        st.login_lockout_stage_minutes = stages
-        st.updated_by = request.user
-        st.save()
-        audit(request, 'MANAGE_SETTINGS_UPDATED', severity='warning',
-              metadata={'registration_enabled': [was_registration, st.registration_enabled],
-                        'before': before,
-                        'after': {'expiry': expiry, 'share': share, 'timeout': timeout, 'stages': stages}})
+        try:
+            with transaction.atomic():
+                st.registration_enabled = 'registration_enabled' in request.POST
+                st.verification_token_expiry_minutes = expiry
+                st.share_code_expiry_minutes = share
+                st.session_timeout_hours = timeout
+                st.login_lockout_stage_minutes = stages
+                st.updated_by = request.user
+                st.save()
+                audit(request, 'MANAGE_SETTINGS_UPDATED', severity='warning', strict=True,
+                      metadata={'registration_enabled': [was_registration, st.registration_enabled],
+                                'before': before,
+                                'after': {'expiry': expiry, 'share': share, 'timeout': timeout, 'stages': stages}})
+        except services.AuditWriteError:
+            messages.error(request, AUDIT_ERROR)
+            return redirect('manage_sys:settings')
         messages.success(request, 'Đã lưu cài đặt hệ thống.')
         return redirect('manage_sys:settings')
 
     return _render(request, 'settings', {
         'st': st,
+        'can_edit': request.user.is_superuser,   # admin thường chỉ xem
         'stages_text': ', '.join(str(x) for x in (st.login_lockout_stage_minutes or [])),
     })

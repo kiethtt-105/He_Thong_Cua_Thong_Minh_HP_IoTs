@@ -268,22 +268,6 @@ class LoginHardeningTests(ManageSysBase):
         self.assertEqual(unknown, wrong)
         self.assertNotIn(ADMIN_COOKIE, self.client.cookies)   # đúng mật khẩu nhưng đang khóa -> không vào được
 
-    def test_ip_throttle_blocks_even_correct_password(self):
-        for _ in range(10):
-            AuditLog.objects.create(action='MANAGE_LOGIN_FAILED', success=False, ip_address='127.0.0.1')
-        r = self._login('admin@example.com')
-        self.assertEqual(r.status_code, 200)
-        self.assertNotIn(ADMIN_COOKIE, self.client.cookies)
-        self.assertTrue(AuditLog.objects.filter(action='MANAGE_LOGIN_THROTTLED').exists())
-
-    def test_old_failures_do_not_throttle(self):
-        for _ in range(10):
-            AuditLog.objects.create(action='MANAGE_LOGIN_FAILED', success=False, ip_address='127.0.0.1')
-        AuditLog.objects.filter(action='MANAGE_LOGIN_FAILED').update(
-            created_at=timezone.now() - timedelta(minutes=30))
-        self.assertRedirects(self._login('admin@example.com'), reverse('manage_sys:dashboard'),
-                             fetch_redirect_response=False)
-
 
 class SecretRevealTests(ManageSysBase):
     def setUp(self):
@@ -424,6 +408,66 @@ class HighAdminPolicyTests(ManageSysBase):
         for key in ('cards', 'pins', 'faces', 'access_events'):
             self.assertIn(key, ctx)
         self.assertFalse(ctx['can_sensitive'])
+
+
+class AdminNotOwnerTests(ManageSysBase):
+    """Tài khoản quản trị KHÔNG được làm chủ khoá (chủ khoá phải là user thường)."""
+    def setUp(self):
+        super().setUp()
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        self.other_admin = make_user('adm2@example.com', 'adm2', is_admin=True)
+
+    def test_claim_to_admin_rejected(self):
+        dev = Device.objects.create(device_code='DEV-NOADM001', provisioning_secret_hash='x',
+                                    name='K', status='provisioning')
+        with self.assertRaises(services.ClaimError) as ctx:
+            services.claim_device(dev.id, self.other_admin, by_admin=True)
+        self.assertEqual(ctx.exception.code, 'OWNER_IS_ADMIN')
+
+    def test_device_create_with_admin_owner_rejected(self):
+        self.client.post(reverse('manage_sys:device-create'), {
+            'device_code': 'DEV-NOADM002', 'name': 'K', 'device_mode': 'physical',
+            'owner_email': 'adm2@example.com'})
+        self.assertFalse(Device.objects.filter(device_code='DEV-NOADM002').exists())
+
+    def test_cannot_grant_admin_to_device_owner(self):
+        Device.objects.create(device_code='DEV-NOADM003', provisioning_secret_hash='x',
+                              name='K', owner=self.user, status='online')
+        self.client.post(reverse('manage_sys:user-detail', args=[self.user.id]),
+                         {'action': 'grant_admin', 'current_password': PW})
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_admin)
+
+
+class SettingsPermissionTests(ManageSysBase):
+    URL_DATA = {'verification_token_expiry_minutes': 45, 'share_code_expiry_minutes': 20,
+                'session_timeout_hours': 12, 'lockout_stages': '5,10,30'}
+
+    def test_plain_admin_can_view_but_not_save(self):
+        make_user('mod@example.com', 'mod1', is_admin=True)
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'mod@example.com', 'password': PW})
+        url = reverse('manage_sys:settings')
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.client.post(url, self.URL_DATA)
+        from smartlock.models import SystemSettings
+        self.assertNotEqual(SystemSettings.objects.get(pk=1).session_timeout_hours, 12)
+
+    def test_superuser_can_save(self):
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        self.client.post(reverse('manage_sys:settings'), self.URL_DATA)
+        from smartlock.models import SystemSettings
+        self.assertEqual(SystemSettings.objects.get(pk=1).session_timeout_hours, 12)
+
+
+class StrictAuditTests(ManageSysBase):
+    def test_critical_action_rolled_back_when_audit_fails(self):
+        from unittest import mock
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+        with mock.patch.object(AuditLog.objects, 'create', side_effect=RuntimeError('db down')):
+            self.client.post(reverse('manage_sys:user-detail', args=[self.user.id]),
+                             {'action': 'grant_admin', 'current_password': PW})
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_admin)           # không có log -> không cấp quyền
 
 
 class SuperuserGuardTests(ManageSysBase):

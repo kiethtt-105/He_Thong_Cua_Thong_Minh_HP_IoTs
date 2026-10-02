@@ -7,7 +7,6 @@ trước đây hai nơi tự cài đặt và đã lệch nhau). Ở đây chỉ 
 import logging
 import math
 import secrets
-from datetime import timedelta
 
 from cryptography.fernet import InvalidToken
 from django.contrib.auth.hashers import check_password, make_password
@@ -16,8 +15,8 @@ from django.utils import timezone
 
 from smartlock.models import AuditLog, User, fernet
 from smartlock.services import (  # noqa: F401  (re-export)
-    MAX_FAILED_ATTEMPTS, audit, client_ip, notify, register_failure, reset_lockout,
-    system_settings, user_agent,
+    MAX_FAILED_ATTEMPTS, audit, client_ip, is_admin as _services_is_admin, notify, register_failure,
+    reset_lockout, system_settings, user_agent,
 )
 
 logger = logging.getLogger('smartlock.manage_sys')
@@ -27,16 +26,9 @@ PAGE_SIZE = 20
 # Lượt đăng nhập nay lấy từ AuditLog (bảng LoginAttemptLog cũ đã gộp vào AuditLog).
 LOGIN_ACTIONS = ('LOGIN', 'LOGIN_FAILED', 'LOGIN_ADMIN_REJECTED',
                  'MANAGE_LOGIN', 'MANAGE_LOGIN_DENIED', 'MANAGE_LOGIN_FAILED',
-                 'MANAGE_LOGIN_LOCKED', 'MANAGE_LOGIN_THROTTLED')
+                 'MANAGE_LOGIN_LOCKED')
 LOGIN_FAIL_ACTIONS = ('LOGIN_FAILED', 'LOGIN_ADMIN_REJECTED', 'MANAGE_LOGIN_DENIED', 'MANAGE_LOGIN_FAILED',
-                      'MANAGE_LOGIN_LOCKED', 'MANAGE_LOGIN_THROTTLED')
-
-# Giới hạn theo IP ở cổng đăng nhập quản trị (khóa theo tài khoản không đủ: kẻ tấn công đổi email liên tục).
-# Đếm các lần thất bại gần đây từ AuditLog (có index idx_auditlog_act_ip_time). MANAGE_LOGIN_THROTTLED KHÔNG
-# được đếm để tránh vòng lặp tự kéo dài thời gian chặn.
-IP_FAIL_LIMIT = 10
-IP_FAIL_WINDOW_MINUTES = 15
-_IP_FAIL_COUNTED = ('MANAGE_LOGIN_FAILED', 'MANAGE_LOGIN_DENIED', 'MANAGE_LOGIN_LOCKED')
+                      'MANAGE_LOGIN_LOCKED')
 
 # Xác nhận lại mật khẩu cho thao tác nguy hiểm: tên trường POST.
 REAUTH_FIELD = 'current_password'
@@ -58,7 +50,7 @@ def decorate_login_attempt(a):
 # ---------- Phân quyền ----------
 def has_manage_role(user):
     """Tài khoản có cờ quản trị (không xét đăng nhập)."""
-    return bool(user and (user.is_admin or user.is_staff or user.is_superuser))
+    return bool(user and _services_is_admin(user))   # MỘT nguồn duy nhất: smartlock.services.is_admin
 
 
 def is_manager(user):
@@ -68,7 +60,8 @@ def is_manager(user):
 # Thao tác NHẠY CẢM: chỉ Superuser được làm. Admin thường có quyền xem + vận hành gần như Superuser
 # nhưng KHÔNG chạm được các thao tác này (cấp/thu hồi quyền quản trị, đổi secret thiết bị, gỡ chủ khoá
 # -> huỷ luôn thẻ NFC / PIN / khuôn mặt của chủ). Muốn nới/siết quyền admin chỉ cần sửa tập này.
-SUPERUSER_ONLY_ACTIONS = frozenset({'grant_admin', 'revoke_admin', 'rotate_secret', 'remove_owner'})
+SUPERUSER_ONLY_ACTIONS = frozenset({'grant_admin', 'revoke_admin', 'rotate_secret', 'remove_owner',
+                                     'update_settings'})
 
 
 def is_superuser_role(user):
@@ -99,14 +92,6 @@ def lock_remaining_minutes(user):
     if locked_until and locked_until > now:
         return math.ceil((locked_until - now).total_seconds() / 60)
     return 0
-
-
-def ip_throttled(ip):
-    """True nếu IP này đã thất bại >= IP_FAIL_LIMIT lần ở cổng quản trị trong IP_FAIL_WINDOW_MINUTES."""
-    since = timezone.now() - timedelta(minutes=IP_FAIL_WINDOW_MINUTES)
-    return AuditLog.objects.filter(
-        action__in=_IP_FAIL_COUNTED, ip_address=ip, created_at__gte=since,
-    ).count() >= IP_FAIL_LIMIT
 
 
 _DUMMY_HASH = None
@@ -148,11 +133,9 @@ def check_reauth(request):
 def revoke_mobile_sessions(user):
     """Thu hồi mọi MobileSession còn hiệu lực của user (và xoá fcm_token để ngừng push). Trả về số phiên.
 
-    TODO(smartlock/api): hiện CHƯA có API di động nào (sẽ làm sau). Khi xây API phải đảm bảo:
-      1. mọi endpoint + endpoint refresh token từ chối nếu `not user.is_active`;
-      2. refresh/auth luôn kiểm tra MobileSession.is_active (revoked_at is None và chưa hết hạn);
-      3. access token (JWT) nếu có phải ngắn hạn, vì token đã cấp vẫn dùng được tới khi hết hạn.
-    Hàm này chỉ vô hiệu hóa phía DB; không thể thu hồi access token đã phát hành.
+    Hàm này chỉ vô hiệu hóa phía DB. API di động (smartlock/api) phải tự từ chối khi `not user.is_active`
+    hoặc MobileSession đã bị thu hồi / hết hạn ở MỖI request; access token đã phát hành chỉ hết hiệu lực
+    khi hết hạn (MOBILE_ACCESS_TOKEN_SECONDS).
     """
     from smartlock.models import MobileSession
     return MobileSession.objects.filter(user=user, revoked_at__isnull=True).update(

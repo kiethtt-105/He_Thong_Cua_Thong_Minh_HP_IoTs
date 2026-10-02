@@ -273,8 +273,12 @@ Cài đặt hệ thống
     </div>
 </div>
 {% elif page == 'settings' %}
+{% if not can_edit %}
+<div class="alert alert-secondary small"><i class="fa-solid fa-lock me-1"></i>Cài đặt hệ thống là thao tác nhạy cảm: bạn chỉ được xem, chỉ Superuser mới được lưu thay đổi.</div>
+{% endif %}
 <form method="post">
     {% csrf_token %}
+    <fieldset {% if not can_edit %}disabled{% endif %}>
     <div class="row g-4">
         <div class="col-lg-6">
             <div class="card h-100">
@@ -310,15 +314,15 @@ Cài đặt hệ thống
                         <input type="text" name="lockout_stages" class="form-control" value="{{ stages_text }}" placeholder="5, 10, 30" required>
                         <div class="form-text">Mỗi lần sai quá số lần cho phép sẽ khóa theo mốc kế tiếp, cách nhau bằng dấu phẩy.</div>
                     </div>
-                    <div class="form-text">Ngoài khóa theo tài khoản, cổng quản trị còn tự giới hạn theo IP: 10 lần thất bại trong 15 phút sẽ bị tạm chặn.</div>
                 </div>
             </div>
         </div>
     </div>
+    </fieldset>
 
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-4">
         <small class="text-muted">Cập nhật lần cuối: {{ st.updated_at|date:"d/m/Y H:i" }}{% if st.updated_by %} bởi {{ st.updated_by.email }}{% endif %}</small>
-        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>
+        {% if can_edit %}<button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>{% endif %}
     </div>
 </form>
 {% else %}{{ block.super }}{% endif %}
