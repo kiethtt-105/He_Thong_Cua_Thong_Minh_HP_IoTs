@@ -12,6 +12,8 @@ from .models import (
 )
 
 
+from django.conf import settings
+
 from . import services
 
 
@@ -24,7 +26,7 @@ class ViewAllMixin:
     @staticmethod
     def _is_high_admin(request):
         u = request.user
-        return bool(u.is_active and u.is_staff and (u.is_admin or u.is_superuser))
+        return bool(u.is_active and u.is_staff and (services.is_admin(u) or u.is_superuser))
 
     def has_module_permission(self, request):
         return self._is_high_admin(request) or super().has_module_permission(request)
@@ -90,9 +92,13 @@ class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
     # Chỉ Superuser được đổi cờ quyền / nhóm: chặn admin thường tự nâng quyền qua Django admin.
     _PRIVILEGE_FIELDS = ('is_staff', 'is_superuser', 'is_admin', 'groups', 'user_permissions')
 
+    # KHÔNG ai (kể cả Superuser) đổi cờ quyền ở đây: cấp/thu hồi phải đi qua /manage-sys/ (nhập lại mật khẩu,
+    # xác nhận email, audit strict, chặn superuser cuối cùng, thu hồi phiên app). Admin chỉ để XEM.
     def get_readonly_fields(self, request, obj=None):
-        fields = tuple(super().get_readonly_fields(request, obj))
-        return fields if request.user.is_superuser else fields + self._PRIVILEGE_FIELDS
+        return tuple(super().get_readonly_fields(request, obj)) + self._PRIVILEGE_FIELDS + ('is_active',)
+
+    def has_delete_permission(self, request, obj=None):
+        return False   # xoá user (nhất là superuser cuối) chỉ qua quy trình có kiểm soát, không bấm tay ở admin
 
     fieldsets = (
         (None, {'fields': ('email', 'username', 'password')}),
@@ -167,7 +173,12 @@ CONFIG = {
     AccessEvent: dict(list_display=('created_at', 'device', 'method', 'success', 'reason', 'user'),
                       list_filter=('method', 'success')),
 }
-READ_ONLY = {AuditLog, AccessEvent, DeviceStatusLog, DeviceCommand, NfcLog}
+# Log + mọi bảng QUYỀN TRUY CẬP / thông tin xác thực: chỉ xem. Nếu để sửa được, Superuser tự thêm DeviceAccess,
+# PIN, thẻ, khuôn mặt cho chính mình -> mở cửa mà bỏ qua quy tắc "admin không làm chủ khoá". Cài đặt hệ thống
+# chỉ đổi ở /manage-sys/settings/ (có reauth + audit).
+READ_ONLY = {AuditLog, AccessEvent, DeviceStatusLog, DeviceCommand, NfcLog,
+             DeviceAccess, DoorPinCode, AccessCard, CardDeviceAccess, FaceProfile, NfcReader,
+             OneTimeCode, SystemSettings, Permission}
 
 for model, options in CONFIG.items():
     base = ReadOnlyAdmin if model in READ_ONLY else admin.ModelAdmin
@@ -175,6 +186,12 @@ for model, options in CONFIG.items():
         model, type(f'{model.__name__}Admin', (AuditedAdminMixin, base),
                     {**options, 'exclude': _secret_fields(model)}),
     )
+
+
+# 2FA cho /admin/ (bật bằng ADMIN_REQUIRE_2FA=True trong .env).
+if getattr(settings, 'ADMIN_REQUIRE_2FA', False):
+    from django_otp.admin import OTPAdminSite
+    admin.site.__class__ = OTPAdminSite
 
 
 # LogEntry của Django: chỉ xem (không cho sửa/xoá để dấu vết admin còn nguyên).

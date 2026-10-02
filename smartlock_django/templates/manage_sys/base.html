@@ -16,6 +16,12 @@
     .bar-wrap .bar { flex: 1; min-height: 3px; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--accent-2), var(--accent)); opacity: .85; transition: opacity .15s; }
     .bar-wrap .bar:hover { opacity: 1; }
     .filter-bar .btn { white-space: nowrap; }
+    .role-badge { font-size: .68rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; padding: .2em .55em; border-radius: 999px; vertical-align: middle; }
+    .role-superuser { background: linear-gradient(135deg, #f59e0b, #dc2626); color: #fff; }
+    .role-admin { background: #1e293b; color: #fff; }
+    .danger-zone { border: 1px solid rgba(220,38,38,.35); border-radius: var(--radius, 12px); background: rgba(220,38,38,.04); }
+    .danger-zone .dz-title { color: #dc2626; font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; }
+    .sb-user .role-badge { margin-top: 2px; display: inline-block; }
     .pagination { flex-wrap: wrap; }
     @media (hover: none) { a.stat-card:hover { transform: none; box-shadow: var(--shadow); } }
 </style>
@@ -30,6 +36,7 @@
                 <div class="brand-icon mx-auto mb-3"><i class="fa-solid fa-shield-halved"></i></div>
                 <h4 class="mb-1">Manage Sys</h4>
                 <div class="small" style="color:var(--sb-text)">Khu vực dành riêng cho quản trị viên</div>
+                <div class="small mt-1" style="color:var(--sb-text);opacity:.7"><i class="fa-solid fa-lock me-1"></i>Mọi lượt đăng nhập đều được ghi nhật ký</div>
             </div>
             <div class="card auth-card mx-auto">
                 <div class="card-body p-4">
@@ -83,6 +90,7 @@
                 <div class="text-truncate">
                     <div class="name text-truncate">{{ request.user.full_name|default:request.user.username }}</div>
                     <small class="text-truncate d-block">{{ request.user.email }}</small>
+                    {% if request.user.is_superuser %}<span class="role-badge role-superuser">Superuser</span>{% else %}<span class="role-badge role-admin">Admin</span>{% endif %}
                 </div>
             </div>
             <form method="post" action="{% url 'manage_sys:logout' %}" class="mb-0">

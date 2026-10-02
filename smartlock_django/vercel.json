@@ -2,7 +2,8 @@
   "builds": [
     {
       "src": "smartlock_django/wsgi.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": { "maxLambdaSize": "100mb" }
     }
   ],
   "routes": [

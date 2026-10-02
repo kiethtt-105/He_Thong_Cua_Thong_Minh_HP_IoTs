@@ -216,6 +216,7 @@ Thêm thiết bị
         <div class="card mb-4 border-danger-subtle">
             <div class="card-header text-danger">Vùng nguy hiểm</div>
             <div class="card-body d-grid gap-3">
+                <div class="small text-muted"><i class="fa-solid fa-triangle-exclamation me-1 text-danger"></i>Cần gõ đúng mã thiết bị và nhập lại mật khẩu. Sai mật khẩu sẽ bị ghi log và tính vào bộ đếm khoá tài khoản.</div>
                 {% if device.owner %}
                 <form method="post" onsubmit="return confirm('Gỡ chủ và vô hiệu hóa MỌI quyền truy cập, thẻ, PIN, khuôn mặt của khoá này?')">{% csrf_token %}<input type="hidden" name="action" value="remove_owner">
                     <label class="form-label small mb-1">Gỡ chủ sở hữu</label>

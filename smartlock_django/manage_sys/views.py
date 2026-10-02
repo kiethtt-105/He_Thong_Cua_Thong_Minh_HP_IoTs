@@ -252,6 +252,7 @@ def users_list(request):
     for u in page_obj:
         u.is_locked = u.pk in locked_ids
         u.is_manager_role = has_manage_role(u)
+        u.role = 'superuser' if u.is_superuser else ('admin' if u.is_manager_role else 'user')
 
     return _render(request, 'user_list', {
         'page_obj': page_obj, 'qs': qs_str, 'q': q, 'status': status,
@@ -278,9 +279,14 @@ def user_detail(request, user_id):
             messages.error(request, denied)
             return back
 
-        if action in ('grant_admin', 'revoke_admin') and not check_reauth(request):
-            messages.error(request, REAUTH_ERROR)
-            return back
+        if action in ('grant_admin', 'revoke_admin'):
+            # Gõ lại đúng email của tài khoản đích: chống bấm nhầm người.
+            if (request.POST.get('confirm') or '').strip().lower() != target.email.lower():
+                messages.error(request, 'Nhập đúng email của tài khoản này vào ô xác nhận.')
+                return back
+            if not check_reauth(request):
+                messages.error(request, REAUTH_ERROR)
+                return back
 
         if action == 'toggle_active':
             with transaction.atomic():
@@ -328,6 +334,9 @@ def user_detail(request, user_id):
                 except services.AuditWriteError:
                     messages.error(request, AUDIT_ERROR)
                     return back
+                notify(target, 'Bạn được cấp quyền quản trị',
+                       'Tài khoản của bạn vừa được Superuser cấp quyền quản trị. Nếu bạn không biết việc này, '
+                       'hãy liên hệ Superuser ngay.', severity='warning', type_='SECURITY')
                 messages.success(request, 'Đã cấp quyền quản trị.')
             else:
                 if not has_manage_role(target):
@@ -344,7 +353,10 @@ def user_detail(request, user_id):
                 except services.AuditWriteError:
                     messages.error(request, AUDIT_ERROR)
                     return back
-                messages.success(request, 'Đã thu hồi quyền quản trị.')
+                revoked = revoke_mobile_sessions(target)   # cắt luôn phiên app di động đang mở
+                notify(target, 'Quyền quản trị đã bị thu hồi',
+                       'Tài khoản của bạn không còn quyền quản trị.', severity='warning', type_='SECURITY')
+                messages.success(request, f'Đã thu hồi quyền quản trị (thu hồi {revoked} phiên app).')
         else:
             messages.error(request, 'Hành động không hợp lệ.')
         return back
@@ -362,6 +374,8 @@ def user_detail(request, user_id):
         'lock': lock,
         'is_locked': bool(lock.locked_until and lock.locked_until > now),
         'target_is_manager': has_manage_role(target),
+        'target_role': 'superuser' if target.is_superuser else ('admin' if has_manage_role(target) else 'user'),
+        'owned_count': Device.objects.filter(owner=target).count(),
         'deny_reason': modify_denied_reason(request.user, target),
         'can_sensitive': request.user.is_superuser,   # template ẩn nút cấp/thu hồi admin nếu False
         'devices': Device.objects.filter(owner=target).order_by('name'),

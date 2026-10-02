@@ -40,14 +40,11 @@ postgrest==2.31.0
 propcache==0.5.2
 psycopg==3.3.6
 psycopg-binary==3.3.6
-psycopg2-binary==2.9.13
 pyasn1==0.6.4
 pyasn1_modules==0.4.2
 pycparser==3.0
 pydantic==2.13.5
 pydantic_core==2.46.5
-pydot==4.0.1
-pygraphviz==2.0.2
 PyJWT==2.14.0
 pyOpenSSL==26.4.0
 PyOTP==2.10.0

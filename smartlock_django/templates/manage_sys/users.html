@@ -13,7 +13,7 @@ Người dùng
 Quản lý Người dùng
 {% elif page == 'user_detail' %}
 <span class="text-break">{{ target.email }}</span>
-    {% if target_is_manager %}<span class="badge text-bg-dark align-middle">Admin</span>{% endif %}
+    {% if target_role == 'superuser' %}<span class="role-badge role-superuser">Superuser</span>{% elif target_role == 'admin' %}<span class="role-badge role-admin">Admin</span>{% endif %}
     {% if target.is_active %}<span class="badge text-bg-success align-middle">Hoạt động</span>{% else %}<span class="badge text-bg-secondary align-middle">Không hoạt động</span>{% endif %}
     {% if is_locked %}<span class="badge text-bg-danger align-middle">Bị khóa</span>{% endif %}
 {% else %}{{ block.super }}{% endif %}
@@ -28,7 +28,7 @@ Quản lý Người dùng
         <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Chưa kích hoạt / vô hiệu</option>
         <option value="unverified" {% if status == 'unverified' %}selected{% endif %}>Chưa xác thực email</option>
         <option value="locked" {% if status == 'locked' %}selected{% endif %}>Đang bị khóa đăng nhập</option>
-        <option value="admin" {% if status == 'admin' %}selected{% endif %}>Quản trị viên</option>
+        <option value="admin" {% if status == 'admin' %}selected{% endif %}>Quản trị viên (Admin + Superuser)</option>
     </select>
     <div class="d-flex gap-2">
         <button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button>
@@ -43,7 +43,7 @@ Quản lý Người dùng
             <tbody>
             {% for u in page_obj %}
                 <tr>
-                    <td class="text-break">{{ u.email }} {% if u.is_manager_role %}<span class="badge text-bg-dark">Admin</span>{% endif %}</td>
+                    <td class="text-break">{{ u.email }} {% if u.role == 'superuser' %}<span class="role-badge role-superuser">Superuser</span>{% elif u.role == 'admin' %}<span class="role-badge role-admin">Admin</span>{% endif %}</td>
                     <td>{{ u.username }}</td>
                     <td>{{ u.full_name|default:"—" }}</td>
                     <td class="text-center">{{ u.device_count }}</td>
@@ -89,7 +89,7 @@ Quản lý Người dùng
                     <dt>Họ tên</dt><dd>{{ target.full_name|default:"—" }}</dd>
                     <dt>SĐT</dt><dd>{{ target.phone|default:"—" }}</dd>
                     <dt>Email xác thực</dt><dd>{{ target.email_verified|yesno:"Có,Chưa" }}</dd>
-                    <dt>Quyền</dt><dd>{% if target.is_superuser %}Superuser{% elif target.is_admin or target.is_staff %}Admin{% else %}User{% endif %}</dd>
+                    <dt>Quyền</dt><dd>{% if target_role == 'superuser' %}Superuser{% elif target_role == 'admin' %}Admin{% else %}User{% endif %}</dd>
                     <dt>Đăng ký</dt><dd>{{ target.created_at|date:"d/m/Y H:i" }}</dd>
                     <dt>Cập nhật</dt><dd>{{ target.updated_at|date:"d/m/Y H:i" }}</dd>
                     {% if lock %}
@@ -119,22 +119,39 @@ Quản lý Người dùng
                         <button class="btn btn-outline-warning w-100"><i class="fa-solid fa-lock-open me-2"></i>Mở khóa đăng nhập</button>
                     </form>
                     {% endif %}
-                    {% if request.user.is_superuser %}
-                        {% if target_is_manager %}
-                        <form method="post" onsubmit="return confirm('Thu hồi TOÀN BỘ quyền quản trị của tài khoản này?')">
-                            {% csrf_token %}<input type="hidden" name="action" value="revoke_admin">
-                            <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
-                            <button class="btn btn-outline-danger w-100"><i class="fa-solid fa-user-shield me-2"></i>Thu hồi quyền quản trị</button>
-                        </form>
-                        {% else %}
-                        <form method="post" onsubmit="return confirm('Cấp quyền quản trị cho tài khoản này?')">
-                            {% csrf_token %}<input type="hidden" name="action" value="grant_admin">
-                            <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
-                            <button class="btn btn-outline-primary w-100"><i class="fa-solid fa-user-shield me-2"></i>Cấp quyền quản trị</button>
-                        </form>
-                        {% endif %}
-                    {% endif %}
                 </div>
+
+                {% if request.user.is_superuser %}
+                <div class="danger-zone p-3 mt-3">
+                    <div class="dz-title mb-2"><i class="fa-solid fa-user-shield me-1"></i>Quyền quản trị</div>
+                    {% if target_is_manager %}
+                    <p class="small text-muted mb-2">Thu hồi sẽ gỡ <strong>toàn bộ</strong> cờ quản trị và cắt các phiên app di động của tài khoản này.</p>
+                    <form method="post" onsubmit="return confirm('Thu hồi TOÀN BỘ quyền quản trị của tài khoản này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="revoke_admin">
+                        <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Gõ lại email: {{ target.email }}" required autocomplete="off" autocapitalize="none">
+                        <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+                        <button class="btn btn-danger btn-sm w-100"><i class="fa-solid fa-user-slash me-2"></i>Thu hồi quyền quản trị</button>
+                    </form>
+                    {% else %}
+                    {% if not target.is_active %}
+                        <div class="alert alert-warning small py-2 mb-0">Cần kích hoạt tài khoản trước khi cấp quyền quản trị.</div>
+                    {% elif owned_count %}
+                        <div class="alert alert-warning small py-2 mb-0">Tài khoản đang là chủ của <strong>{{ owned_count }}</strong> khoá. Tài khoản quản trị không được làm chủ khoá, hãy gỡ chủ các khoá đó trước.</div>
+                    {% else %}
+                    <p class="small text-muted mb-2">Admin xem và vận hành được hầu hết hệ thống, nhưng <strong>không</strong> được cấp/thu hồi quyền, xoay secret, gỡ chủ khoá hay đổi cài đặt.</p>
+                    <form method="post" onsubmit="return confirm('Cấp quyền quản trị cho tài khoản này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="grant_admin">
+                        <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Gõ lại email: {{ target.email }}" required autocomplete="off" autocapitalize="none">
+                        <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+                        <button class="btn btn-primary btn-sm w-100"><i class="fa-solid fa-user-shield me-2"></i>Cấp quyền quản trị</button>
+                    </form>
+                    {% endif %}
+                    {% endif %}
+                    <div class="form-text mt-2">Nhập sai mật khẩu sẽ bị ghi log và tính vào bộ đếm khoá tài khoản của bạn.</div>
+                </div>
+                {% else %}
+                <div class="alert alert-secondary small mt-3 mb-0"><i class="fa-solid fa-lock me-1"></i>Cấp/thu hồi quyền quản trị chỉ dành cho Superuser.</div>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
