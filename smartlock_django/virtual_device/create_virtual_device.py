@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Tạo thiết bị ảo trong DB, IN thông tin ra màn hình và ghi sẵn VDEV_CODE/VDEV_SECRET vào virtual_device/.env.
+Tạo thiết bị ảo trong DB, IN thông tin ra màn hình và ghi sẵn VDEV_CODE/VDEV_SECRET vào .env CHUNG của server.
 Các bước còn lại (gán chủ, mở/khoá...) admin tự làm trên web.
 
     python virtual_device/create_virtual_device.py --code SL-DEMO-001 --name "Cửa demo"
@@ -25,7 +25,9 @@ from smartlock.services import hash_token  # noqa: E402
 
 
 def write_env(code, secret):
-    path, keep = HERE / '.env', []
+    """Ghi VDEV_CODE/VDEV_SECRET vào .env CHUNG của server (<repo>/.env), giữ nguyên các dòng khác."""
+    path = HERE.parent.parent / '.env'
+    keep = []
     if path.exists():
         keep = [l for l in path.read_text(encoding='utf-8').splitlines()
                 if not l.startswith(('VDEV_CODE=', 'VDEV_SECRET='))]
@@ -39,7 +41,7 @@ def main():
     p.add_argument('--name', default='Khoá ảo demo')
     p.add_argument('--mac', default='AA:BB:CC:00:00:01')
     p.add_argument('--rotate', action='store_true', help='thiết bị đã tồn tại: đặt secret mới')
-    p.add_argument('--no-env', action='store_true', help='không ghi virtual_device/.env')
+    p.add_argument('--no-env', action='store_true', help='không ghi .env')
     p.add_argument('--json', action='store_true')
     a = p.parse_args()
     code, secret = a.code.strip().upper(), secrets.token_hex(16)

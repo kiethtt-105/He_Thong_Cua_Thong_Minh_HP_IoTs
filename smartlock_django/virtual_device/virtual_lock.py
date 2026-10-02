@@ -339,7 +339,11 @@ class VirtualLock:
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
+    # Dùng CHUNG .env với server: <repo>/.env (file settings.py đọc) -> smartlock_django/.env.
+    # virtual_device/.env (nếu có) chỉ để ghi đè riêng cho khoá ảo. File đọc trước thắng.
     load_dotenv(os.path.join(here, '.env'))
+    load_dotenv(os.path.join(here, '..', '..', '.env'))
+    load_dotenv(os.path.join(here, '..', '.env'))
     e = os.environ.get
     p = argparse.ArgumentParser(description='Khoá thông minh ảo (MQTT)')
     p.add_argument('--code', default=e('VDEV_CODE'), help='device_code (cũng là MQTT username)')

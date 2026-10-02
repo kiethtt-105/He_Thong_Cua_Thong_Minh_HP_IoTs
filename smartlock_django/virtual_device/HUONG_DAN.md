@@ -22,14 +22,16 @@ cd D:\.GitHub\He_Thong_Cua_Thong_Minh_HP_IoTs\smartlock_django
 pip install -r virtual_device\requirements.txt
 python manage.py check            # hoặc: python check_project.py
 ```
-Cần có `.env` của server ở thư mục gốc repo (DJANGO_SECRET_KEY, FERNET_KEY, MQTT_*).
+**Dùng chung 1 file `.env`**: `D:\.GitHub\He_Thong_Cua_Thong_Minh_HP_IoTs\.env` (file server đang dùng).
+Khoá ảo đọc `MQTT_HOST`, `MQTT_PORT` từ đó; `VDEV_CODE`, `VDEV_SECRET` được script tạo thiết bị tự thêm vào cuối file
+(giữ nguyên các dòng khác). `virtual_device\.env` không bắt buộc, chỉ dùng nếu muốn ghi đè riêng cho khoá ảo.
 
 ## 3. Tạo thiết bị ảo
 ```powershell
 python virtual_device\create_virtual_device.py --code SL-DEMO-001 --name "Cửa demo"
 ```
 In ra mã, tên, loại, MAC, trạng thái và **SECRET** (chỉ hiện 1 lần); tự ghi `VDEV_CODE`/`VDEV_SECRET`
-vào `virtual_device\.env`. Thiết bị đã tạo ở web (Loại = *Thiết bị ảo*) thì thêm `--rotate` để lấy secret.
+vào `.env` chung. Thiết bị đã tạo ở web (Loại = *Thiết bị ảo*) thì thêm `--rotate` để lấy secret.
 
 ## 4. Chạy hệ thống (mỗi cửa sổ terminal riêng)
 1. Broker: `mosquitto -c virtual_device\mosquitto.dev.conf`
@@ -37,7 +39,7 @@ vào `virtual_device\.env`. Thiết bị đã tạo ở web (Loại = *Thiết b
 3. Subscriber MQTT của dự án (như bạn vẫn chạy)
 4. Khoá ảo – chọn 1:
    - **VS Code (có giao diện):** mục 5
-   - **Terminal:** `python virtual_device\virtual_lock.py` (đọc code/secret từ `.env`)
+   - **Terminal:** `python virtual_device\virtual_lock.py` (đọc code/secret/MQTT từ `.env` chung)
 
 ## 5. Giao diện trong VS Code
 1. Mở thư mục `virtual_device\vscode-extension` bằng VS Code → **F5** → cửa sổ mới → *Open Folder* `smartlock_django`.
