@@ -9,6 +9,7 @@ import math
 import secrets
 
 from cryptography.fernet import InvalidToken
+from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.core.paginator import Paginator
 from django.utils import timezone
@@ -57,9 +58,11 @@ def is_manager(user):
     return bool(user and user.is_authenticated and user.is_active and has_manage_role(user))
 
 
-# Thao tác NHẠY CẢM: chỉ Superuser được làm. Admin thường có quyền xem + vận hành gần như Superuser
-# nhưng KHÔNG chạm được các thao tác này (cấp/thu hồi quyền quản trị, đổi secret thiết bị, gỡ chủ khoá
-# -> huỷ luôn thẻ NFC / PIN / khuôn mặt của chủ). Muốn nới/siết quyền admin chỉ cần sửa tập này.
+# Thao tác NHẠY CẢM (cấp/thu hồi quyền quản trị, đổi secret thiết bị, gỡ chủ khoá, đổi cài đặt).
+# settings.ADMIN_FULL_POWER = True (mặc định): MỌI tài khoản quản trị có quyền cao nhất, làm được tất cả.
+# Đặt ADMIN_FULL_POWER=False để quay lại chính sách cũ: các thao tác này chỉ dành cho Superuser.
+# Các lớp bảo vệ KHÔNG đổi: nhập lại mật khẩu + gõ xác nhận, audit strict, không tự thao tác lên chính mình,
+# không để hệ thống mất superuser cuối cùng.
 SUPERUSER_ONLY_ACTIONS = frozenset({'grant_admin', 'revoke_admin', 'rotate_secret', 'remove_owner',
                                      'update_settings'})
 
@@ -68,19 +71,26 @@ def is_superuser_role(user):
     return bool(user and user.is_authenticated and user.is_active and user.is_superuser)
 
 
+def has_full_power(user):
+    """Quyền cao nhất: Superuser, hoặc bất kỳ admin đang hoạt động khi ADMIN_FULL_POWER bật."""
+    if is_superuser_role(user):
+        return True
+    return bool(getattr(settings, 'ADMIN_FULL_POWER', True) and is_manager(user))
+
+
 def action_denied_reason(actor, action):
     """Lý do KHÔNG được làm `action` (thao tác nhạy cảm), hoặc None nếu được phép."""
-    if action in SUPERUSER_ONLY_ACTIONS and not actor.is_superuser:
+    if action in SUPERUSER_ONLY_ACTIONS and not has_full_power(actor):
         return 'Thao tác nhạy cảm: chỉ Superuser mới được thực hiện.'
     return None
 
 
 def modify_denied_reason(actor, target):
     """Trả về lý do KHÔNG được sửa target, hoặc None nếu được phép.
-    Admin quản lý được mọi tài khoản (kể cả admin khác); riêng tài khoản Superuser chỉ Superuser mới đụng được."""
+    Admin quản lý được mọi tài khoản (kể cả admin khác); tài khoản Superuser cần quyền cao nhất (has_full_power)."""
     if actor.pk == target.pk:
         return 'Không thể tự thao tác lên chính tài khoản của bạn.'
-    if target.is_superuser and not actor.is_superuser:
+    if target.is_superuser and not has_full_power(actor):
         return 'Chỉ Superuser mới được thao tác lên tài khoản Superuser.'
     return None
 
@@ -127,6 +137,16 @@ def check_reauth(request):
     register_failure(user, ip)
     audit(request, 'MANAGE_REAUTH_FAILED', success=False, severity='warning')
     return False
+
+
+def confirm_sensitive(request, expected, *, upper=False):
+    """Gộp 2 lớp xác nhận của thao tác nguy hiểm: (1) gõ đúng `expected` (email / mã thiết bị) vào ô `confirm`,
+    (2) nhập lại mật khẩu. Trả (ok, lỗi) - lỗi là 'confirm' hoặc 'reauth' để view chọn thông báo."""
+    typed = (request.POST.get('confirm') or '').strip()
+    exp = (expected or '').strip()
+    if (typed.upper() != exp.upper()) if upper else (typed.lower() != exp.lower()):
+        return False, 'confirm'
+    return (True, None) if check_reauth(request) else (False, 'reauth')
 
 
 # ---------- Phiên app di động ----------

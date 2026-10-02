@@ -1,27 +1,27 @@
 # manage_sys/urls.py
 from django.urls import path
 
-from . import views
+from . import views as v
 
 app_name = 'manage_sys'
 
 urlpatterns = [
-    path('', views.dashboard, name='dashboard'),
-    path('login/', views.login_view, name='login'),
-    path('logout/', views.logout_view, name='logout'),
+    path('', v.dashboard, name='dashboard'),
+    path('login/', v.login_view, name='login'),
+    path('logout/', v.logout_view, name='logout'),
 
-    path('users/', views.users_list, name='users'),
-    path('users/<uuid:user_id>/', views.user_detail, name='user-detail'),
+    path('users/', v.users_list, name='users'),
+    path('users/<uuid:user_id>/', v.user_detail, name='user-detail'),
 
-    path('devices/', views.devices_list, name='devices'),
-    path('devices/new/', views.device_create, name='device-create'),
-    path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
-    path('devices/<uuid:device_id>/link/', views.device_link_status, name='device-link'),
-    path('devices/<uuid:device_id>/secret/', views.device_secret, name='device-secret'),
+    path('devices/', v.devices_list, name='devices'),
+    path('devices/new/', v.device_create, name='device-create'),
+    path('devices/<uuid:device_id>/', v.device_detail, name='device-detail'),
+    path('devices/<uuid:device_id>/link/', v.device_link_status, name='device-link'),
+    path('devices/<uuid:device_id>/secret/', v.device_secret, name='device-secret'),
 
-    path('logs/', views.audit_logs, name='logs'),
-    path('logs/logins/', views.login_attempts, name='login-attempts'),
+    path('logs/', v.audit_logs, name='logs'),
+    path('logs/logins/', v.login_attempts, name='login-attempts'),
 
-    path('announcements/', views.announcements, name='announcements'),
-    path('settings/', views.settings_system, name='settings'),
+    path('announcements/', v.announcements, name='announcements'),
+    path('settings/', v.settings_system, name='settings'),
 ]

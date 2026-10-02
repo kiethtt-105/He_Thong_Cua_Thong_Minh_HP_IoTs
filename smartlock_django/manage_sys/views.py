@@ -33,7 +33,7 @@ from smartlock.models import (
 from .decorators import manage_required
 from .helpers import (
     LOGIN_FAIL_ACTIONS, action_denied_reason, audit, burn_password_hash, check_reauth, client_ip,
-    decorate_login_attempt, has_manage_role, is_manager, is_new_login_ip,
+    confirm_sensitive, decorate_login_attempt, has_full_power, has_manage_role, is_manager, is_new_login_ip,
     lock_remaining_minutes, login_attempts_qs, modify_denied_reason, notify, paginate, pop_secret,
     register_failure, reset_lockout, revoke_mobile_sessions, stash_secret,
 )
@@ -67,11 +67,22 @@ PAGE_TEMPLATE = {
     "login": "base"
 }
 
+# Tiêu đề tĩnh của từng trang (tab trình duyệt + h4). Trang chi tiết tự override block page_title trong template.
+PAGE_TITLES = {
+    "user_list": "Quản lý Người dùng", "user_detail": "Người dùng",
+    "device_list": "Quản lý Thiết bị", "device_create": "Thêm thiết bị",
+    "device_created": "Đã tạo thiết bị", "device_detail": "Thiết bị",
+    "dashboard": "Tổng quan hệ thống", "audit_logs": "Nhật ký hệ thống",
+    "audit_logins": "Lượt đăng nhập", "announcements": "Thông báo hệ thống",
+    "settings": "Cài đặt hệ thống",
+}
+
 
 def _render(request, page, context=None, **kwargs):
     """_render(request, 'user_list', ctx) -> manage_sys/users.html với page='user_list'."""
     ctx = dict(context or {})
     ctx['page'] = page
+    ctx.setdefault('page_heading', PAGE_TITLES.get(page, ''))
     return render(request, f'manage_sys/{PAGE_TEMPLATE[page]}.html', ctx, **kwargs)
 
 
@@ -280,12 +291,11 @@ def user_detail(request, user_id):
             return back
 
         if action in ('grant_admin', 'revoke_admin'):
-            # Gõ lại đúng email của tài khoản đích: chống bấm nhầm người.
-            if (request.POST.get('confirm') or '').strip().lower() != target.email.lower():
-                messages.error(request, 'Nhập đúng email của tài khoản này vào ô xác nhận.')
-                return back
-            if not check_reauth(request):
-                messages.error(request, REAUTH_ERROR)
+            # Gõ lại đúng email của tài khoản đích (chống bấm nhầm người) + nhập lại mật khẩu.
+            ok, err = confirm_sensitive(request, target.email)
+            if not ok:
+                messages.error(request, REAUTH_ERROR if err == 'reauth'
+                               else 'Nhập đúng email của tài khoản này vào ô xác nhận.')
                 return back
 
         if action == 'toggle_active':
@@ -314,9 +324,6 @@ def user_detail(request, user_id):
             messages.success(request, 'Đã mở khóa đăng nhập.')
 
         elif action in ('grant_admin', 'revoke_admin'):
-            if not request.user.is_superuser:
-                messages.error(request, 'Chỉ Superuser mới được thay đổi quyền quản trị.')
-                return back
             if action == 'grant_admin':
                 if not target.is_active:
                     messages.error(request, 'Hãy kích hoạt tài khoản trước khi cấp quyền quản trị.')
@@ -377,7 +384,7 @@ def user_detail(request, user_id):
         'target_role': 'superuser' if target.is_superuser else ('admin' if has_manage_role(target) else 'user'),
         'owned_count': Device.objects.filter(owner=target).count(),
         'deny_reason': modify_denied_reason(request.user, target),
-        'can_sensitive': request.user.is_superuser,   # template ẩn nút cấp/thu hồi admin nếu False
+        'can_sensitive': has_full_power(request.user),   # template ẩn nút cấp/thu hồi admin nếu False
         'devices': Device.objects.filter(owner=target).order_by('name'),
         'accesses': (DeviceAccess.objects.filter(user=target, is_active=True)
                      .select_related('device').order_by('-created_at')[:10]),
@@ -479,8 +486,6 @@ def _device_actions(request, device):
     """Xử lý POST ở trang chi tiết thiết bị. Trả về response (redirect/render) hoặc None."""
     back = redirect('manage_sys:device-detail', device_id=device.id)
     action = request.POST.get('action')
-    confirm = (request.POST.get('confirm') or '').strip().upper()
-    expected = (device.device_code or '').upper()
 
     denied = action_denied_reason(request.user, action)
     if denied:
@@ -543,11 +548,10 @@ def _device_actions(request, device):
         return back
 
     if action == 'remove_owner':
-        if confirm != expected:
-            messages.error(request, 'Nhập đúng mã thiết bị vào ô xác nhận để gỡ chủ.')
-            return back
-        if not check_reauth(request):
-            messages.error(request, REAUTH_ERROR)
+        ok, err = confirm_sensitive(request, device.device_code, upper=True)
+        if not ok:
+            messages.error(request, REAUTH_ERROR if err == 'reauth'
+                           else 'Nhập đúng mã thiết bị vào ô xác nhận để gỡ chủ.')
             return back
         try:
             with transaction.atomic():
@@ -569,11 +573,10 @@ def _device_actions(request, device):
         return back
 
     if action == 'rotate_secret':
-        if confirm != expected:
-            messages.error(request, 'Nhập đúng mã thiết bị vào ô xác nhận để xoay secret.')
-            return back
-        if not check_reauth(request):
-            messages.error(request, REAUTH_ERROR)
+        ok, err = confirm_sensitive(request, device.device_code, upper=True)
+        if not ok:
+            messages.error(request, REAUTH_ERROR if err == 'reauth'
+                           else 'Nhập đúng mã thiết bị vào ô xác nhận để xoay secret.')
             return back
         try:
             with transaction.atomic():
@@ -626,7 +629,7 @@ def device_detail(request, device_id):
         'readers': NfcReader.objects.filter(device=device).order_by('-created_at'),
         'logs': (AuditLog.objects.filter(device=device)
                  .select_related('actor_user').order_by('-created_at')[:10]),
-        'can_sensitive': request.user.is_superuser,   # template ẩn nút xoay secret / gỡ chủ nếu False
+        'can_sensitive': has_full_power(request.user),   # template ẩn nút xoay secret / gỡ chủ nếu False
         # ---- Admin xem được toàn bộ: chỉ METADATA, không bao giờ đưa hash PIN / UID thẻ / embedding / ảnh ra ----
         'cards': (CardDeviceAccess.objects.filter(device=device)
                   .select_related('access_card', 'access_card__user')
@@ -780,7 +783,7 @@ def announcements(request):
 @manage_required
 @require_http_methods(['GET', 'POST'])
 def settings_system(request):
-    st = services.system_settings()
+    st = services.SystemSettings.objects.get_or_create(pk=1)[0]   # bản tươi (không dùng bản cache để sửa)
 
     if request.method == 'POST':
         denied = action_denied_reason(request.user, 'update_settings')
@@ -827,6 +830,7 @@ def settings_system(request):
                 st.login_lockout_stage_minutes = stages
                 st.updated_by = request.user
                 st.save()
+                services.invalidate_system_settings()
                 audit(request, 'MANAGE_SETTINGS_UPDATED', severity='warning', strict=True,
                       metadata={'registration_enabled': [was_registration, st.registration_enabled],
                                 'before': before,
@@ -839,6 +843,6 @@ def settings_system(request):
 
     return _render(request, 'settings', {
         'st': st,
-        'can_edit': request.user.is_superuser,   # admin thường chỉ xem
+        'can_edit': has_full_power(request.user),   # ADMIN_FULL_POWER=False -> admin thường chỉ xem
         'stages_text': ', '.join(str(x) for x in (st.login_lockout_stage_minutes or [])),
     })

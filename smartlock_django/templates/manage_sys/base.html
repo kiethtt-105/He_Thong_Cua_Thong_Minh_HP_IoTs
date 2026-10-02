@@ -2,9 +2,9 @@
 {% comment %}
     Manage Sys dùng chung layout.html của project (CSS, token, script, WebView helper).
     Chỉ override block `shell` để thay sidebar/bottom-nav bằng menu quản trị.
-    Các trang con dùng: title, page_title, page_sub, page_actions, content, scripts.
+    Tiêu đề lấy từ `page_heading` (PAGE_TITLES trong views); trang con chỉ override page_title khi tiêu đề động. Còn dùng:  page_sub, page_actions, content, scripts.
 {% endcomment %}
-{% block title %}{% if page == 'login' %}Đăng nhập quản trị{% else %}Quản trị{% endif %}{% endblock %}
+{% block title %}{% if page == 'login' %}Đăng nhập quản trị{% else %}{{ page_heading|default:'Quản trị' }}{% endif %}{% endblock %}
 
 {% block extra_head %}{% if page == 'login' %}<meta name="robots" content="noindex,nofollow">{% else %}
 <style>
@@ -109,7 +109,7 @@
         <main class="main">
             <div class="page-head">
                 <div class="page-head-l">
-                    <div class="min-w-0"><h4 class="page-title">{% block page_title %}{% endblock %}</h4>{% block page_sub %}{% endblock %}</div>
+                    <div class="min-w-0"><h4 class="page-title">{% block page_title %}{{ page_heading }}{% endblock %}</h4>{% block page_sub %}{% endblock %}</div>
                 </div>
                 <div>{% block page_actions %}{% endblock %}</div>
             </div>

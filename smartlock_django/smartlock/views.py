@@ -478,7 +478,7 @@ def sync_bootstrap(request):
                     .order_by('-recorded_at').values('lock_state')[:1])
     devices = list(_accessible_devices(user).annotate(last_lock_state=Subquery(_latest_lock))
                    .order_by('name'))
-    device_ids = [d.id for d in devices]
+    perms = services.permission_map(user, devices)        # 1 truy vấn cho mọi khoá (trước: 1 truy vấn/khoá)
 
     devices_json = [{
         'id': str(d.id), 'name': d.name, 'device_code': d.device_code,
@@ -486,7 +486,7 @@ def sync_bootstrap(request):
         'battery_level': d.battery_level,
         'lock_state': d.last_lock_state or 'unknown',
         'location': d.location or '', 'is_owner': d.owner_id == user.id,
-        'permissions': sorted(services.permission_codes(user, d)),
+        'permissions': sorted(perms[d.id]),
         'updated_at': d.updated_at.isoformat(),
     } for d in devices]
 
@@ -525,67 +525,14 @@ def sync_bootstrap(request):
 # ====================== DEVICES ======================
 @auth_required
 def device_add(request):
-    if request.method == 'POST':
-        name = (request.POST.get('name') or '').strip()[:100]
-        if not name:
-            messages.error(request, 'Tên thiết bị không được để trống.')
-            return redirect('smartlock:devices-list')
-
-        device_code = f'DEV-{secrets.token_hex(4).upper()}'
-        while Device.objects.filter(device_code=device_code).exists():
-            device_code = f'DEV-{secrets.token_hex(4).upper()}'
-
-        # Secret chỉ hiện 1 lần cho người dùng, DB chỉ lưu hash.
-        provisioning_secret = secrets.token_hex(16)
-        device = Device.objects.create(
-            name=name,
-            device_code=device_code,
-            provisioning_secret_hash=_hash_token(provisioning_secret),
-            # constraint chk_devices_owner_vs_status: 'provisioning' bắt buộc owner=NULL,
-            # còn ở đây đã gán owner nên phải dùng trạng thái khác.
-            status='offline',
-            device_mode='simulated',   # tạo từ web = thiết bị giả lập; khoá thật dùng device_claim
-            owner=request.user,
-            bluetooth_enabled=True,
-            wifi_enabled=True,
-            nfc_enabled=True,
-            battery_level=100,
-        )
-
-        _audit(request, 'DEVICE_ADDED', device=device, metadata={'device_code': device_code})
-        _notify(request.user, 'Thiết bị mới đã được tạo',
-                f'Dữ liệu thiết bị đã được khởi tạo. Vui lòng cấu hình device code: {device_code}',
-                device=device, type_='DEVICE')
-
-        device_url = request.build_absolute_uri(reverse('smartlock:device-detail', args=[device.id]))
-
-        # Email cho chủ thiết bị.
-        ctx = {
-            'full_name': request.user.full_name or request.user.username,
-            'device_name': device.name,
-            'device_code': device.device_code,
-            'action_url': device_url,
-        }
-        subject, html, plain_text = render_email('device_added.html', ctx)
-        _send_mail(subject, plain_text, html, request.user.email)
-
-        # Email báo cho quản trị viên biết có thiết bị mới cần theo dõi/kích hoạt.
-        admin_ctx = {
-            'user_email': request.user.email,
-            'device_code': device.device_code,
-            'action_url': request.build_absolute_uri(
-                reverse('smartlock:audit-logs')) + f'?all=1&q=DEVICE_ADDED',
-        }
-        admin_subject, admin_html, admin_plain = render_email('admin_device_approval.html', admin_ctx)
-        for admin in _admins():
-            _send_mail(admin_subject, admin_plain, admin_html, admin.email)
-
-        messages.success(request, f'Đã thêm thiết bị "{name}". Device code: {device_code} — '
-                                  f'Provisioning secret: {provisioning_secret} '
-                                  '(chỉ hiển thị một lần, hãy lưu lại).')
-        return redirect('smartlock:devices-list')
-
-    return _render(request, 'device_add')
+    """Đã đóng: CHỈ quản trị viên được tạo khoá mới (/manage-sys/devices/new/ hoặc Django admin).
+    Quản trị đăng ký khoá vào hệ thống rồi (a) gán thẳng cho chủ, hoặc (b) chủ tự thêm bằng mã thiết bị + secret
+    ở trang \"Thêm khoá\" (device_claim). Giữ route này để link/nút cũ không gây lỗi."""
+    _audit(request, 'DEVICE_ADD_BLOCKED', success=False, severity='warning',
+           metadata={'method': request.method})
+    messages.info(request, 'Khoá mới do quản trị viên đăng ký. Nếu quản trị đã đăng ký khoá cho bạn, '
+                           'hãy nhập mã thiết bị + secret để thêm vào tài khoản.')
+    return redirect('smartlock:device-claim')
 
 
 @auth_required
@@ -1794,8 +1741,10 @@ def face_profile_delete(request, profile_id):
 @auth_required
 def dashboard(request):
     user = request.user
-    devices = _accessible_devices(user).order_by('name')
-    current = _pick_device(devices, request.GET.get('device'))
+    devices_qs = _accessible_devices(user).order_by('name')
+    devices = list(devices_qs)       # tải 1 lần; chọn/đếm bằng Python (trước: 4 truy vấn). QuerySet đã có cache kết quả
+    wanted = _parse_uuid(request.GET.get('device'))
+    current = next((d for d in devices if d.id == wanted), None) or (devices[0] if devices else None)
 
     caps = None
     if current:
@@ -1811,15 +1760,15 @@ def dashboard(request):
         .annotate(d=TruncDate('created_at')).values('d').annotate(c=Count('id'))
     }
     context = {
-        'devices': devices,
+        'devices': devices_qs,           # giữ kiểu QuerySet (template cũ có thể gọi .count); đã cache nên không truy vấn lại
         'current_device': current,
         'caps': caps,
-        'total_devices': devices.count(),
-        'online_devices': devices.filter(status='online').count(),
+        'total_devices': len(devices),
+        'online_devices': sum(1 for d in devices if d.status == 'online'),
         'unread_count': Notification.objects.filter(user=user, is_read=False).count(),
-        'recent_notifications': Notification.objects.filter(user=user).order_by('-created_at')[:4],
-        'recent_logs': _visible_logs(user).select_related('device').order_by('-created_at')[:6],
-        'announcements': Announcement.objects.filter(is_active=True).order_by('-created_at')[:3],
+        'recent_notifications': list(Notification.objects.filter(user=user).order_by('-created_at')[:4]),
+        'recent_logs': list(_visible_logs(user).select_related('device').order_by('-created_at')[:6]),
+        'announcements': list(Announcement.objects.filter(is_active=True).order_by('-created_at')[:3]),
         'chart_data': {'labels': [d.strftime('%d/%m') for d in days],
                        'values': [counts.get(d, 0) for d in days]},
     }
@@ -1965,7 +1914,9 @@ def nfc_tags(request):
     """Thẻ của MÌNH (đổi tên/bật-tắt/xoá) + thẻ đang gắn vào các khoá mình có quyền manage_nfc
     (chủ khoá hoặc người được chia sẻ quyền này được bật/tắt thẻ đó TRÊN KHOÁ của họ)."""
     user = request.user
-    managed_ids = set(services.devices_with_permission(user, 'manage_nfc').values_list('id', flat=True))
+    managed = list(services.devices_with_permission(user, 'manage_nfc').values_list('id', 'owner_id'))
+    managed_ids = {i for i, _ in managed}                       # khoá mình được dùng tính năng thẻ
+    owned_ids = {i for i, o in managed if o == user.id}         # khoá mình là CHỦ (mới thấy thẻ của người khác)
 
     if request.method == 'POST':
         action = request.POST.get('action')
@@ -2002,7 +1953,8 @@ def nfc_tags(request):
             device_id = _parse_uuid(request.POST.get('device_id'))
             link = (CardDeviceAccess.objects.select_related('device')
                     .filter(access_card=card, device_id=device_id).first())
-            if not link or link.device_id not in managed_ids:
+            # Chủ khoá bật/tắt được thẻ của mọi người trên khoá của mình; người khác chỉ thẻ CỦA MÌNH.
+            if not link or not (link.device_id in owned_ids or (mine and link.device_id in managed_ids)):
                 _audit(request, 'CARD_LINK_DENIED', success=False, severity='warning',
                        metadata={'card_id': str(card.id), 'device_id': str(device_id)})
                 messages.error(request, 'Bạn không có quyền quản lý thẻ trên khoá này.')
@@ -2016,13 +1968,13 @@ def nfc_tags(request):
         return redirect('smartlock:nfc-tags')
 
     cards = list(AccessCard.objects
-                 .filter(Q(user=user) | Q(carddeviceaccess__device_id__in=managed_ids)).distinct()
+                 .filter(Q(user=user) | Q(carddeviceaccess__device_id__in=owned_ids)).distinct()
                  .select_related('user').prefetch_related('carddeviceaccess_set__device')
                  .order_by('-created_at'))
     for c in cards:
         c.is_mine = c.user_id == user.id
         # Thẻ của người khác: chỉ hiện các khoá mà mình quản lý, không lộ khoá khác của họ.
-        c.visible_links = [l for l in c.carddeviceaccess_set.all() if c.is_mine or l.device_id in managed_ids]
+        c.visible_links = [l for l in c.carddeviceaccess_set.all() if c.is_mine or l.device_id in owned_ids]
     return _render(request, 'nfc_tags', {'access_cards': cards, 'can_manage_any': bool(managed_ids)})
 
 
@@ -2126,8 +2078,9 @@ def nfc_reader(request):
         'device': device,
         'is_owner': is_owner,
         'readers': NfcReader.objects.filter(device=device).order_by('-created_at') if device else [],
-        'nfc_logs': NfcLog.objects.filter(device=device).select_related('nfc_tag', 'reader')
-                    .order_by('-created_at')[:10] if device else [],
+        'nfc_logs': (NfcLog.objects.filter(device=device).select_related('nfc_tag', 'reader')
+                     .filter(**({} if is_owner else {'user': user}))      # không phải chủ: chỉ log của chính mình
+                     .order_by('-created_at')[:10]) if device else [],
     }
     return _render(request, 'nfc_reader', context)
 
@@ -2173,7 +2126,13 @@ def shares_manage(request):
             return redirect('smartlock:shares')
 
         back = lambda: _redirect_with('smartlock:shares', device=device.id)
-        perms = list(Permission.objects.filter(code__in=request.POST.getlist('permissions')))
+        # Chọn vai trò mẫu (preset) thì dùng bộ quyền của vai trò đó; không chọn thì dùng các ô tích tay.
+        preset = (request.POST.get('preset') or '').strip()
+        if preset and services.preset_codes(preset) is None:
+            messages.error(request, 'Vai trò mẫu không hợp lệ.')
+            return back()
+        wanted_codes = services.preset_codes(preset) if preset else request.POST.getlist('permissions')
+        perms = list(Permission.objects.filter(code__in=wanted_codes))
         perm_codes = sorted(p.code for p in perms)
 
         if action == 'grant':
@@ -2252,6 +2211,7 @@ def shares_manage(request):
         'permissions': Permission.objects.order_by('name'),
         'accesses': accesses,          # những người ĐANG được mình chia sẻ (khoá đang chọn)
         'my_accesses': my_accesses,    # những khoá được CHIA SẺ CHO mình
+        **services.permission_form_context(),   # permission_groups, role_presets, owner_only_actions
     }
     return _render(request, 'shares', context)
 
@@ -2295,7 +2255,10 @@ def door_pins(request):
             return _redirect_with('smartlock:door-pins', device=device.id)
 
         if action == 'revoke':
-            pin = DoorPinCode.objects.filter(id=_parse_uuid(request.POST.get('pin_id')), device=device).first()
+            pin_qs = DoorPinCode.objects.filter(id=_parse_uuid(request.POST.get('pin_id')), device=device)
+            if device.owner_id != request.user.id:
+                pin_qs = pin_qs.filter(created_by=request.user)     # không phải chủ: chỉ thu hồi mã mình tạo
+            pin = pin_qs.first()
             if not pin:
                 messages.error(request, 'Không tìm thấy mã PIN.')
             else:
@@ -2305,8 +2268,12 @@ def door_pins(request):
             return _redirect_with('smartlock:door-pins', device=device.id)
         return _redirect_with('smartlock:door-pins', device=device.id)
 
-    pins = (DoorPinCode.objects.filter(device=device).select_related('created_by').order_by('-created_at')[:50]
-            if device else DoorPinCode.objects.none())
+    pins = DoorPinCode.objects.none()
+    if device:
+        pins = DoorPinCode.objects.filter(device=device).select_related('created_by')
+        if device.owner_id != request.user.id:
+            pins = pins.filter(created_by=request.user)             # không phải chủ: chỉ thấy mã mình tạo
+        pins = pins.order_by('-created_at')[:50]
     return _render(request, 'door_pins', {'device_list': devices, 'device': device, 'door_pins': pins})
 
 
@@ -2329,26 +2296,9 @@ def face_profiles(request):
         action = request.POST.get('action')
 
         if action == 'register':
-            if not request.POST.get('consent_confirmed'):
-                messages.error(request, 'Cần xác nhận người được đăng ký đã đồng ý thu thập dữ liệu khuôn mặt.')
-                return _redirect_with('smartlock:face-profiles', device=device.id)
-            try:
-                embedding = json.loads(request.POST.get('embedding_json') or '[]')
-                assert isinstance(embedding, list) and len(embedding) >= 32
-                embedding = [float(x) for x in embedding]
-                assert all(math.isfinite(x) for x in embedding)
-            except Exception:
-                _audit(request, 'FACE_PROFILE_INVALID_EMBEDDING', device=device, success=False, severity='warning')
-                messages.error(request, 'Dữ liệu khuôn mặt không hợp lệ. Hãy chụp lại.')
-                return _redirect_with('smartlock:face-profiles', device=device.id)
-            name = (request.POST.get('name') or user.full_name or user.username)[:100]
-            services.register_face(device=device, user=user, embedding=embedding,
-                                   name=name, consent_confirmed=True, request=request)
-            if device.owner_id != user.id:
-                _notify(device.owner, 'Có khuôn mặt mới trên khoá của bạn',
-                        f'{user.username} vừa đăng ký khuôn mặt cho "{device.name}".',
-                        device=device, type_='FACE')
-            messages.success(request, 'Đã đăng ký khuôn mặt.')
+            # Luồng cũ (người dùng dán vector đặc trưng) đã bỏ: vector phải do camera trích xuất, người dùng
+            # không nhìn thấy/không nhập. Đăng ký bằng nút "Quét khuôn mặt" (gọi smartlock:face-enroll).
+            messages.error(request, 'Hãy dùng nút "Quét khuôn mặt" để đăng ký bằng camera.')
             return _redirect_with('smartlock:face-profiles', device=device.id)
 
         if action == 'toggle':
@@ -2373,7 +2323,45 @@ def face_profiles(request):
         profiles = FaceProfile.objects.filter(device=device).select_related('user').order_by('-created_at')
         if device.owner_id != user.id:
             profiles = profiles.filter(user=user)
-    return _render(request, 'face_profiles', {'device_list': devices, 'device': device, 'face_profiles': profiles})
+    return _render(request, 'face_profiles', {
+        'device_list': devices, 'device': device, 'face_profiles': profiles,
+        'face_enroll_url': reverse('smartlock:face-enroll'),
+        'face_min_frames': services.FACE_MIN_FRAMES,
+    })
+
+
+@auth_required
+@require_POST
+def face_enroll(request):
+    """Nhận kết quả QUÉT khuôn mặt (JSON) từ trình duyệt/app: {device, name, consent_confirmed, embeddings:[[128 số] x N]}.
+    Camera + trích vector chạy ở phía client (ảnh không rời máy, không lưu ảnh); server kiểm tra chất lượng, lấy
+    trung bình, mã hoá rồi lưu (NĐ 13/2023). Người dùng không thấy và không nhập vector."""
+    if len(request.body) > 64 * 1024:
+        return JsonResponse({'ok': False, 'message': 'Dữ liệu quá lớn.'}, status=413)
+    data = _json_body(request)
+    if not isinstance(data, dict):
+        return JsonResponse({'ok': False, 'message': 'Yêu cầu không hợp lệ.'}, status=400)
+    user = request.user
+    devices = services.devices_with_permission(user, 'manage_face_profiles')
+    device = _pick_device(devices, data.get('device'), strict=True)
+    if not device:
+        _audit(request, 'FACE_PROFILE_CREATE_DENIED', success=False, severity='warning')
+        return JsonResponse({'ok': False, 'message': 'Không tìm thấy khoá hoặc bạn không có quyền đăng ký khuôn mặt.'},
+                            status=403)
+    if data.get('consent_confirmed') is not True:
+        return JsonResponse({'ok': False, 'message': 'Cần xác nhận người được đăng ký đã đồng ý thu thập dữ liệu khuôn mặt.'},
+                            status=400)
+    name = str(data.get('name') or user.full_name or user.username)[:100]
+    try:
+        profile = services.enroll_face(device, user, data.get('embeddings'), name=name, request=request)
+    except services.FaceEnrollError as exc:
+        _audit(request, 'FACE_PROFILE_ENROLL_FAILED', device=device, success=False, severity='warning',
+               metadata={'code': exc.code})
+        return JsonResponse({'ok': False, 'message': exc.message, 'code': exc.code}, status=422)
+    if device.owner_id != user.id:
+        _notify(device.owner, 'Có khuôn mặt mới trên khoá của bạn',
+                f'{user.username} vừa đăng ký khuôn mặt cho "{device.name}".', device=device, type_='FACE')
+    return JsonResponse({'ok': True, 'message': 'Đã đăng ký khuôn mặt.', 'profile_id': str(profile.id)})
 
 
 # ====================== LỊCH SỬ RA VÀO ======================

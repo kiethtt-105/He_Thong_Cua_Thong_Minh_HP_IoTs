@@ -1,17 +1,8 @@
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
-{# Gộp: user_list, user_detail. View truyền biến `page`. #}
-{% block title %}
-{% if page == 'user_list' %}
-Người dùng
-{% elif page == 'user_detail' %}
-Người dùng
-{% else %}{{ block.super }}{% endif %}
-{% endblock %}
+{# Gộp: user_list, user_detail (biến `page`). Tiêu đề tĩnh: PAGE_TITLES trong views. #}
 {% block page_title %}
-{% if page == 'user_list' %}
-Quản lý Người dùng
-{% elif page == 'user_detail' %}
+{% if page == 'user_detail' %}
 <span class="text-break">{{ target.email }}</span>
     {% if target_role == 'superuser' %}<span class="role-badge role-superuser">Superuser</span>{% elif target_role == 'admin' %}<span class="role-badge role-admin">Admin</span>{% endif %}
     {% if target.is_active %}<span class="badge text-bg-success align-middle">Hoạt động</span>{% else %}<span class="badge text-bg-secondary align-middle">Không hoạt động</span>{% endif %}
@@ -30,10 +21,7 @@ Quản lý Người dùng
         <option value="locked" {% if status == 'locked' %}selected{% endif %}>Đang bị khóa đăng nhập</option>
         <option value="admin" {% if status == 'admin' %}selected{% endif %}>Quản trị viên (Admin + Superuser)</option>
     </select>
-    <div class="d-flex gap-2">
-        <button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button>
-        <a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary">Xóa lọc</a>
-    </div>
+    {% include 'manage_sys/_filter_btns.html' with reset='manage_sys:users' %}
 </form>
 
 <div class="card">
@@ -57,27 +45,13 @@ Quản lý Người dùng
                     <td class="text-end"><a href="{% url 'manage_sys:user-detail' u.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
                 </tr>
             {% empty %}
-                <tr><td colspan="7"><div class="empty-state"><div class="ei"><i class="fa-solid fa-users"></i></div><h6>Không tìm thấy người dùng nào</h6><div class="small">Thử đổi từ khóa hoặc bỏ bộ lọc.</div></div></td></tr>
+                {% include 'manage_sys/_empty_state.html' with cols=7 icon="users" title="Không tìm thấy người dùng nào" hint="Thử đổi từ khóa hoặc bỏ bộ lọc." %}
             {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
-{% if page_obj.paginator.num_pages > 1 %}
-<nav class="mt-3" aria-label="Phân trang">
-    <ul class="pagination pagination-sm justify-content-center mb-0">
-        {% if page_obj.has_previous %}
-        <li class="page-item"><a class="page-link" href="?page=1{{ qs }}" aria-label="Trang đầu">«</a></li>
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{{ qs }}" aria-label="Trang trước">‹</a></li>
-        {% endif %}
-        <li class="page-item disabled"><span class="page-link">Trang {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} ({{ page_obj.paginator.count }} mục)</span></li>
-        {% if page_obj.has_next %}
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{{ qs }}" aria-label="Trang sau">›</a></li>
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{{ qs }}" aria-label="Trang cuối">»</a></li>
-        {% endif %}
-    </ul>
-</nav>
-{% endif %}
+{% include 'manage_sys/_pager.html' %}
 {% elif page == 'user_detail' %}
 <div class="row g-4">
     <div class="col-lg-4">
@@ -121,7 +95,7 @@ Quản lý Người dùng
                     {% endif %}
                 </div>
 
-                {% if request.user.is_superuser %}
+                {% if can_sensitive %}
                 <div class="danger-zone p-3 mt-3">
                     <div class="dz-title mb-2"><i class="fa-solid fa-user-shield me-1"></i>Quyền quản trị</div>
                     {% if target_is_manager %}
@@ -150,7 +124,7 @@ Quản lý Người dùng
                     <div class="form-text mt-2">Nhập sai mật khẩu sẽ bị ghi log và tính vào bộ đếm khoá tài khoản của bạn.</div>
                 </div>
                 {% else %}
-                <div class="alert alert-secondary small mt-3 mb-0"><i class="fa-solid fa-lock me-1"></i>Cấp/thu hồi quyền quản trị chỉ dành cho Superuser.</div>
+                <div class="alert alert-secondary small mt-3 mb-0"><i class="fa-solid fa-lock me-1"></i>Cấp/thu hồi quyền quản trị cần quyền cao nhất (Superuser).</div>
                 {% endif %}
                 {% endif %}
             </div>
@@ -165,7 +139,7 @@ Quản lý Người dùng
                 <tbody>
                 {% for d in devices %}
                 <tr><td class="mono">{{ d.device_code }}</td><td>{{ d.name }}</td><td><span class="badge text-bg-{{ d.status|badge }}">{{ d.status|vi }}</span></td><td>{{ d.battery_level }}%</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'manage_sys:device-detail' d.id %}">Xem</a></td></tr>
-                {% empty %}<tr><td colspan="5" class="text-center text-muted py-3">Chưa sở hữu thiết bị nào</td></tr>{% endfor %}
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=5 text="Chưa sở hữu thiết bị nào" %}{% endfor %}
                 </tbody></table></div>
         </div>
 
@@ -176,7 +150,7 @@ Quản lý Người dùng
                 <tbody>
                 {% for a in accesses %}
                 <tr><td>{{ a.device.name }}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
-                {% empty %}<tr><td colspan="3" class="text-center text-muted py-3">Không có</td></tr>{% endfor %}
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=3 text="Không có" %}{% endfor %}
                 </tbody></table></div>
         </div>
 
@@ -188,8 +162,8 @@ Quản lý Người dùng
                         <thead><tr><th>Thời gian</th><th>IP</th><th>KQ</th></tr></thead>
                         <tbody>
                         {% for a in login_attempts %}
-                        <tr><td>{{ a.created_at|date:"d/m H:i" }}</td><td class="mono">{{ a.ip_address }}</td><td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td></tr>
-                        {% empty %}<tr><td colspan="3" class="text-center text-muted py-3">Chưa có</td></tr>{% endfor %}
+                        <tr><td>{{ a.created_at|date:"d/m H:i" }}</td><td class="mono">{{ a.ip_address }}</td><td>{% include 'manage_sys/_ok.html' with ok=a.success %}</td></tr>
+                        {% empty %}{% include 'manage_sys/_empty_row.html' with cols=3 text="Chưa có" %}{% endfor %}
                         </tbody></table></div>
                 </div>
             </div>
@@ -201,7 +175,7 @@ Quản lý Người dùng
                         <tbody>
                         {% for l in logs %}
                         <tr><td>{{ l.created_at|date:"d/m H:i" }}</td><td class="mono text-break">{{ l.action }}</td></tr>
-                        {% empty %}<tr><td colspan="2" class="text-center text-muted py-3">Chưa có</td></tr>{% endfor %}
+                        {% empty %}{% include 'manage_sys/_empty_row.html' with cols=2 text="Chưa có" %}{% endfor %}
                         </tbody></table></div>
                 </div>
             </div>

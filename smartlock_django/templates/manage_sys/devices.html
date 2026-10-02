@@ -1,28 +1,7 @@
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
-{# Gộp: device_list, device_create, device_created, device_detail. View truyền biến `page`. #}
-{% block title %}
-{% if page == 'device_list' %}
-Thiết bị
-{% elif page == 'device_create' %}
-Thêm thiết bị
-{% elif page == 'device_created' %}
-Đã tạo thiết bị
-{% elif page == 'device_detail' %}
-Thiết bị
-{% else %}{{ block.super }}{% endif %}
-{% endblock %}
-{% block page_title %}
-{% if page == 'device_list' %}
-Quản lý Thiết bị
-{% elif page == 'device_create' %}
-Thêm thiết bị
-{% elif page == 'device_created' %}
-Đã tạo thiết bị
-{% elif page == 'device_detail' %}
-{{ device.name }} <span class="badge text-bg-{{ device.status|badge }} align-middle">{{ device.status|vi }}</span>
-{% else %}{{ block.super }}{% endif %}
-{% endblock %}
+{# Gộp: device_list, device_create, device_created, device_detail (biến `page`). Tiêu đề tĩnh: PAGE_TITLES trong views. #}
+{% block page_title %}{% if page == 'device_detail' %}{{ device.name }} <span class="badge text-bg-{{ device.status|badge }} align-middle">{{ device.status|vi }}</span>{% else %}{{ block.super }}{% endif %}{% endblock %}
 {% block page_actions %}
 {% if page == 'device_list' %}
 <a href="{% url 'manage_sys:device-create' %}" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus me-1"></i> Thêm thiết bị</a>
@@ -47,10 +26,7 @@ Thêm thiết bị
         <option value="physical" {% if mode == 'physical' %}selected{% endif %}>Thiết bị thật</option>
         <option value="simulated" {% if mode == 'simulated' %}selected{% endif %}>Mô phỏng</option>
     </select>
-    <div class="d-flex gap-2">
-        <button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button>
-        <a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary">Xóa lọc</a>
-    </div>
+    {% include 'manage_sys/_filter_btns.html' with reset='manage_sys:devices' %}
 </form>
 
 <div class="card">
@@ -70,27 +46,13 @@ Thêm thiết bị
                     <td class="text-end"><a href="{% url 'manage_sys:device-detail' d.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
                 </tr>
             {% empty %}
-                <tr><td colspan="8"><div class="empty-state"><div class="ei"><i class="fa-solid fa-plug"></i></div><h6>Không có thiết bị nào</h6><div class="small">Thử đổi từ khóa hoặc bỏ bộ lọc.</div></div></td></tr>
+                {% include 'manage_sys/_empty_state.html' with cols=8 icon="plug" title="Không có thiết bị nào" hint="Thử đổi từ khóa hoặc bỏ bộ lọc." %}
             {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
-{% if page_obj.paginator.num_pages > 1 %}
-<nav class="mt-3" aria-label="Phân trang">
-    <ul class="pagination pagination-sm justify-content-center mb-0">
-        {% if page_obj.has_previous %}
-        <li class="page-item"><a class="page-link" href="?page=1{{ qs }}" aria-label="Trang đầu">«</a></li>
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.previous_page_number }}{{ qs }}" aria-label="Trang trước">‹</a></li>
-        {% endif %}
-        <li class="page-item disabled"><span class="page-link">Trang {{ page_obj.number }} / {{ page_obj.paginator.num_pages }} ({{ page_obj.paginator.count }} mục)</span></li>
-        {% if page_obj.has_next %}
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.next_page_number }}{{ qs }}" aria-label="Trang sau">›</a></li>
-        <li class="page-item"><a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{{ qs }}" aria-label="Trang cuối">»</a></li>
-        {% endif %}
-    </ul>
-</nav>
-{% endif %}
+{% include 'manage_sys/_pager.html' %}
 {% elif page == 'device_create' %}
 <div class="row">
     <div class="col-lg-6">
@@ -259,7 +221,7 @@ Thêm thiết bị
                 <thead><tr><th>Người dùng</th><th>Quyền</th><th>Nguồn</th><th>Hết hạn</th></tr></thead>
                 <tbody>
                 {% for a in accesses %}<tr><td class="text-break">{{ a.user.email }}</td><td>{% for p in a.permissions.all %}<span class="badge text-bg-light border">{{ p.code }}</span> {% empty %}—{% endfor %}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
-                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa chia sẻ cho ai</td></tr>{% endfor %}
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=4 text="Chưa chia sẻ cho ai" %}{% endfor %}
                 </tbody></table></div>
         </div>
 
@@ -269,7 +231,7 @@ Thêm thiết bị
                 <thead><tr><th>Tên</th><th>Loại</th><th>Hoạt động</th><th>Thấy lần cuối</th></tr></thead>
                 <tbody>
                 {% for r in readers %}<tr><td>{{ r.name|default:"—" }}</td><td>{{ r.reader_mode|vi }}</td><td>{{ r.is_active|yesno:"Có,Không" }}</td><td>{{ r.last_seen_at|date:"d/m H:i"|default:"—" }}</td></tr>
-                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có đầu đọc</td></tr>{% endfor %}
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=4 text="Chưa có đầu đọc" %}{% endfor %}
                 </tbody></table></div>
         </div>
 
@@ -279,7 +241,7 @@ Thêm thiết bị
                 <thead><tr><th>Tên thẻ</th><th>Chủ thẻ</th><th>Hoạt động</th><th>Gán lúc</th></tr></thead>
                 <tbody>
                 {% for c in cards %}<tr><td>{{ c.access_card.name|default:"—" }}</td><td class="text-break">{{ c.access_card.user.email }}</td><td>{{ c.is_active|yesno:"Có,Không" }}</td><td>{{ c.created_at|date:"d/m/Y H:i" }}</td></tr>
-                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có thẻ</td></tr>{% endfor %}
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=4 text="Chưa có thẻ" %}{% endfor %}
                 </tbody></table></div>
             <div class="card-footer small text-muted">Không hiển thị UID thẻ.</div>
         </div>
@@ -290,7 +252,7 @@ Thêm thiết bị
                 <thead><tr><th>Nhãn</th><th>Người tạo</th><th>Hết hạn</th><th>Đã dùng</th><th>Trạng thái</th></tr></thead>
                 <tbody>
                 {% for p in pins %}<tr><td>{{ p.label|default:"—" }}</td><td class="text-break">{{ p.created_by.email }}</td><td>{{ p.expires_at|date:"d/m/Y H:i" }}</td><td>{{ p.use_count }}/{{ p.max_uses }}</td><td>{% if p.is_revoked %}<span class="badge text-bg-secondary">Đã thu hồi</span>{% else %}<span class="badge text-bg-success">Còn hiệu lực</span>{% endif %}</td></tr>
-                {% empty %}<tr><td colspan="5" class="text-center text-muted py-3">Chưa có mã PIN</td></tr>{% endfor %}
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=5 text="Chưa có mã PIN" %}{% endfor %}
                 </tbody></table></div>
             <div class="card-footer small text-muted">Không hiển thị giá trị PIN (chỉ lưu hash).</div>
         </div>
@@ -301,7 +263,7 @@ Thêm thiết bị
                 <thead><tr><th>Tên</th><th>Người dùng</th><th>Hoạt động</th><th>Đã đồng ý</th><th>Tạo lúc</th></tr></thead>
                 <tbody>
                 {% for f in faces %}<tr><td>{{ f.name|default:"—" }}</td><td class="text-break">{{ f.user.email }}</td><td>{{ f.is_active|yesno:"Có,Không" }}</td><td>{{ f.consent_confirmed|yesno:"Có,Không" }}</td><td>{{ f.created_at|date:"d/m/Y H:i" }}</td></tr>
-                {% empty %}<tr><td colspan="5" class="text-center text-muted py-3">Chưa có khuôn mặt</td></tr>{% endfor %}
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=5 text="Chưa có khuôn mặt" %}{% endfor %}
                 </tbody></table></div>
             <div class="card-footer small text-muted">Không hiển thị dữ liệu khuôn mặt (embedding đã mã hoá).</div>
         </div>
@@ -311,8 +273,8 @@ Thêm thiết bị
             <div class="table-responsive"><table class="table mb-0">
                 <thead><tr><th>Thời gian</th><th>Cách mở</th><th>Người dùng</th><th>Kết quả</th></tr></thead>
                 <tbody>
-                {% for e in access_events %}<tr><td>{{ e.created_at|date:"d/m H:i" }}</td><td>{{ e.method|vi }}</td><td class="text-break">{{ e.user.email|default:"—" }}</td><td>{% if e.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span> <small class="text-muted">{{ e.reason|default:"" }}</small>{% endif %}</td></tr>
-                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có lượt ra vào</td></tr>{% endfor %}
+                {% for e in access_events %}<tr><td>{{ e.created_at|date:"d/m H:i" }}</td><td>{{ e.method|vi }}</td><td class="text-break">{{ e.user.email|default:"—" }}</td><td>{% include 'manage_sys/_ok.html' with ok=e.success %}{% if not e.success %} <small class="text-muted">{{ e.reason|default:"" }}</small>{% endif %}</td></tr>
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=4 text="Chưa có lượt ra vào" %}{% endfor %}
                 </tbody></table></div>
         </div>
 
@@ -322,7 +284,7 @@ Thêm thiết bị
                 <thead><tr><th>Thời gian</th><th>Lệnh</th><th>Người gửi</th><th>Trạng thái</th></tr></thead>
                 <tbody>
                 {% for c in commands %}<tr><td>{{ c.created_at|date:"d/m H:i" }}</td><td>{{ c.command_type }}</td><td class="text-break">{{ c.issued_by.email }}</td><td>{{ c.status }}</td></tr>
-                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có lệnh</td></tr>{% endfor %}
+                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=4 text="Chưa có lệnh" %}{% endfor %}
                 </tbody></table></div>
         </div>
 

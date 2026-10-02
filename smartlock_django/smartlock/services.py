@@ -20,6 +20,7 @@ import math
 import os
 import re
 import secrets
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -28,7 +29,7 @@ from typing import Optional
 
 from django.conf import settings
 from django.core.mail import send_mail as _django_send_mail
-from django.db import transaction
+from django.db import connections, transaction
 from django.db.models import F, Q
 from django.db.models.signals import post_save
 from django.template.loader import render_to_string
@@ -51,7 +52,22 @@ logger = logging.getLogger('smartlock.services')
 MAX_FAILED_ATTEMPTS = 5          # đăng nhập sai bao nhiêu lần thì khoá tài khoản tạm
 
 
+# SMTP qua SSL mất 1-3 giây/mail (bắt tay TLS tới máy chủ mail) và chặn luôn response của view.
+# Chạy local/VPS: gửi ở luồng nền (mặc định). Vercel/serverless: hàm bị đóng băng ngay sau khi trả response nên
+# luồng nền có thể mất mail -> mặc định gửi đồng bộ; muốn nhanh hơn hãy dùng API mail qua HTTPS (Resend/SendGrid...).
+EMAIL_ASYNC = os.environ.get('EMAIL_ASYNC', '' if os.environ.get('VERCEL') else '1').strip().lower() in ('1', 'true', 'yes')
+
+
 def send_mail(subject, plain, html, to, log_body=True) -> bool:
+    """Trả True nếu đã gửi (chế độ nền: True = đã xếp hàng gửi, lỗi sẽ chỉ ghi log)."""
+    if EMAIL_ASYNC:
+        threading.Thread(target=_send_mail_now, args=(subject, plain, html, to, log_body),
+                         name='send-mail', daemon=True).start()
+        return True
+    return _send_mail_now(subject, plain, html, to, log_body)
+
+
+def _send_mail_now(subject, plain, html, to, log_body=True) -> bool:
     # log_body=False: không ghi nội dung mail vào log (dùng cho mail chứa mã OTP)
     logger.info('send_mail: to=%s subject=%r plain_preview=%r', to, subject,
                 plain[:200] if log_body else '<ẩn nội dung>')
@@ -155,13 +171,17 @@ def audit(request, action, *, device=None, target_user=None, success=True,
         snapshot.setdefault('target_email', target_user.email)
     if device is not None:
         snapshot.setdefault('device_code', device.device_code)
+    fields = dict(
+        actor_user=actor, target_user=target_user, device=device, action=action[:50],
+        username_attempt=username_attempt, severity=severity, success=success,
+        ip_address=client_ip(request), user_agent=user_agent(request), metadata=snapshot or None,
+    )
     try:
-        with transaction.atomic():  # savepoint: lỗi ghi log không làm hỏng transaction bên ngoài
-            AuditLog.objects.create(
-                actor_user=actor, target_user=target_user, device=device, action=action[:50],
-                username_attempt=username_attempt, severity=severity, success=success,
-                ip_address=client_ip(request), user_agent=user_agent(request), metadata=snapshot or None,
-            )
+        if connections['default'].in_atomic_block:
+            with transaction.atomic():  # savepoint: lỗi ghi log không làm hỏng transaction bên ngoài
+                AuditLog.objects.create(**fields)
+        else:                           # autocommit: 1 INSERT là đủ (atomic() sẽ tốn thêm BEGIN + COMMIT)
+            AuditLog.objects.create(**fields)
     except Exception as exc:
         logger.exception('audit: không ghi được log %s', action)
         if strict:
@@ -198,24 +218,109 @@ def has_permission(user, device, code) -> bool:
 # Chủ khoá luôn có đủ mọi quyền. Người được chia sẻ chỉ có đúng các quyền chủ chọn lúc chia sẻ.
 # (code, tên hiển thị, mô tả, nhạy cảm?)
 PERMISSION_CATALOG = [
-    ('UNLOCK', 'Mở khoá từ xa', 'Mở cửa qua Internet (trình duyệt hoặc app).', False),
-    ('LOCK', 'Khoá từ xa', 'Khoá cửa qua Internet (trình duyệt hoặc app).', False),
-    ('BLUETOOTH', 'Mở bằng Bluetooth', 'Dùng điện thoại mở cửa khi đứng gần (app xin vé BLE).', False),
-    ('NFC_PHONE', 'Mở bằng NFC trên điện thoại', 'Điện thoại giả lập thẻ NFC để chạm đầu đọc.', False),
-    ('manage_nfc', 'Quản lý thẻ NFC', 'Đăng ký thẻ của mình, bật/tắt thẻ trên khoá này.', True),
-    ('manage_pins', 'Quản lý mã PIN', 'Cấp/thu hồi mã PIN để khách bấm trên bàn phím.', True),
-    ('manage_face_profiles', 'Quản lý khuôn mặt', 'Đăng ký khuôn mặt được phép mở cửa.', True),
-    ('view_history', 'Xem lịch sử ra vào', 'Xem nhật ký mở cửa và nhận popup khi cửa mở.', False),
+    ('UNLOCK', 'Mở khoá từ xa (Internet)',
+     'Bấm nút MỞ trên web/app khi khoá đang online và bật Wi-Fi.', False),
+    ('LOCK', 'Khoá cửa từ xa (Internet)',
+     'Bấm nút KHOÁ trên web/app khi khoá đang online và bật Wi-Fi.', False),
+    ('BLUETOOTH', 'Mở bằng Bluetooth (app điện thoại)',
+     'App xin vé Bluetooth để mở khi đứng gần cửa. Vé hết hạn sau 1 giờ.', False),
+    ('NFC_PHONE', 'Mở bằng NFC điện thoại (app)',
+     'Điện thoại giả lập thẻ NFC để chạm đầu đọc. Vé hết hạn sau 1 giờ.', False),
+    ('manage_nfc', 'Đăng ký thẻ NFC CỦA RIÊNG MÌNH',
+     'Thêm/đổi tên/bật-tắt/xoá thẻ do chính người này đăng ký trên khoá. Không thấy và không đụng được thẻ của người khác.', True),
+    ('manage_face_profiles', 'Đăng ký khuôn mặt CỦA RIÊNG MÌNH',
+     'Quét và quản lý khuôn mặt của chính người này trên khoá. Không thấy khuôn mặt của người khác.', True),
+    ('manage_pins', 'Cấp mã PIN cho khách',
+     'Tạo mã PIN cho khách bấm trên bàn phím và thu hồi các mã DO CHÍNH MÌNH TẠO. Không thấy mã của người khác.', True),
+    ('view_history', 'Xem lịch sử ra vào',
+     'Xem toàn bộ nhật ký mở cửa của khoá và nhận popup khi cửa mở.', False),
 ]
 PERMISSION_CODES = tuple(code for code, *_ in PERMISSION_CATALOG)
 
+# Nhóm hiển thị (cho giao diện chia sẻ) + phạm vi của từng quyền: 'device' = tác động lên cả khoá,
+# 'own' = chỉ trên dữ liệu do chính người được chia sẻ tạo. CHỦ KHOÁ luôn thấy/quản lý tất cả.
+PERMISSION_META = {
+    'UNLOCK': {'group': 'open', 'scope': 'device'},
+    'LOCK': {'group': 'open', 'scope': 'device'},
+    'BLUETOOTH': {'group': 'open', 'scope': 'device'},
+    'NFC_PHONE': {'group': 'open', 'scope': 'device'},
+    'manage_nfc': {'group': 'own', 'scope': 'own'},
+    'manage_face_profiles': {'group': 'own', 'scope': 'own'},
+    'manage_pins': {'group': 'guest', 'scope': 'own'},
+    'view_history': {'group': 'watch', 'scope': 'device'},
+}
+PERMISSION_GROUPS = [
+    ('open', 'Mở / khoá cửa', 'Điều khiển cửa trực tiếp.'),
+    ('own', 'Phương tiện mở cửa của chính họ', 'Chỉ thao tác trên thẻ / khuôn mặt do họ tự đăng ký.'),
+    ('guest', 'Cấp quyền cho khách', 'Tạo mã PIN tạm thời cho người khác.'),
+    ('watch', 'Giám sát', 'Xem nhật ký và nhận thông báo.'),
+]
+
+# Vai trò mẫu: chọn 1 vai trò = tích sẵn nhóm quyền hay đi cùng nhau (vẫn chỉnh tay được).
+ROLE_PRESETS = {
+    'viewer': {'label': 'Chỉ xem', 'desc': 'Xem lịch sử ra vào và nhận thông báo cửa mở. Không điều khiển được cửa.',
+               'codes': ['view_history']},
+    'guest': {'label': 'Khách / người thuê', 'desc': 'Mở và khoá cửa từ xa, dùng điện thoại mở cửa. Không xem lịch sử, không quản lý gì.',
+              'codes': ['UNLOCK', 'LOCK', 'BLUETOOTH', 'NFC_PHONE']},
+    'family': {'label': 'Thành viên gia đình', 'desc': 'Như Khách, thêm xem lịch sử và tự đăng ký thẻ NFC + khuôn mặt của mình.',
+               'codes': ['UNLOCK', 'LOCK', 'BLUETOOTH', 'NFC_PHONE', 'view_history', 'manage_nfc',
+                         'manage_face_profiles']},
+    'manager': {'label': 'Người trông nhà', 'desc': 'Như Thành viên gia đình, thêm cấp mã PIN cho khách.',
+                'codes': list(PERMISSION_CODES)},
+}
+# Những việc KHÔNG BAO GIỜ chia sẻ được (chỉ chủ khoá) - hiển thị cho chủ biết ranh giới.
+OWNER_ONLY_ACTIONS = [
+    'Chia sẻ lại / thu hồi quyền của người khác',
+    'Sửa tên, vị trí, bật/tắt Wi-Fi, Bluetooth, NFC của khoá',
+    'Khởi động lại khoá',
+    'Cấu hình đầu đọc NFC và bật đăng ký thẻ bằng quẹt',
+    'Xem, bật/tắt, xoá thẻ - khuôn mặt - mã PIN của người khác',
+]
+
+_perms_synced = False
+
 
 def ensure_default_permissions() -> None:
-    existing = set(Permission.objects.values_list('code', flat=True))
+    """Đồng bộ danh mục quyền vào DB (tạo thiếu + cập nhật tên/mô tả mới). Chỉ chạy 1 lần mỗi tiến trình
+    (trước đây chạy mỗi lần mở trang chia sẻ = 1+ truy vấn thừa)."""
+    global _perms_synced
+    if _perms_synced:
+        return
+    existing = {p.code: p for p in Permission.objects.all()}
     for code, name, desc, sensitive in PERMISSION_CATALOG:
-        if code not in existing:
+        p = existing.get(code)
+        if p is None:
             Permission.objects.get_or_create(
                 code=code, defaults={'name': name, 'description': desc, 'is_sensitive': sensitive})
+        elif (p.name, p.description, p.is_sensitive) != (name, desc, sensitive):
+            Permission.objects.filter(pk=p.pk).update(name=name, description=desc, is_sensitive=sensitive)
+    _perms_synced = True
+
+
+def preset_codes(key):
+    """Mã quyền của vai trò mẫu, hoặc None nếu key không hợp lệ."""
+    preset = ROLE_PRESETS.get(key)
+    return list(preset['codes']) if preset else None
+
+
+def permission_form_context() -> dict:
+    """Dữ liệu cho form chia sẻ: nhóm quyền (kèm phạm vi), vai trò mẫu, ranh giới chỉ-chủ-khoá."""
+    by_code = {p.code: p for p in Permission.objects.filter(code__in=PERMISSION_CODES)}
+    groups = []
+    for gkey, gname, gdesc in PERMISSION_GROUPS:
+        items = []
+        for code, name, desc, sensitive in PERMISSION_CATALOG:
+            meta = PERMISSION_META[code]
+            if meta['group'] == gkey:
+                items.append({'code': code, 'name': name, 'description': desc, 'sensitive': sensitive,
+                              'scope': meta['scope'], 'scope_text': 'chỉ dữ liệu của chính họ' if meta['scope'] == 'own'
+                              else 'toàn bộ khoá', 'id': by_code[code].id if code in by_code else None})
+        groups.append({'key': gkey, 'name': gname, 'description': gdesc, 'items': items})
+    return {
+        'permission_groups': groups,
+        'role_presets': [{'key': k, **v} for k, v in ROLE_PRESETS.items()],
+        'owner_only_actions': OWNER_ONLY_ACTIONS,
+    }
 
 
 def _live_access(user, now):
@@ -236,6 +341,24 @@ def permission_codes(user, device) -> set:
     codes = (_live_access(user, timezone.now()).filter(device=device)
              .values_list('permissions__code', flat=True))
     return {c for c in codes if c}
+
+
+def permission_map(user, devices) -> dict:
+    """{device_id: set(mã quyền)} cho NHIỀU khoá bằng 1 truy vấn (permission_codes từng khoá = N+1 truy vấn)."""
+    out, shared = {}, []
+    for d in devices:
+        if d.owner_id == user.id:
+            out[d.id] = set(PERMISSION_CODES)
+        else:
+            out[d.id] = set()
+            shared.append(d.id)
+    if shared:
+        rows = (_live_access(user, timezone.now()).filter(device_id__in=shared)
+                .values_list('device_id', 'permissions__code'))
+        for device_id, code in rows:
+            if code:
+                out[device_id].add(code)
+    return out
 
 
 def capabilities(user, device) -> dict:
@@ -827,12 +950,15 @@ def register_face(device, user, embedding: list, name: str = '', consent_confirm
     (khoá/camera không có đường đăng ký khuôn mặt)."""
     if not consent_confirmed:
         raise ValueError('Cần xác nhận đồng ý thu thập dữ liệu khuôn mặt.')
+    # embedding_encrypted là BinaryField NOT NULL: phải có sẵn ngay lúc INSERT (update_or_create không kèm nó
+    # sẽ lỗi ở lần đăng ký đầu tiên).
+    probe = FaceProfile()
+    probe.set_embedding(embedding)
     profile, _created = FaceProfile.objects.update_or_create(
         user=user, device=device,
-        defaults={'name': name, 'consent_confirmed': consent_confirmed, 'is_active': True},
+        defaults={'name': name, 'consent_confirmed': consent_confirmed, 'is_active': True,
+                  'embedding_encrypted': probe.embedding_encrypted},
     )
-    profile.set_embedding(embedding)
-    profile.save()
     meta = {'face_profile_id': str(profile.id)}
     if request is not None:
         audit(request, 'FACE_PROFILE_REGISTERED', device=device, target_user=user, metadata=meta)
@@ -840,6 +966,46 @@ def register_face(device, user, embedding: list, name: str = '', consent_confirm
         AuditLog.objects.create(actor_user=user, device=device, action='FACE_PROFILE_REGISTERED',
                                 metadata=meta)
     return profile
+
+
+# Đăng ký khuôn mặt bằng QUÉT: trình duyệt/app mở camera, tự trích vector đặc trưng của vài khung hình rồi gửi lên.
+# Người dùng KHÔNG bao giờ nhìn thấy hay gõ vector. Server kiểm tra chất lượng rồi lưu bản trung bình (đã mã hoá).
+FACE_DIM = 128                  # face-api.js / dlib ResNet: 128 chiều (phải cùng mô hình với bên so khớp ở camera)
+FACE_MIN_FRAMES = 3
+FACE_MAX_FRAMES = 10
+FACE_FRAME_SPREAD_MAX = 0.45    # mỗi khung hình phải cách vector trung bình <= mức này (cùng 1 người, cùng lần quét)
+
+
+class FaceEnrollError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def enroll_face(device, user, vectors, name: str = '', request=None) -> FaceProfile:
+    """vectors: danh sách vector (mỗi vector FACE_DIM số) của các khung hình trong 1 lần quét.
+    Ném FaceEnrollError (message tiếng Việt, hiển thị được cho người dùng)."""
+    if not isinstance(vectors, list) or not (FACE_MIN_FRAMES <= len(vectors) <= FACE_MAX_FRAMES):
+        raise FaceEnrollError('FRAME_COUNT', f'Cần {FACE_MIN_FRAMES}-{FACE_MAX_FRAMES} khung hình. Hãy quét lại.')
+    clean = []
+    for v in vectors:
+        try:
+            vec = [float(x) for x in v]
+        except (TypeError, ValueError):
+            raise FaceEnrollError('BAD_VECTOR', 'Dữ liệu quét không hợp lệ. Hãy quét lại.')
+        if len(vec) != FACE_DIM or not all(math.isfinite(x) and abs(x) < 10 for x in vec):
+            raise FaceEnrollError('BAD_VECTOR', 'Dữ liệu quét không hợp lệ. Hãy quét lại.')
+        if max(vec) - min(vec) < 1e-3:       # vector phẳng/không có thông tin
+            raise FaceEnrollError('BAD_VECTOR', 'Không nhận diện được khuôn mặt rõ ràng. Hãy quét lại.')
+        clean.append(vec)
+    centroid = [sum(col) / len(clean) for col in zip(*clean)]
+    worst = max(_euclidean_distance(v, centroid) for v in clean)
+    if worst > FACE_FRAME_SPREAD_MAX:
+        raise FaceEnrollError('INCONSISTENT', 'Các khung hình không khớp nhau (có thể có nhiều người trong khung hoặc '
+                                              'khuôn mặt bị che/mờ). Hãy quét lại, chỉ một người nhìn thẳng camera.')
+    return register_face(device=device, user=user, embedding=centroid, name=name,
+                         consent_confirmed=True, request=request)
 
 
 # ---------------------------------------------------------------- Điện thoại: Bluetooth + NFC giả lập thẻ (HCE)

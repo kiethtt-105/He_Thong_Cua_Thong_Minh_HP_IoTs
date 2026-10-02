@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 from django.conf import settings
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -23,6 +23,7 @@ def make_user(email, username, **extra):
     return User.objects.create_user(email=email, username=username, password=PW, **extra)
 
 
+@override_settings(ADMIN_FULL_POWER=False)   # các test cũ kiểm tra chính sách Superuser-only
 class ManageSysBase(TestCase):
     def setUp(self):
         self.admin = make_user('admin@example.com', 'admin1', is_admin=True, is_superuser=True)
@@ -555,3 +556,24 @@ class PruneAuditLogsTests(TestCase):
         self.assertIn('A_OLD_CRIT', left)                               # critical giữ 730 ngày
         self.assertNotIn('A_OLD_INFO', left)
         self.assertNotIn('A_VERY_OLD_CRIT', left)
+
+
+@override_settings(ADMIN_FULL_POWER=True)
+class AdminFullPowerTests(ManageSysBase):
+    """ADMIN_FULL_POWER=True: admin thường có quyền cao nhất (thao tác nhạy cảm, đổi cài đặt), vẫn phải nhập lại mật khẩu."""
+    def setUp(self):
+        super().setUp()
+        self.mod = make_user('mod@example.com', 'mod1', is_admin=True)
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'mod@example.com', 'password': PW})
+
+    def test_admin_can_grant_and_revoke_admin(self):
+        url = reverse('manage_sys:user-detail', args=[self.user.id])
+        self.client.post(url, {'action': 'grant_admin', 'confirm': self.user.email, 'current_password': PW})
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_admin)
+
+    def test_reauth_still_required(self):
+        url = reverse('manage_sys:user-detail', args=[self.user.id])
+        self.client.post(url, {'action': 'grant_admin', 'confirm': self.user.email, 'current_password': 'sai'})
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_admin)

@@ -145,8 +145,9 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
     'django_otp.middleware.OTPMiddleware',
-
 ]
+if env_bool("PERF_TIMING", False):   # xem smartlock/perf.py: Server-Timing + log request chậm
+    MIDDLEWARE.insert(0, 'smartlock.perf.ServerTimingMiddleware')
 
 
 # ==================== URL CONFIGURATION ====================
@@ -186,7 +187,9 @@ DATABASES = {
         'PASSWORD': os.environ.get("DB_PASSWORD"),
         'HOST': os.environ.get("DB_HOST"),
         'PORT': os.environ.get("DB_PORT", "6543"),
-        'CONN_MAX_AGE': 0,                        # serverless: không giữ kết nối
+        # Mở kết nối TLS tới Supabase mỗi request tốn ~0.3-1s. Local/VPS: giữ kết nối 60s; Vercel (serverless): 0.
+        'CONN_MAX_AGE': env_int("DB_CONN_MAX_AGE", 0 if os.environ.get("VERCEL") else 60),
+        'CONN_HEALTH_CHECKS': True,               # kết nối cũ bị pooler đóng -> tự mở lại, không lỗi
         'DISABLE_SERVER_SIDE_CURSORS': True,      # bắt buộc với pooler transaction mode
         'OPTIONS': {
             'sslmode': os.environ.get("DB_SSLMODE", "require"),
@@ -203,7 +206,7 @@ DATABASES = {
 # Mất kết nối Supabase: vẫn ĐỌC được từ bản sao, ghi sẽ báo lỗi.
 LOCAL_REPLICA = env_bool("LOCAL_REPLICA", False)
 REPLICA_SYNC_SECONDS = max(1, env_int("REPLICA_SYNC_SECONDS", 2))          # chu kỳ kiểm tra thay đổi (rẻ: 1 truy vấn nhỏ)
-REPLICA_FULL_SYNC_SECONDS = max(10, env_int("REPLICA_FULL_SYNC_SECONDS", 60))   # định kỳ chép lại tất cả để chắc chắn khớp
+REPLICA_FULL_SYNC_SECONDS = max(10, env_int("REPLICA_FULL_SYNC_SECONDS", 300))   # định kỳ chép lại tất cả để chắc chắn khớp
 REPLICA_STICKY_SECONDS = env_int("REPLICA_STICKY_SECONDS", 5)
 # Bảng luôn đọc Supabase (ghi xong đọc lại ngay: phiên đăng nhập, tài khoản, OTP, 2FA, lệnh thiết bị...).
 # Mọi bảng còn lại đọc từ máy. Ghi đè bằng .env: REPLICA_FRESH_MODELS=a,b,c (thay thế hoàn toàn danh sách này).
@@ -235,16 +238,28 @@ if LOCAL_REPLICA:
 
 # ==================== CACHE CONFIGURATION ====================
 # Cần chạy 1 lần: python manage.py createcachetable
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
-        'LOCATION': 'email_cache',
-        'TIMEOUT': 60 * 60 * 24,                  # 1 ngày
-        'OPTIONS': {
-            'MAX_ENTRIES': 10000,
-        },
+if os.environ.get("VERCEL"):
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+            'LOCATION': 'email_cache',
+            'TIMEOUT': 60 * 60 * 24,                  # 1 ngày
+            'OPTIONS': {'MAX_ENTRIES': 10000},
+        }
     }
-}
+else:
+    # Local/VPS 1 tiến trình: cache trong RAM (không tốn 1 vòng mạng tới Supabase cho mỗi lần get/set).
+    # Lưu ý: mỗi tiến trình có cache riêng; nếu chạy nhiều worker gunicorn thì dùng Redis/Memcached.
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'smartlock-local',
+            'TIMEOUT': 60 * 60 * 24,
+            'OPTIONS': {'MAX_ENTRIES': 10000},
+        }
+    }
+    # Session: đọc từ RAM, ghi xuống DB (đăng xuất/xoá session vẫn có hiệu lực).
+    SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
 
 
 # ==================== AUTH CONFIGURATION ====================
@@ -333,6 +348,9 @@ MANAGE_SYS_URL_PREFIX = '/manage-sys/'
 # (tạo bằng shell: TOTPDevice.objects.create(user=u, name='default', confirmed=True)), nếu không sẽ tự khoá mình.
 ADMIN_REQUIRE_2FA = env_bool("ADMIN_REQUIRE_2FA", False)
 MANAGE_SYS_SESSION_SECONDS = 2 * 60 * 60
+# True (mặc định): mọi tài khoản quản trị có quyền cao nhất trong manage-sys (cấp/thu hồi admin, xoay secret, gỡ chủ khoá,
+# đổi cài đặt). Vẫn bắt nhập lại mật khẩu + audit. False: các thao tác đó chỉ dành cho Superuser.
+ADMIN_FULL_POWER = env_bool("ADMIN_FULL_POWER", True)
 
 
 TRUST_PROXY_HEADERS = True   # đứng sau proxy (Vercel/nginx): tin X-Forwarded-For

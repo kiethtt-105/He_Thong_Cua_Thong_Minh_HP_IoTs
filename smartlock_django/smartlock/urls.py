@@ -16,7 +16,7 @@ urlpatterns = [
 
     path('devices/', views.devices_list, name='devices-list'),
     path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
-    path('devices/add/', views.device_add, name='device-add'),
+    path('devices/add/', views.device_add, name='device-add'),         # ĐÃ ĐÓNG: chuyển sang device-claim (chỉ admin tạo khoá)
     path('devices/claim/', views.device_claim, name='device-claim'),   # user tự thêm khoá bằng code + secret
     path('devices/<uuid:device_id>/command/', views.device_command, name='device-command'),
     path('devices/<uuid:device_id>/ble-ticket/', views.device_ble_ticket, name='device-ble-ticket'),   # app: vé Bluetooth
@@ -33,6 +33,7 @@ urlpatterns = [
     path('nfc/reader/', views.nfc_reader, name='nfc-reader'),
     path('access/door-pins/', views.door_pins, name='door-pins'),
     path('access/face-profiles/', views.face_profiles, name='face-profiles'),
+    path('access/face-profiles/enroll/', views.face_enroll, name='face-enroll'),   # quét camera -> JSON (không nhập vector)
     path('access/face-profiles/<uuid:profile_id>/delete/', views.face_profile_delete, name='face-profile-delete'),
     path('access/history/', views.access_events_history, name='access-history'),
 
