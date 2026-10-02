@@ -15,8 +15,26 @@ from .models import (
 from . import services
 
 
+# ---------------------------------------------------------------- Admin cấp cao: XEM được mọi model
+class ViewAllMixin:
+    """Tài khoản is_staff + (is_admin hoặc is_superuser) xem được MỌI model ở Django admin (chỉ xem).
+    Quyền thêm/sửa/xoá vẫn theo cơ chế mặc định của Django (Superuser có hết, admin thường không).
+    Các cột nhạy cảm (hash/mã hoá/ảnh chụp) đã bị `exclude` ở bên dưới nên không hiện cho ai, kể cả Superuser."""
+
+    @staticmethod
+    def _is_high_admin(request):
+        u = request.user
+        return bool(u.is_active and u.is_staff and (u.is_admin or u.is_superuser))
+
+    def has_module_permission(self, request):
+        return self._is_high_admin(request) or super().has_module_permission(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._is_high_admin(request) or super().has_view_permission(request, obj)
+
+
 # ---------------------------------------------------------------- Ghi AuditLog cho MỌI thao tác ở Django admin
-class AuditedAdminMixin:
+class AuditedAdminMixin(ViewAllMixin):
     """Django admin chỉ tự ghi LogEntry (không hiện ở trang audit, xoá được). Mixin này ghi thêm
     AuditLog (action ADMIN_<MODEL>_*): thêm / sửa (chỉ TÊN trường đổi, không ghi giá trị để khỏi
     lộ dữ liệu nhạy cảm) / xoá, kể cả xoá hàng loạt."""
@@ -68,6 +86,14 @@ class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
     list_display = ('email', 'username', 'is_active', 'is_admin', 'is_superuser', 'two_fa_enabled')
     list_filter = ('is_active', 'is_admin', 'is_superuser', 'email_verified')
     search_fields = ('email', 'username', 'full_name')
+
+    # Chỉ Superuser được đổi cờ quyền / nhóm: chặn admin thường tự nâng quyền qua Django admin.
+    _PRIVILEGE_FIELDS = ('is_staff', 'is_superuser', 'is_admin', 'groups', 'user_permissions')
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = tuple(super().get_readonly_fields(request, obj))
+        return fields if request.user.is_superuser else fields + self._PRIVILEGE_FIELDS
+
     fieldsets = (
         (None, {'fields': ('email', 'username', 'password')}),
         ('Thông tin cá nhân', {'fields': ('full_name', 'phone', 'avatar_url')}),
@@ -94,9 +120,14 @@ class ReadOnlyAdmin(admin.ModelAdmin):
         return False
 
 
+# Cột nhạy cảm không kết thúc bằng _hash/_encrypted nhưng vẫn phải ẩn (ảnh chụp khuôn mặt lúc mở cửa...).
+_EXTRA_SECRET_FIELDS = {'snapshot_url'}
+
+
 def _secret_fields(model):
-    """Ẩn mọi cột hash/mã hoá (token, PIN, UID thẻ, secret thiết bị, embedding khuôn mặt...)."""
-    return [f.name for f in model._meta.fields if f.name.endswith(('_hash', '_encrypted'))]
+    """Ẩn mọi cột hash/mã hoá (token, PIN, UID thẻ, secret thiết bị, embedding khuôn mặt...) + ảnh chụp."""
+    return [f.name for f in model._meta.fields
+            if f.name.endswith(('_hash', '_encrypted')) or f.name in _EXTRA_SECRET_FIELDS]
 
 
 # model -> cấu hình admin. Model trong READ_ONLY dùng ReadOnlyAdmin.
@@ -148,6 +179,6 @@ for model, options in CONFIG.items():
 
 # LogEntry của Django: chỉ xem (không cho sửa/xoá để dấu vết admin còn nguyên).
 @admin.register(LogEntry)
-class LogEntryAdmin(ReadOnlyAdmin):
+class LogEntryAdmin(ViewAllMixin, ReadOnlyAdmin):
     list_display = ('action_time', 'user', 'content_type', 'object_repr', 'action_flag')
     list_filter = ('action_flag',)

@@ -26,13 +26,13 @@ from django.views.decorators.http import require_http_methods, require_POST
 
 from smartlock import services
 from smartlock.models import (
-    Announcement, AuditLog, Device, DeviceAccess, DeviceCommand, DeviceStatusLog,
-    NfcReader, User,
+    AccessCard, AccessEvent, Announcement, AuditLog, CardDeviceAccess, Device, DeviceAccess,
+    DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, NfcReader, User,
 )
 
 from .decorators import manage_required
 from .helpers import (
-    LOGIN_FAIL_ACTIONS, audit, burn_password_hash, check_reauth, client_ip,
+    LOGIN_FAIL_ACTIONS, action_denied_reason, audit, burn_password_hash, check_reauth, client_ip,
     decorate_login_attempt, has_manage_role, ip_throttled, is_manager, is_new_login_ip,
     lock_remaining_minutes, login_attempts_qs, modify_denied_reason, notify, paginate, pop_secret,
     register_failure, reset_lockout, revoke_mobile_sessions, stash_secret,
@@ -274,7 +274,14 @@ def user_detail(request, user_id):
             messages.error(request, reason)
             return back
 
-        if action in ('grant_admin', 'revoke_admin') and request.user.is_superuser and not check_reauth(request):
+        denied = action_denied_reason(request.user, action)
+        if denied:
+            audit(request, 'MANAGE_ACTION_DENIED', target_user=target, success=False, severity='warning',
+                  metadata={'action': action})
+            messages.error(request, denied)
+            return back
+
+        if action in ('grant_admin', 'revoke_admin') and not check_reauth(request):
             messages.error(request, REAUTH_ERROR)
             return back
 
@@ -342,6 +349,7 @@ def user_detail(request, user_id):
         'is_locked': bool(lock.locked_until and lock.locked_until > now),
         'target_is_manager': has_manage_role(target),
         'deny_reason': modify_denied_reason(request.user, target),
+        'can_sensitive': request.user.is_superuser,   # template ẩn nút cấp/thu hồi admin nếu False
         'devices': Device.objects.filter(owner=target).order_by('name'),
         'accesses': (DeviceAccess.objects.filter(user=target, is_active=True)
                      .select_related('device').order_by('-created_at')[:10]),
@@ -440,6 +448,13 @@ def _device_actions(request, device):
     back = redirect('manage_sys:device-detail', device_id=device.id)
     action = request.POST.get('action')
     confirm = (request.POST.get('confirm') or '').strip().upper()
+
+    denied = action_denied_reason(request.user, action)
+    if denied:
+        audit(request, 'MANAGE_ACTION_DENIED', device=device, success=False, severity='warning',
+              metadata={'action': action})
+        messages.error(request, denied)
+        return back
 
     if action in ('maintenance_on', 'maintenance_off'):
         if not device.owner_id:
@@ -563,6 +578,21 @@ def device_detail(request, device_id):
         'readers': NfcReader.objects.filter(device=device).order_by('-created_at'),
         'logs': (AuditLog.objects.filter(device=device)
                  .select_related('actor_user').order_by('-created_at')[:10]),
+        'can_sensitive': request.user.is_superuser,   # template ẩn nút xoay secret / gỡ chủ nếu False
+        # ---- Admin xem được toàn bộ: chỉ METADATA, không bao giờ đưa hash PIN / UID thẻ / embedding / ảnh ra ----
+        'cards': (CardDeviceAccess.objects.filter(device=device)
+                  .select_related('access_card', 'access_card__user')
+                  .only('is_active', 'created_at', 'access_card__name', 'access_card__is_active',
+                        'access_card__user__email').order_by('-created_at')),
+        'pins': (DoorPinCode.objects.filter(device=device).select_related('created_by')
+                 .only('label', 'valid_from', 'expires_at', 'max_uses', 'use_count', 'is_revoked',
+                       'created_at', 'created_by__email').order_by('-created_at')[:50]),
+        'faces': (FaceProfile.objects.filter(device=device).select_related('user')
+                  .only('name', 'is_active', 'consent_confirmed', 'created_at', 'user__email')
+                  .order_by('-created_at')),
+        'access_events': (AccessEvent.objects.filter(device=device).select_related('user')
+                          .only('method', 'success', 'reason', 'created_at', 'user__email')
+                          .order_by('-created_at')[:30]),
     }
     return _render(request, 'device_detail', context)
 

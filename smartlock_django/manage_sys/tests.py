@@ -372,6 +372,60 @@ class ReauthTests(ManageSysBase):
         self.assertEqual((dev.provisioning_secret_hash, dev.owner_id), ('x', self.user.id))
 
 
+class HighAdminPolicyTests(ManageSysBase):
+    """Admin thường (is_admin, KHÔNG superuser): xem + vận hành gần như Superuser, trừ thao tác nhạy cảm."""
+    def setUp(self):
+        super().setUp()
+        self.mod = make_user('mod@example.com', 'mod1', is_admin=True)
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'mod@example.com', 'password': PW})
+        self.device = Device.objects.create(device_code='DEV-HA000001', provisioning_secret_hash='x',
+                                            name='K', owner=self.user, status='online')
+
+    def test_can_view_everything(self):
+        for name, args in (('dashboard', []), ('users', []), ('logs', []), ('login-attempts', []),
+                           ('devices', []), ('settings', []), ('announcements', []),
+                           ('user-detail', [self.user.id]), ('user-detail', [self.admin.id]),
+                           ('device-detail', [self.device.id])):
+            self.assertEqual(self.client.get(reverse(f'manage_sys:{name}', args=args)).status_code, 200, name)
+
+    def test_can_manage_other_plain_admin_but_not_superuser(self):
+        peer = make_user('peer@example.com', 'peer1', is_admin=True)
+        self.client.post(reverse('manage_sys:user-detail', args=[peer.id]), {'action': 'toggle_active'})
+        peer.refresh_from_db()
+        self.assertFalse(peer.is_active)
+        self.client.post(reverse('manage_sys:user-detail', args=[self.admin.id]), {'action': 'toggle_active'})
+        self.admin.refresh_from_db()
+        self.assertTrue(self.admin.is_active)
+
+    def test_cannot_grant_or_revoke_admin_even_with_password(self):
+        url = reverse('manage_sys:user-detail', args=[self.user.id])
+        self.client.post(url, {'action': 'grant_admin', 'current_password': PW})
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_admin)
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_ACTION_DENIED', actor_user=self.mod).exists())
+
+    def test_cannot_rotate_secret_or_remove_owner(self):
+        url = reverse('manage_sys:device-detail', args=[self.device.id])
+        self.client.post(url, {'action': 'rotate_secret', 'confirm': self.device.device_code,
+                               'current_password': PW})
+        self.client.post(url, {'action': 'remove_owner', 'confirm': self.device.device_code,
+                               'current_password': PW})
+        self.device.refresh_from_db()
+        self.assertEqual((self.device.provisioning_secret_hash, self.device.owner_id), ('x', self.user.id))
+
+    def test_can_still_operate_devices(self):
+        url = reverse('manage_sys:device-detail', args=[self.device.id])
+        self.client.post(url, {'action': 'maintenance_on'})
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.status, 'maintenance')
+
+    def test_device_detail_exposes_metadata_only(self):
+        ctx = self.client.get(reverse('manage_sys:device-detail', args=[self.device.id])).context
+        for key in ('cards', 'pins', 'faces', 'access_events'):
+            self.assertIn(key, ctx)
+        self.assertFalse(ctx['can_sensitive'])
+
+
 class SuperuserGuardTests(ManageSysBase):
     def test_last_superuser_cannot_be_orphaned(self):
         from manage_sys.views import _would_orphan_superusers

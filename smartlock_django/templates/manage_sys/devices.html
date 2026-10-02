@@ -212,6 +212,7 @@ Thêm thiết bị
         <div class="alert alert-info small">Khoá đã bị gỡ chủ: quản trị viên không gán lại được. Người dùng phải tự thêm bằng mã thiết bị + secret.</div>
         {% endif %}
 
+        {% if can_sensitive %}
         <div class="card mb-4 border-danger-subtle">
             <div class="card-header text-danger">Vùng nguy hiểm</div>
             <div class="card-body d-grid gap-3">
@@ -229,6 +230,10 @@ Thêm thiết bị
                     <button class="btn btn-outline-danger btn-sm w-100">Xoay secret</button></form>
             </div>
         </div>
+
+        {% else %}
+        <div class="alert alert-secondary small mb-4"><i class="fa-solid fa-lock me-1"></i>Gỡ chủ và xoay secret là thao tác nhạy cảm, chỉ Superuser được thực hiện.</div>
+        {% endif %}
 
         <div class="card">
             <div class="card-header">Thao tác</div>
@@ -264,6 +269,49 @@ Thêm thiết bị
                 <tbody>
                 {% for r in readers %}<tr><td>{{ r.name|default:"—" }}</td><td>{{ r.reader_mode|vi }}</td><td>{{ r.is_active|yesno:"Có,Không" }}</td><td>{{ r.last_seen_at|date:"d/m H:i"|default:"—" }}</td></tr>
                 {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có đầu đọc</td></tr>{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Thẻ NFC được gán ({{ cards|length }})</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Tên thẻ</th><th>Chủ thẻ</th><th>Hoạt động</th><th>Gán lúc</th></tr></thead>
+                <tbody>
+                {% for c in cards %}<tr><td>{{ c.access_card.name|default:"—" }}</td><td class="text-break">{{ c.access_card.user.email }}</td><td>{{ c.is_active|yesno:"Có,Không" }}</td><td>{{ c.created_at|date:"d/m/Y H:i" }}</td></tr>
+                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có thẻ</td></tr>{% endfor %}
+                </tbody></table></div>
+            <div class="card-footer small text-muted">Không hiển thị UID thẻ.</div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Mã PIN (50 gần nhất)</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Nhãn</th><th>Người tạo</th><th>Hết hạn</th><th>Đã dùng</th><th>Trạng thái</th></tr></thead>
+                <tbody>
+                {% for p in pins %}<tr><td>{{ p.label|default:"—" }}</td><td class="text-break">{{ p.created_by.email }}</td><td>{{ p.expires_at|date:"d/m/Y H:i" }}</td><td>{{ p.use_count }}/{{ p.max_uses }}</td><td>{% if p.is_revoked %}<span class="badge text-bg-secondary">Đã thu hồi</span>{% else %}<span class="badge text-bg-success">Còn hiệu lực</span>{% endif %}</td></tr>
+                {% empty %}<tr><td colspan="5" class="text-center text-muted py-3">Chưa có mã PIN</td></tr>{% endfor %}
+                </tbody></table></div>
+            <div class="card-footer small text-muted">Không hiển thị giá trị PIN (chỉ lưu hash).</div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Khuôn mặt đăng ký ({{ faces|length }})</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Tên</th><th>Người dùng</th><th>Hoạt động</th><th>Đã đồng ý</th><th>Tạo lúc</th></tr></thead>
+                <tbody>
+                {% for f in faces %}<tr><td>{{ f.name|default:"—" }}</td><td class="text-break">{{ f.user.email }}</td><td>{{ f.is_active|yesno:"Có,Không" }}</td><td>{{ f.consent_confirmed|yesno:"Có,Không" }}</td><td>{{ f.created_at|date:"d/m/Y H:i" }}</td></tr>
+                {% empty %}<tr><td colspan="5" class="text-center text-muted py-3">Chưa có khuôn mặt</td></tr>{% endfor %}
+                </tbody></table></div>
+            <div class="card-footer small text-muted">Không hiển thị dữ liệu khuôn mặt (embedding đã mã hoá).</div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Lịch sử ra vào (30 gần nhất)</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Thời gian</th><th>Cách mở</th><th>Người dùng</th><th>Kết quả</th></tr></thead>
+                <tbody>
+                {% for e in access_events %}<tr><td>{{ e.created_at|date:"d/m H:i" }}</td><td>{{ e.method|vi }}</td><td class="text-break">{{ e.user.email|default:"—" }}</td><td>{% if e.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span> <small class="text-muted">{{ e.reason|default:"" }}</small>{% endif %}</td></tr>
+                {% empty %}<tr><td colspan="4" class="text-center text-muted py-3">Chưa có lượt ra vào</td></tr>{% endfor %}
                 </tbody></table></div>
         </div>
 

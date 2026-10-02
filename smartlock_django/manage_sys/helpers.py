@@ -65,12 +65,30 @@ def is_manager(user):
     return bool(user and user.is_authenticated and user.is_active and has_manage_role(user))
 
 
+# Thao tác NHẠY CẢM: chỉ Superuser được làm. Admin thường có quyền xem + vận hành gần như Superuser
+# nhưng KHÔNG chạm được các thao tác này (cấp/thu hồi quyền quản trị, đổi secret thiết bị, gỡ chủ khoá
+# -> huỷ luôn thẻ NFC / PIN / khuôn mặt của chủ). Muốn nới/siết quyền admin chỉ cần sửa tập này.
+SUPERUSER_ONLY_ACTIONS = frozenset({'grant_admin', 'revoke_admin', 'rotate_secret', 'remove_owner'})
+
+
+def is_superuser_role(user):
+    return bool(user and user.is_authenticated and user.is_active and user.is_superuser)
+
+
+def action_denied_reason(actor, action):
+    """Lý do KHÔNG được làm `action` (thao tác nhạy cảm), hoặc None nếu được phép."""
+    if action in SUPERUSER_ONLY_ACTIONS and not actor.is_superuser:
+        return 'Thao tác nhạy cảm: chỉ Superuser mới được thực hiện.'
+    return None
+
+
 def modify_denied_reason(actor, target):
-    """Trả về lý do KHÔNG được sửa target, hoặc None nếu được phép."""
+    """Trả về lý do KHÔNG được sửa target, hoặc None nếu được phép.
+    Admin quản lý được mọi tài khoản (kể cả admin khác); riêng tài khoản Superuser chỉ Superuser mới đụng được."""
     if actor.pk == target.pk:
         return 'Không thể tự thao tác lên chính tài khoản của bạn.'
-    if has_manage_role(target) and not actor.is_superuser:
-        return 'Chỉ Superuser mới được thao tác lên tài khoản quản trị khác.'
+    if target.is_superuser and not actor.is_superuser:
+        return 'Chỉ Superuser mới được thao tác lên tài khoản Superuser.'
     return None
 
 
