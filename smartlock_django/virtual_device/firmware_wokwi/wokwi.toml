@@ -1,6 +1,0 @@
-[wokwi]
-version = 1
-firmware = '.pio/build/esp32dev/firmware.bin'
-elf = '.pio/build/esp32dev/firmware.elf'
-# Wokwi VS Code: chạy "Wokwi: Start Simulator". Để tới broker trên máy bạn: bật Private Gateway (cổng 1883)
-# rồi để MQTT_HOST "host.wokwi.internal".
