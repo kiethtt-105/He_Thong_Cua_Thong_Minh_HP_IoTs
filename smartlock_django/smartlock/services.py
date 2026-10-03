@@ -1,5 +1,6 @@
 # smartlock/services.py
 import hashlib
+import html as _html
 import hmac
 import ipaddress
 import json
@@ -16,14 +17,19 @@ from email.utils import parseaddr
 from typing import Optional
 
 from django.conf import settings
+from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import send_mail as _django_send_mail
 from django.db import connections, transaction
 from django.db.models import F, Q
 from django.db.models.signals import post_save
+from django.template import engines
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.encoding import force_bytes
 from django.utils.html import linebreaks, strip_tags, urlize
+from django.utils.http import urlsafe_base64_encode
+from django.utils.safestring import mark_safe
 
 from .models import (
     AccessCard, AccessEvent, AuditLog, CardDeviceAccess, Device,
@@ -425,7 +431,7 @@ def notify_access_shared(request, access, created=True) -> bool:
     except Exception:
         logger.exception('share: không tạo được thông báo cho %s', target.pk)
     try:
-        subject, html, plain = render_email('device_shared.html', {
+        subject, html, plain = render_email('device_shared', {
             'full_name': target.full_name or target.username,
             'owner_name': owner_name, 'device_name': device.name,
             'device_location': device.location or '', 'permissions': perm_names,
@@ -529,7 +535,7 @@ def send_verification(request, user) -> bool:
         expires_at=timezone.now() + timedelta(minutes=minutes),
     )
     link = request.build_absolute_uri(reverse('smartlock:verify_email', args=[token]))
-    subject, html, plain = render_email('user_verification.html', {
+    subject, html, plain = render_email('user_verification', {
         'full_name': user.full_name or user.username,
         'username': user.username,
         'verification_link': link,
@@ -543,23 +549,102 @@ def send_verification(request, user) -> bool:
 # ============================================================================
 BRAND_NAME = 'Smart Lock'
 
-# Chỉ giữ tiêu đề. Nội dung HTML nằm ở templates/emails/<tên>; bản text tự sinh từ HTML.
-EMAIL_SUBJECTS = {
-    'user_verification.html': 'Xác thực tài khoản Smart Lock',
-    'password_reset.html': 'Đặt lại mật khẩu Smart Lock',
-    'device_added.html': 'Thiết bị mới đã được thêm vào tài khoản của bạn',
-    'device_shared.html': 'Có người vừa chia sẻ khoá cho bạn',
-    'admin_device_approval.html': 'Thiết bị mới cần kích hoạt',
-    'two_factor_code.html': 'Mã xác thực 2 lớp Smart Lock',
-    'system_announcement.html': 'Thông báo hệ thống',
+# Mỗi loại mail = 1 mục. Mọi chuỗi là template Django nhỏ ({{ biến }}, {% if %}); biến lấy từ context truyền vào
+# render_email(). Giao diện chung ở templates/emails/message.html; bản text được dựng từ chính các trường này.
+#   subject / preheader / heading / greeting / footnote : chuỗi
+#   paras  : danh sách đoạn văn              code   : (nhãn, giá trị)  -> khung mã to (OTP)
+#   rows   : [(nhãn, giá trị, mono?)]         dòng có giá trị rỗng tự bị bỏ
+#   notice : ('info'|'warn', nội dung)        button : (url, nhãn)  -> không có url thì không hiện nút
+#   link   : url hiển thị dạng chữ để copy khi nút lỗi
+_GREET = 'Xin chào <strong>{{ full_name }}</strong>,'
+EMAIL_SPECS = {
+    'user_verification': dict(
+        subject='Xác thực tài khoản {{ brand_name }}',
+        preheader='Xác thực email để kích hoạt tài khoản {{ brand_name }} của bạn.',
+        heading='Xác thực tài khoản của bạn',
+        greeting='Xin chào <strong>{{ full_name|default:username }}</strong>,',
+        paras=['Cảm ơn bạn đã đăng ký tài khoản {{ brand_name }}. Chỉ còn một bước nữa: nhấn nút bên dưới '
+               'để xác thực email và kích hoạt tài khoản.'],
+        notice=('info', '{% if expiry_minutes %}&#9201;&#65039; Liên kết có hiệu lực trong '
+                        '<strong>{{ expiry_minutes }} phút</strong>.{% endif %}'),
+        button=('{{ verification_link }}', 'Xác thực tài khoản'),
+        link='{{ verification_link }}',
+        footnote='Nếu bạn không thực hiện đăng ký này, hãy bỏ qua email &mdash; sẽ không có tài khoản nào được kích hoạt.',
+    ),
+    'password_reset': dict(
+        subject='Đặt lại mật khẩu {{ brand_name }}',
+        preheader='Nhấn vào liên kết để đặt lại mật khẩu, liên kết hết hạn sau {{ expiry_minutes }} phút.',
+        heading='Đặt lại mật khẩu',
+        greeting=_GREET,
+        paras=['{% if by_admin %}Quản trị viên đã gửi liên kết này theo yêu cầu của bạn. {% endif %}'
+               'Chúng tôi đã nhận được yêu cầu đặt lại mật khẩu cho tài khoản {{ brand_name }} của bạn. '
+               'Nhấn nút bên dưới để tạo mật khẩu mới.'],
+        notice=('warn', '&#9201;&#65039; Liên kết chỉ có hiệu lực trong <strong>{{ expiry_minutes }} phút</strong> '
+                        'và dùng được một lần.'),
+        button=('{{ password_reset_link }}', 'Đặt lại mật khẩu'),
+        link='{{ password_reset_link }}',
+        footnote='<strong>Không phải bạn?</strong> Hãy bỏ qua email này &mdash; mật khẩu hiện tại vẫn được giữ '
+                 'nguyên và an toàn.',
+    ),
+    'two_factor_code': dict(
+        subject='Mã xác thực 2 lớp {{ brand_name }}',
+        preheader='Mã xác thực của bạn có hiệu lực {{ expiry_minutes }} phút.',
+        heading='Mã xác thực của bạn',
+        greeting=_GREET,
+        paras=['Dùng mã bên dưới để hoàn tất bước xác thực 2 lớp:'],
+        code=('Mã OTP', '{{ otp_code }}'),
+        notice=('warn', '&#9201;&#65039; Mã có hiệu lực trong <strong>{{ expiry_minutes }} phút</strong> và chỉ '
+                        'dùng được một lần. Tuyệt đối không chia sẻ mã này với bất kỳ ai.'),
+        footnote='Nếu không phải bạn yêu cầu, hãy đổi mật khẩu ngay'
+                 '{% if support_email %} hoặc liên hệ {{ support_email }}{% endif %}.',
+    ),
+    'device_shared': dict(
+        subject='{% if is_update %}Quyền truy cập khoá của bạn đã thay đổi{% else %}Có người vừa chia sẻ khoá cho bạn{% endif %}',
+        preheader='{{ owner_name }} {% if is_update %}đã thay đổi quyền của bạn trên{% else %}đã chia sẻ{% endif %} khoá {{ device_name }}.',
+        heading='{% if is_update %}Quyền truy cập đã thay đổi{% else %}Bạn được chia sẻ một chiếc khoá{% endif %}',
+        greeting=_GREET,
+        paras=['<strong>{{ owner_name }}</strong> {% if is_update %}vừa thay đổi quyền của bạn trên khoá '
+               '<strong>{{ device_name }}</strong>.{% else %}vừa chia sẻ khoá <strong>{{ device_name }}</strong> '
+               'cho bạn. Quyền có hiệu lực ngay, không cần nhập mã.{% endif %}'],
+        rows=[('Khoá', '{{ device_name }}', False),
+              ('Vị trí', '{{ device_location }}', False),
+              ('Quyền', '{{ permissions|join:", "|default:"Chưa có quyền nào" }}', False),
+              ('Hết hạn', '{{ expires_text }}', False)],
+        button=('{{ action_url }}', 'Mở khoá'),
+        footnote='Nếu bạn không biết người chia sẻ, hãy liên hệ chủ khoá hoặc bỏ qua email này.',
+    ),
+    'device_added': dict(
+        subject='Thiết bị mới đã được thêm vào tài khoản của bạn',
+        preheader='Thiết bị {{ device_name }} đã được thêm vào tài khoản của bạn.',
+        heading='Thiết bị mới đã được thêm',
+        greeting=_GREET,
+        paras=['Quản trị viên vừa thêm một thiết bị vào tài khoản của bạn. Bạn có thể truy cập ngay để điều khiển.'],
+        rows=[('Tên thiết bị', '{{ device_name }}', False), ('Mã thiết bị', '{{ device_code }}', True)],
+        button=('{{ action_url }}', 'Mở bảng điều khiển'),
+        footnote='Nếu bạn không nhận ra thiết bị này, hãy liên hệ quản trị viên.',
+    ),
+    'admin_device_approval': dict(
+        subject='Thiết bị mới cần kích hoạt',
+        preheader='Thiết bị {{ device_code }} của {{ user_email }} đang chờ kích hoạt.',
+        heading='Thiết bị mới cần kích hoạt',
+        greeting='Xin chào Quản trị viên,',
+        paras=['Có một thiết bị mới đang chờ kích hoạt. Vui lòng kiểm tra và kích hoạt, hoặc thông báo cho chủ thiết bị.'],
+        rows=[('Mã thiết bị', '{{ device_code }}', True), ('Chủ thiết bị', '{{ user_email }}', False)],
+        button=('{{ action_url }}', 'Kích hoạt thiết bị'),
+    ),
+    'system_announcement': dict(
+        subject='{{ title|default:"Thông báo hệ thống" }}',
+        preheader='{{ title|default:"Thông báo hệ thống" }} từ {{ brand_name }}.',
+        heading='{{ title|default:"Thông báo hệ thống" }}',
+        paras=['{{ body|linebreaks }}'],
+        button=('{{ action_url }}', '{{ action_label|default:"Xem chi tiết" }}'),
+    ),
 }
 
 
-def _email_context(context: dict, template_name: str) -> dict:
+def _email_context(context: dict) -> dict:
     ctx = dict(context)
-    if template_name == 'system_announcement.html' and not ctx.get('title'):
-        ctx['title'] = 'Thông báo hệ thống'
-    # views truyền 'reset_link'; template dùng 'password_reset_link'
+    # views truyền 'reset_link'; mail dùng 'password_reset_link'
     if not ctx.get('password_reset_link') and ctx.get('reset_link'):
         ctx['password_reset_link'] = ctx['reset_link']
     ctx.setdefault('brand_name', BRAND_NAME)
@@ -569,31 +654,94 @@ def _email_context(context: dict, template_name: str) -> dict:
     return ctx
 
 
-def _html_to_text(html: str) -> str:
-    html = re.sub(r'(?is)<(head|style|script).*?</\1>', '', html)
-    html = re.sub(r'(?is)<div style="display:none.*?</div>', '', html)   # dòng preheader ẩn
-    html = re.sub(r'(?i)<br\s*/?>|</p>|</tr>|</h1>|</div>', '\n', html)
-    text = strip_tags(html)
-    text = re.sub(r'[ \t\xa0]+', ' ', text)
-    text = re.sub(r'\n\s*\n+', '\n\n', text)
-    return text.strip()
+def _rt(text, ctx):
+    """Render 1 chuỗi template nhỏ (tự escape biến). Trả SafeString để message.html không escape lần nữa."""
+    if not text:
+        return mark_safe('')
+    return mark_safe(engines['django'].from_string(text).render(ctx).strip())
+
+
+def _plain(text) -> str:
+    return _html.unescape(strip_tags(str(text or ''))).strip()
+
+
+def _email_plain(v: dict, brand: str) -> str:
+    out = [_plain(v['heading']), '']
+    if v['greeting']:
+        out += [_plain(v['greeting']), '']
+    out += [x for p in v['paras'] for x in (_plain(p), '')]
+    if v['code']:
+        out += [f"{_plain(v['code_label'])}: {_plain(v['code'])}", '']
+    if v['rows']:
+        out += [f'{label}: {_plain(value)}' for label, value, _mono in v['rows']] + ['']
+    if v['notice']:
+        out += [_plain(v['notice']), '']
+    if v['button_url']:
+        out += [f"{_plain(v['button_label'])}: {_plain(v['button_url'])}", '']
+    if v['footnote']:
+        out += [_plain(v['footnote']), '']
+    out.append(f'-- {brand}')
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(out)).strip()
 
 
 def render_email(template_name: str, context: dict) -> tuple:
-    """Trả về (subject, html, plain_text)."""
-    subject = EMAIL_SUBJECTS.get(template_name) or template_name.replace('.html', '').replace('_', ' ').title()
-    ctx = _email_context(context, template_name)
+    """Trả về (subject, html, plain_text). `template_name`: khoá trong EMAIL_SPECS (chấp nhận cả 'xxx.html')."""
+    key = template_name[:-5] if template_name.endswith('.html') else template_name
+    ctx = _email_context(context)
+    fallback_title = key.replace('_', ' ').title()
+    spec = EMAIL_SPECS.get(key) or {'subject': fallback_title, 'heading': fallback_title}
+    subject = fallback_title
     try:
-        html = render_to_string(f'emails/{template_name}', ctx)
-        plain = _html_to_text(html)
-        if ctx.get('action_url'):
-            plain += f"\n\nTruy cập: {ctx['action_url']}"
+        subject = ' '.join(_html.unescape(_rt(spec['subject'], ctx)).split())
+        notice_kind, notice_text = spec.get('notice') or ('info', '')
+        button_url, button_label = spec.get('button') or ('', '')
+        code_label, code_value = spec.get('code') or ('', '')
+        v = {
+            'preheader': _rt(spec.get('preheader'), ctx),
+            'heading': _rt(spec.get('heading') or spec['subject'], ctx),
+            'greeting': _rt(spec.get('greeting'), ctx),
+            'paras': [p for p in (_rt(x, ctx) for x in spec.get('paras', ())) if p],
+            'code_label': _rt(code_label, ctx), 'code': _rt(code_value, ctx),
+            'rows': [(label, val, mono) for label, raw, mono in spec.get('rows', ())
+                     for val in [_rt(raw, ctx)] if val],
+            'notice_kind': notice_kind, 'notice': _rt(notice_text, ctx),
+            'button_url': _rt(button_url, ctx), 'button_label': _rt(button_label, ctx),
+            'link': _rt(spec.get('link'), ctx),
+            'footnote': _rt(spec.get('footnote'), ctx),
+        }
+        html = render_to_string('emails/message.html', {**ctx, **v})
+        plain = _email_plain(v, ctx['brand_name'])
     except Exception:
-        logger.exception('render_email: lỗi khi render emails/%s', template_name)
+        logger.exception('render_email: lỗi khi dựng mail %s', key)
         keys = ('verification_link', 'password_reset_link', 'otp_code', 'action_url')
         plain = '\n'.join(str(ctx[k]) for k in keys if ctx.get(k)) or subject
         html = linebreaks(urlize(plain, autoescape=True))
     return subject, html, plain
+
+
+def send_password_reset(request, user, by_admin=None) -> bool:
+    """Gửi link đặt lại mật khẩu (user tự yêu cầu, hoặc admin gửi hộ qua manage_sys: by_admin=<admin>).
+    Trả True nếu mail đã gửi/xếp hàng. Link chứa token nên không ghi nội dung mail vào log."""
+    link = request.build_absolute_uri(reverse('smartlock:reset_password_confirm', args=[
+        urlsafe_base64_encode(force_bytes(str(user.pk))), default_token_generator.make_token(user),
+    ]))
+    subject, html, plain = render_email('password_reset', {
+        'full_name': user.full_name or user.username,
+        'password_reset_link': link,
+        'expiry_minutes': settings.PASSWORD_RESET_TIMEOUT // 60,
+        'by_admin': bool(by_admin),
+    })
+    return send_mail(subject, plain, html, user.email, log_body=False)
+
+
+def mask_email(email: str) -> str:
+    name, _, dom = (email or '').partition('@')
+    return (name[:2] if len(name) > 2 else name[:1]) + '***@' + dom
+
+
+def invalidate_system_settings() -> None:
+    """manage_sys gọi sau khi lưu cài đặt. system_settings() hiện luôn đọc DB (chưa cache) nên không cần làm gì;
+    giữ hàm để khi thêm cache chỉ phải sửa ở đây."""
 
 
 # ============================================================================
