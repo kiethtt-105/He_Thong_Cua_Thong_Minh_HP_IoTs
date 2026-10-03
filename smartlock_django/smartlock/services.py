@@ -1,16 +1,4 @@
 # smartlock/services.py
-"""
-
-Mục lục
-  1. Helper chung (hash, IP, audit, quyền, đăng nhập sai, gửi mail xác thực)
-  2. Email (render HTML + bản text tự sinh)
-  3. MQTT + gửi lệnh xuống thiết bị
-  4. Mở khoá: RFID / PIN / khuôn mặt / Bluetooth / NFC điện thoại + khoá tạm khi sai liên tiếp
-  5. Online/offline của thiết bị
-  6. Push FCM tới app Android
-  7. Vòng đời khoá (claim / gỡ chủ / xoay secret)
-  (Quyền theo tính năng, chia sẻ khoá và popup nằm ở mục 1.)
-"""
 import hashlib
 import hmac
 import ipaddress
@@ -192,6 +180,23 @@ def notify(user, title, message, severity='info', device=None, type_='SYSTEM'):
     Notification.objects.create(
         user=user, device=device, type=type_, title=title[:150], message=message, severity=severity,
     )
+
+
+def notify_login(request, user) -> None:
+    """Báo cho user khi đăng nhập từ một IP chưa từng đăng nhập thành công trước đó.
+    PHẢI gọi TRƯỚC khi audit 'LOGIN' của lần đăng nhập hiện tại (để so với lịch sử cũ).
+    Lần đăng nhập đầu tiên (chưa có lịch sử) thì không báo. Không bao giờ ném lỗi làm hỏng đăng nhập."""
+    try:
+        ip = client_ip(request)
+        known = set(AuditLog.objects.filter(actor_user=user, action='LOGIN', success=True, ip_address__isnull=False)
+                    .order_by('-created_at').values_list('ip_address', flat=True)[:100])
+        if not known or ip in known:
+            return
+        notify(user, 'Đăng nhập từ địa chỉ IP mới',
+               f'Tài khoản vừa đăng nhập từ IP {ip}. Nếu không phải bạn, hãy đổi mật khẩu ngay.',
+               severity='warning', type_='LOGIN_NEW_IP')
+    except Exception:
+        logger.exception('notify_login: lỗi (bỏ qua, không ảnh hưởng đăng nhập)')
 
 
 def accessible_devices(user):
@@ -530,7 +535,7 @@ def send_verification(request, user) -> bool:
         'verification_link': link,
         'expiry_minutes': minutes,
     })
-    return send_mail(subject, plain, html, user.email)
+    return send_mail(subject, plain, html, user.email, log_body=False)   # link chứa token: không ghi vào log
 
 
 # ============================================================================
@@ -1047,9 +1052,13 @@ def parse_phone_ticket(device, ticket: str, kind: str):
     try:
         user_hex, exp_s, sig = (ticket or '').strip().split('.')
         exp = int(exp_s)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
-    if not hmac.compare_digest(sig, _ticket_sig(device, kind, user_hex, exp)):
+    try:
+        sig_ok = hmac.compare_digest(sig.encode('utf-8'), _ticket_sig(device, kind, user_hex, exp).encode('utf-8'))
+    except (TypeError, ValueError, UnicodeError):
+        return None
+    if not sig_ok:
         return None
     uid = parse_uuid(user_hex)
     user = User.objects.filter(pk=uid).first() if uid else None
@@ -1204,9 +1213,22 @@ def send_notification_push(notification_id) -> int:
         return 0
 
 
+def _push_in_thread(notification_id):
+    try:
+        send_notification_push(notification_id)
+    finally:
+        connections.close_all()          # luồng nền tự mở kết nối DB -> phải đóng khi xong
+
+
 def _on_notification_saved(sender, instance, created, **kwargs):
-    if created:
-        transaction.on_commit(lambda: send_notification_push(instance.pk))
+    if not created:
+        return
+    nid = instance.pk
+    if EMAIL_ASYNC:   # local/VPS: gọi FCM ở luồng nền, không chặn request. Vercel: giữ đồng bộ (luồng nền bị đóng băng).
+        transaction.on_commit(lambda: threading.Thread(
+            target=_push_in_thread, args=(nid,), name='fcm-push', daemon=True).start())
+    else:
+        transaction.on_commit(lambda: send_notification_push(nid))
 
 
 def register_signals():

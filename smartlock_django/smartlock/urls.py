@@ -24,7 +24,7 @@ urlpatterns = [
     path('devices/<uuid:device_id>/nfc-ticket/', views.device_nfc_ticket, name='device-nfc-ticket'),   # app: vé NFC giả lập thẻ
 
     path('devices/<uuid:device_id>/live/', live.live_page, name='device-live'),
-     path('devices/<uuid:device_id>/live/data/', live.live_data, name='device-live-data'),
+    path('devices/<uuid:device_id>/live/data/', live.live_data, name='device-live-data'),
 
     # ====================== SYNC: cache mã hoá về máy sau login ======================
     path('api/sync/', views.sync_bootstrap, name='sync-bootstrap'),

@@ -422,7 +422,7 @@ def password_reset_request(request):
         'expiry_minutes': dj_settings.PASSWORD_RESET_TIMEOUT // 60,
     }
     subject, html, plain = render_email('password_reset.html', context)
-    sent = _send_mail(subject, plain, html, user.email)
+    sent = _send_mail(subject, plain, html, user.email, log_body=False)   # link reset chứa token: không ghi log
     _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user, success=sent,
            severity='info' if sent else 'warning',
            metadata=None if sent else {'error': 'send_mail_failed'})
@@ -813,16 +813,22 @@ def _bucketed_avg(queryset, dt_field, value_field, minutes=20):
     return labels, data
 
 
-def _require_demo_logs():
-    """Trang log công khai chỉ bật khi settings.DEMO_LOGS_ENABLED = True (mặc định = DEBUG)."""
+def _require_demo_logs(request):
+    """Trang log công khai chỉ bật khi settings.DEMO_LOGS_ENABLED = True (mặc định = DEBUG).
+    Khi DEBUG=False (production) mà vẫn bật cờ này thì chỉ quản trị viên đã đăng nhập mới xem được,
+    tránh lộ log toàn hệ thống cho người lạ."""
     if not getattr(dj_settings, 'DEMO_LOGS_ENABLED', False):
         raise Http404()
+    if not dj_settings.DEBUG:
+        user = getattr(request, 'user', None)
+        if not (user and user.is_authenticated and _is_admin(user)):
+            raise Http404()
 
 
 def public_system_logs(request):
     """Trang khung (shell) - không truyền dữ liệu log qua context. Toàn bộ số liệu/log/
     biểu đồ được JS nạp qua public_system_logs_api() và tự làm mới liên tục."""
-    _require_demo_logs()
+    _require_demo_logs(request)
     return render(request, 'public/system_logs.html', {})
 
 
@@ -841,7 +847,7 @@ LOG_ROW_LIMIT = 100  # số dòng gần nhất trả về mỗi loại log (tăn
 def public_system_logs_api(request):
     """JSON snapshot mới nhất của TOÀN BỘ log trong hệ thống - client gọi lại mỗi 2s.
     Chỉ đọc (GET), không có tham số nào làm thay đổi dữ liệu."""
-    _require_demo_logs()
+    _require_demo_logs(request)
     _ls = DeviceStatusLog.objects.filter(device=OuterRef('pk')).order_by('-recorded_at')
     devices = (Device.objects.select_related('owner')
                .annotate(l_lock=Subquery(_ls.values('lock_state')[:1]),

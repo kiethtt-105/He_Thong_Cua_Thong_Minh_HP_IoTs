@@ -101,7 +101,10 @@ else:
 
 
 # ==================== PROXY / HTTPS (Vercel) ====================
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# Chỉ tin X-Forwarded-Proto khi app thật sự đứng sau proxy tin cậy (nếu không, client giả header được).
+TRUST_PROXY_HEADERS = env_bool("TRUST_PROXY_HEADERS", True)
+if TRUST_PROXY_HEADERS:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # Mặc định bật cookie Secure khi DEBUG=False (Vercel dùng HTTPS).
 # Chạy local bằng http://localhost với DEBUG=False: đặt SECURE_COOKIES=False trong .env
@@ -197,6 +200,9 @@ DATABASES = {
         },
     }
 }
+if not DATABASES['default']['ENGINE'].endswith('postgresql'):
+    DATABASES['default']['OPTIONS'] = {}      # sslmode/connect_timeout chỉ dành cho Postgres (vd. ENGINE=sqlite3 khi test)
+    DATABASES['default'].pop('CONN_HEALTH_CHECKS', None)
 
 
 # ==================== BẢN SAO LOCAL + TỰ ĐỒNG BỘ (chỉ máy cá nhân; Vercel không đặt LOCAL_REPLICA) ====================
@@ -267,6 +273,13 @@ AUTH_USER_MODEL = 'smartlock.User'
 
 
 # ==================== LOGIN/LOGOUT CONFIGURATION ====================
+AUTH_PASSWORD_VALIDATORS = [
+    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 8}},
+    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
+]
+
 LOGIN_URL = 'smartlock:login'
 LOGIN_REDIRECT_URL = 'smartlock:dashboard'
 LOGOUT_REDIRECT_URL = 'smartlock:login'
@@ -353,7 +366,7 @@ MANAGE_SYS_SESSION_SECONDS = 2 * 60 * 60
 ADMIN_FULL_POWER = env_bool("ADMIN_FULL_POWER", True)
 
 
-TRUST_PROXY_HEADERS = True   # đứng sau proxy (Vercel/nginx): tin X-Forwarded-For
+# TRUST_PROXY_HEADERS (khai báo ở phần PROXY / HTTPS phía trên): đứng sau proxy (Vercel/nginx) -> tin X-Forwarded-For/Proto
 # Số proxy TIN CẬY phía trước app: IP client = phần tử thứ N tính từ cuối của X-Forwarded-For
 # (phần tử đầu do client tự đặt được). Vercel = 1; nginx -> gunicorn = 1.
 TRUST_PROXY_COUNT = env_int("TRUST_PROXY_COUNT", 1)
