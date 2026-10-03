@@ -149,8 +149,8 @@ MIDDLEWARE = [
     'allauth.account.middleware.AccountMiddleware',
     'django_otp.middleware.OTPMiddleware',
 ]
-if env_bool("PERF_TIMING", False):   # xem smartlock/perf.py: Server-Timing + log request chậm
-    MIDDLEWARE.insert(0, 'smartlock.perf.ServerTimingMiddleware')
+if env_bool("PERF_TIMING", False):   # xem manage_sys/middleware.py: Server-Timing + log request chậm
+    MIDDLEWARE.insert(0, 'manage_sys.middleware.ServerTimingMiddleware')
 
 
 # ==================== URL CONFIGURATION ====================

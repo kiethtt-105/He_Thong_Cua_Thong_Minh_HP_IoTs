@@ -62,6 +62,7 @@ from .services import (
     send_mail as _send_mail, send_verification as _send_verification,
     system_settings as _settings, user_agent as _user_agent, valid_ip as _valid_ip,
     issue_ble_ticket, notify_login as _notify_login,
+    send_password_reset as _send_password_reset, mask_email as _mask_email,
 )
 from .models import (
     AccessCard, Announcement, AuditLog, CardDeviceAccess,
@@ -409,20 +410,7 @@ def password_reset_request(request):
         _audit(request, 'PASSWORD_RESET_THROTTLED', actor=None, success=False, target_user=user)
         return _neutral()
 
-    reset_link = request.build_absolute_uri(
-        reverse('smartlock:reset_password_confirm', args=[
-            force_str(urlsafe_base64_encode(force_bytes(str(user.pk)))),
-            default_token_generator.make_token(user),
-        ])
-    )
-    context = {
-        'full_name': user.full_name or user.username,
-        'password_reset_link': reset_link,
-        'reset_link': reset_link,
-        'expiry_minutes': dj_settings.PASSWORD_RESET_TIMEOUT // 60,
-    }
-    subject, html, plain = render_email('password_reset.html', context)
-    sent = _send_mail(subject, plain, html, user.email, log_body=False)   # link reset chứa token: không ghi log
+    sent = _send_password_reset(request, user)
     _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user, success=sent,
            severity='info' if sent else 'warning',
            metadata=None if sent else {'error': 'send_mail_failed'})
@@ -1051,7 +1039,7 @@ def _send_email_code(user, purpose):
         user=user, purpose='TF_' + purpose, token_hash=_pepper_hash(user, 'em:' + code),
         expires_at=now + timedelta(minutes=EMAIL_CODE_TTL_MIN),
     )
-    subject, html, plain = render_email('two_factor_code.html', {
+    subject, html, plain = render_email('two_factor_code', {
         'full_name': user.full_name or user.username,
         'otp_code': code,
         'expiry_minutes': EMAIL_CODE_TTL_MIN,
@@ -1079,11 +1067,6 @@ def _verify_email_code(user, code, purpose) -> bool:
             rec.is_used = True
         rec.save(update_fields=['attempts', 'is_used'])
         return ok
-
-
-def _mask_email(email: str) -> str:
-    name, _, dom = (email or '').partition('@')
-    return (name[:2] if len(name) > 2 else name[:1]) + '***@' + dom
 
 
 def _require_password(request) -> bool:
@@ -2429,5 +2412,42 @@ def events_poll(request):
         'device_id': str(n.device_id) if n.device_id else None, 'created_at': n.created_at.isoformat(),
     } for n in rows]
     resp = JsonResponse({'events': events, 'cursor': cursor.isoformat(), 'unread_count': unread})
+    resp['Cache-Control'] = 'no-store'
+    return resp
+
+
+# ====================== LIVE: XEM TRỰC TIẾP TÌNH TRẠNG KHOÁ (poll JSON 2s/lần) ======================
+# (trước đây là smartlock/live.py)
+def _device_or_404(request, device_id):
+    d = services.accessible_devices(request.user).filter(pk=device_id).first()
+    if not d:
+        raise Http404
+    return d
+
+
+@auth_required
+def live_page(request, device_id):
+    return render(request, 'account/live.html', {'device': _device_or_404(request, device_id)})
+
+
+@auth_required
+def live_data(request, device_id):
+    d = _device_or_404(request, device_id)
+    # .using('default'): đọc thẳng Supabase, tránh trễ của bản sao local (~2s)
+    log = DeviceStatusLog.objects.using('default').filter(device=d).order_by('-recorded_at').first()
+    link = services.link_status(d)
+    events = (AccessEvent.objects.using('default').filter(device=d).select_related('user')
+              .order_by('-created_at')[:8])
+    cmds = DeviceCommand.objects.filter(device=d).order_by('-created_at')[:5]
+    resp = JsonResponse({
+        'name': d.name, 'code': d.device_code, 'now': timezone.now().isoformat(),
+        'connected': link['connected'], 'seconds_ago': link['seconds_ago'],
+        'lock_state': log.lock_state if log else 'unknown', 'tamper': bool(log and log.tamper_detected),
+        'battery': d.battery_level, 'firmware': d.firmware_version,
+        'locked_out': services.in_lockout(d),
+        'events': [{'at': e.created_at.isoformat(), 'method': e.method, 'ok': e.success, 'reason': e.reason,
+                    'who': (e.user.full_name or e.user.username) if e.user_id else ''} for e in events],
+        'commands': [{'at': c.created_at.isoformat(), 'type': c.command_type, 'status': c.status} for c in cmds],
+    })
     resp['Cache-Control'] = 'no-store'
     return resp
