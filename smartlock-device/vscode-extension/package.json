@@ -1,0 +1,56 @@
+{
+  "name": "smartlock-device",
+  "displayName": "SmartLock Device Simulator",
+  "description": "Điều khiển & giám sát khoá thông minh giả lập / thiết bị thật ngay trong VS Code (live view, thẻ NFC, PIN, khuôn mặt, Bluetooth, Wi-Fi).",
+  "version": "1.0.0",
+  "publisher": "smartlock",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": { "activitybar": [{ "id": "smartlock", "title": "SmartLock", "icon": "media/lock.svg" }] },
+    "views": { "smartlock": [{ "id": "smartlock.device", "name": "Thiết bị" }] },
+    "commands": [
+      { "command": "smartlock.start", "title": "SmartLock: Chạy khoá", "icon": "$(play)" },
+      { "command": "smartlock.stop", "title": "SmartLock: Dừng khoá", "icon": "$(debug-stop)" },
+      { "command": "smartlock.init", "title": "SmartLock: Tạo device.conf mới" },
+      { "command": "smartlock.openConf", "title": "SmartLock: Mở device.conf", "icon": "$(gear)" },
+      { "command": "smartlock.openLive", "title": "SmartLock: Mở Live View (trong VS Code)", "icon": "$(preview)" },
+      { "command": "smartlock.openBrowser", "title": "SmartLock: Mở Live View trong trình duyệt", "icon": "$(link-external)" },
+      { "command": "smartlock.tapCard", "title": "SmartLock: Quẹt thẻ NFC/RFID" },
+      { "command": "smartlock.enterPin", "title": "SmartLock: Nhập PIN" },
+      { "command": "smartlock.scanFace", "title": "SmartLock: Quét khuôn mặt" },
+      { "command": "smartlock.phoneTicket", "title": "SmartLock: Mở bằng vé điện thoại (BLE/NFC)" },
+      { "command": "smartlock.mintTicket", "title": "SmartLock: Cấp vé test" },
+      { "command": "smartlock.toggleRadio", "title": "SmartLock: Bật/tắt Wi-Fi / Bluetooth / NFC" },
+      { "command": "smartlock.tamper", "title": "SmartLock: Giả lập cạy phá" },
+      { "command": "smartlock.jam", "title": "SmartLock: Giả lập kẹt chốt" },
+      { "command": "smartlock.knobUnlock", "title": "SmartLock: Mở bằng núm trong nhà" },
+      { "command": "smartlock.knobLock", "title": "SmartLock: Khoá bằng núm trong nhà" },
+      { "command": "smartlock.reboot", "title": "SmartLock: Khởi động lại khoá" },
+      { "command": "smartlock.doctor", "title": "SmartLock: Kiểm tra môi trường (doctor)" }
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "smartlock.start", "when": "view == smartlock.device", "group": "navigation@1" },
+        { "command": "smartlock.stop", "when": "view == smartlock.device", "group": "navigation@2" },
+        { "command": "smartlock.openLive", "when": "view == smartlock.device", "group": "navigation@3" },
+        { "command": "smartlock.openConf", "when": "view == smartlock.device", "group": "navigation@4" }
+      ]
+    },
+    "configuration": {
+      "title": "SmartLock",
+      "properties": {
+        "smartlock.python": { "type": "string", "default": "python", "description": "Lệnh Python (vd python, python3, py)." },
+        "smartlock.firmwarePath": { "type": "string", "default": "", "description": "Thư mục chứa gói smartlock_fw. Trống = tự tìm trong workspace (…/firmware)." },
+        "smartlock.configPath": { "type": "string", "default": "", "description": "Đường dẫn device.conf. Trống = <firmwarePath>/device.conf." },
+        "smartlock.host": { "type": "string", "default": "127.0.0.1" },
+        "smartlock.port": { "type": "number", "default": 8765, "description": "Phải trùng [ui] port trong device.conf." },
+        "smartlock.token": { "type": "string", "default": "", "description": "Trùng [ui] token (nếu có)." },
+        "smartlock.autoStart": { "type": "boolean", "default": false, "description": "Tự chạy khoá khi mở VS Code." },
+        "smartlock.notifyDoor": { "type": "boolean", "default": true, "description": "Hiện thông báo khi cửa mở / có cảnh báo." }
+      }
+    }
+  }
+}

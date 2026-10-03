@@ -1,0 +1,9 @@
+# Cài thêm tuỳ phần cứng thật bạn dùng (xem README):
+psutil                # [power] source=system  (pin/nhiệt độ laptop thật)
+bless                 # [bluetooth] driver=bless (GATT server BLE thật: Windows/Linux/macOS)
+pyscard               # [nfc] driver=pcsc (đầu đọc USB ACR122U...)
+opencv-python         # [camera] driver=opencv
+face_recognition      # [camera] driver=opencv (dlib, 128-d)
+# Chỉ trên Raspberry Pi:
+# RPi.GPIO            # relay / servo / keypad gpio / buzzer
+# mfrc522 spidev      # [nfc] driver=rc522

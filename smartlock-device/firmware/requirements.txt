@@ -1,0 +1,2 @@
+# Bắt buộc nếu chạy ONLINE (MQTT). Phiên bản <2 khớp services.py; paho 2.x cũng chạy được.
+paho-mqtt<2

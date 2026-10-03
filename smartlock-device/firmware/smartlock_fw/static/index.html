@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartLock - Live view</title>
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--ink:#16202c;--mut:#667587;--line:#e1e6ec;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--acc:#2563eb;--okbg:#e8f7ee;--badbg:#fdeaea;--warnbg:#fff4e0}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1419;--card:#18202a;--ink:#e6edf3;--mut:#8b99a8;--line:#27323e;--ok:#34d399;--warn:#fbbf24;--bad:#f87171;--acc:#60a5fa;--okbg:#10291d;--badbg:#341618;--warnbg:#322610}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--card)}
+header h1{font-size:17px;margin:0}header small{color:var(--mut)}
+.pill{padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600;background:var(--line);color:var(--mut)}
+.pill.ok{background:var(--okbg);color:var(--ok)}.pill.bad{background:var(--badbg);color:var(--bad)}.pill.warn{background:var(--warnbg);color:var(--warn)}
+main{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:16px;padding:16px 20px;max-width:1400px;margin:auto}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h2{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin:0 0 12px}
+.col{display:flex;flex-direction:column;gap:16px}
+.lockbox{text-align:center}
+.lockbox svg{width:150px;height:150px}
+.state{font-size:26px;font-weight:700;margin:4px 0}
+.state.locked{color:var(--bad)}.state.unlocked{color:var(--ok)}.state.jammed{color:var(--warn)}
+.sub{color:var(--mut);min-height:20px}
+.led{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--mut);margin-right:6px;vertical-align:middle}
+.led.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}.led.error{background:var(--bad);box-shadow:0 0 8px var(--bad)}.led.busy{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.stat{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.stat b{display:block;font-size:12px;color:var(--mut);font-weight:600;margin-bottom:2px}
+.stat span{font-size:16px;font-weight:600}.stat em{display:block;font-style:normal;color:var(--mut);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar{height:6px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ok);transition:width .4s}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:7px 12px;cursor:pointer}
+button:hover{border-color:var(--acc)}button.p{background:var(--acc);color:#fff;border-color:var(--acc)}button.d{color:var(--bad)}
+input,select,textarea{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:8px;padding:7px 10px;min-width:0}
+textarea{width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.row>input,.row>select{flex:1}
+.sw{display:flex;gap:16px;flex-wrap:wrap}.sw label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.sim{display:grid;grid-template-columns:200px 1fr;gap:20px}@media(max-width:700px){.sim{grid-template-columns:1fr}}
+.pad{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.pad button{padding:12px 0;font-weight:600}
+.disp{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;margin-bottom:8px;letter-spacing:.3em;min-height:32px;font-family:ui-monospace,monospace}
+.sec{margin-bottom:14px}.sec h3{font-size:13px;margin:0 0 6px}.hint{color:var(--mut);font-size:12px}
+#log{max-height:340px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+#log div{padding:4px 8px;border-bottom:1px solid var(--line);display:flex;gap:10px}
+#log time{color:var(--mut);flex:none}#log .k{flex:none;width:44px;color:var(--mut);text-transform:uppercase}
+#log .ok{color:var(--ok)}#log .warn{color:var(--warn)}#log .crit{color:var(--bad);font-weight:600}
+.shake{animation:sh .4s}@keyframes sh{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+body.embed header{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="name">SmartLock</h1><small id="code"></small>
+  <span class="pill" id="pMode"></span><span class="pill" id="pLink">…</span><span class="pill" id="pLock"></span>
+  <span style="flex:1"></span><small id="clock"></small>
+</header>
+<main>
+ <div class="col">
+  <div class="card lockbox">
+    <svg id="svg" viewBox="0 0 100 100" aria-label="trạng thái khoá">
+      <rect x="22" y="44" width="56" height="42" rx="8" id="body" fill="currentColor"/>
+      <path id="shackle" d="M34 44V30a16 16 0 0 1 32 0v14" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>
+      <circle cx="50" cy="63" r="6" fill="var(--card)"/><rect x="47.5" y="63" width="5" height="12" rx="2" fill="var(--card)"/>
+    </svg>
+    <div class="state" id="state">…</div>
+    <div class="sub" id="sub"></div>
+    <div class="sub"><span class="led" id="led"></span><span id="ledt">chờ</span></div>
+    <div class="row" style="justify-content:center;margin-top:12px">
+      <button class="p" onclick="api('/api/unlock')">🔓 Mở (núm trong nhà)</button>
+      <button onclick="api('/api/lock')">🔒 Khoá</button>
+      <button onclick="if(confirm('Khởi động lại khoá?'))api('/api/reboot')">⟳ Reboot</button>
+    </div>
+  </div>
+  <div class="card"><h2>Radio (như công tắc phần cứng)</h2>
+    <div class="sw">
+      <label><input type="checkbox" id="rWifi" onchange="radio('wifi',this.checked)"> Wi-Fi</label>
+      <label><input type="checkbox" id="rBle" onchange="radio('bluetooth',this.checked)"> Bluetooth</label>
+      <label><input type="checkbox" id="rNfc" onchange="radio('nfc',this.checked)"> NFC</label>
+    </div>
+    <p class="hint">Tắt Wi-Fi: khoá mất kết nối server nhưng vẫn mở được bằng vé Bluetooth/NFC điện thoại (kiểm tra offline); thẻ/PIN/khuôn mặt cần server nên sẽ bị từ chối.</p>
+  </div>
+ </div>
+ <div class="col">
+  <div class="card"><h2>Trạng thái thiết bị</h2><div class="grid" id="stats"></div></div>
+  <div class="card" id="simCard"><h2>Mô phỏng đầu vào</h2>
+    <div class="sim">
+      <div><div class="disp" id="disp">&nbsp;</div>
+        <div class="pad" id="pad"></div><p class="hint"># xác nhận · * xoá · A quét mặt</p></div>
+      <div>
+        <div class="sec"><h3>Thẻ NFC / RFID</h3>
+          <div class="row"><select id="cardSel"></select><button onclick="tapSel()">Quẹt thẻ</button></div>
+          <div class="row"><input id="uid" placeholder="UID bất kỳ (vd 04A1B2C3)"><button onclick="tap($('#uid').value)">Quẹt UID</button></div></div>
+        <div class="sec"><h3>Khuôn mặt (camera)</h3>
+          <div class="row"><select id="faceSel"></select><button onclick="api('/api/sim/face',{who:$('#faceSel').value})">Quét mặt</button></div></div>
+        <div class="sec"><h3>Điện thoại: vé Bluetooth / NFC</h3>
+          <textarea id="ticket" rows="2" placeholder="Dán vé lấy từ app (POST /devices/&lt;id&gt;/ble-ticket/) hoặc bấm 'Cấp vé test'"></textarea>
+          <div class="row" style="margin-top:6px"><button onclick="api('/api/sim/ble',{ticket:$('#ticket').value.trim()})">Gửi qua Bluetooth</button>
+            <button onclick="api('/api/sim/nfc',{ticket:$('#ticket').value.trim()})">Chạm NFC</button></div>
+          <div class="row"><input id="tuser" placeholder="user_id (UUID) của tài khoản có quyền"><select id="tttl"><option value="3600">1 giờ</option><option value="60">60 giây</option><option value="-5">đã hết hạn</option></select>
+            <button onclick="mint('ble')">Cấp vé BLE</button><button onclick="mint('nfc')">Cấp vé NFC</button></div></div>
+        <div class="sec"><h3>Sự cố phần cứng</h3>
+          <div class="row"><button class="d" onclick="api('/api/sim/tamper',{on:!S.tamper})">Cạy phá (tamper)</button>
+            <button class="d" onclick="api('/api/sim/jam',{on:S.lock_state!=='jammed'})">Kẹt chốt</button>
+            <label>Pin <input type="range" id="bat" min="0" max="100" style="min-width:120px" onchange="api('/api/sim/battery',{level:+this.value})"></label></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="card"><h2>Nhật ký</h2><div id="log"></div></div>
+ </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const TOKEN=new URLSearchParams(location.search).get('token')||'';
+if(new URLSearchParams(location.search).get('embed'))document.body.classList.add('embed');
+let S={},CFG={};
+const H=TOKEN?{'X-Token':TOKEN,'Content-Type':'application/json'}:{'Content-Type':'application/json'};
+async function api(p,b){try{const r=await fetch(p,{method:'POST',headers:H,body:JSON.stringify(b||{})});return await r.json()}catch(e){return{ok:false}}}
+const radio=(n,on)=>api('/api/radio',{name:n,on});
+const tap=u=>{if(u)api('/api/sim/rfid',{uid:u})};
+const tapSel=()=>tap($('#cardSel').value);
+async function mint(kind){const r=await api('/api/ticket',{kind,user_id:$('#tuser').value.trim()||undefined,ttl:+$('#tttl').value});if(r.ticket)$('#ticket').value=r.ticket}
+'123A456B789C*0#D'.match(/./g).forEach(k=>{const b=document.createElement('button');b.textContent=k;b.onclick=()=>api('/api/sim/key',{key:k});$('#pad').appendChild(b)});
+function bars(r){if(r==null)return'';const n=r>-55?4:r>-67?3:r>-78?2:1;return'▂▄▆█'.slice(0,n)}
+function stat(t,v,sub,cls){return`<div class="stat"><b>${t}</b><span class="${cls||''}">${v}</span><em title="${sub||''}">${sub||'&nbsp;'}</em></div>`}
+function fmtUp(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?`${h}g ${m}p`:`${m}p ${s%60}s`}
+function render(){
+  if(!S.code)return;
+  $('#name').textContent=S.name;$('#code').textContent=S.code+(S.location?' · '+S.location:'');
+  $('#pMode').textContent=S.mode==='physical'?'Thiết bị thật':'Giả lập';
+  const standalone=S.standalone,mq=S.mqtt&&S.mqtt.connected;
+  const pl=$('#pLink');pl.textContent=standalone?'Độc lập':mq?'Online · MQTT':'Offline';pl.className='pill '+(standalone?'warn':mq?'ok':'bad');
+  const st=S.lock_state,L={locked:'ĐÃ KHOÁ',unlocked:'ĐANG MỞ',jammed:'KẸT CHỐT'};
+  $('#state').textContent=L[st]||st;$('#state').className='state '+st;
+  const pk=$('#pLock');pk.textContent=L[st];pk.className='pill '+(st==='locked'?'bad':st==='unlocked'?'ok':'warn');
+  $('#svg').style.color=st==='locked'?'var(--bad)':st==='unlocked'?'var(--ok)':'var(--warn)';
+  $('#shackle').setAttribute('transform',st==='unlocked'?'translate(24 -12) rotate(24 34 44)':'');
+  let sub='';if(S.lockout_remaining)sub=`⛔ Khoá tạm còn ${S.lockout_remaining}s`;else if(S.relock_in)sub=`Tự khoá lại sau ${S.relock_in}s`;else if(S.pending)sub=`Đang chờ server xác thực (${S.pending})…`;else if(S.tamper)sub='⚠ Phát hiện cạy phá';
+  $('#sub').textContent=sub;
+  $('#led').className='led '+(S.led==='idle'?'':S.led);$('#ledt').textContent={idle:'chờ',ok:'đèn xanh',error:'đèn đỏ',busy:'đang xử lý'}[S.led]||'';
+  $('#disp').textContent='•'.repeat(S.keypad_len)||'\u00a0';
+  const w=S.wifi,b=S.bluetooth,n=S.nfc,c=S.camera;
+  $('#stats').innerHTML=
+    stat('Pin',S.battery+'%',null,S.battery<=20?'bad':'')+
+    stat('Nhiệt độ',S.temperature==null?'—':S.temperature+' °C','cảm biến '+(CFG.drivers?CFG.drivers.lock:''))+
+    stat('Wi-Fi',!w.enabled?'Tắt':w.connected?bars(S.rssi)+' '+(S.rssi==null?'':S.rssi+' dBm'):'Mất mạng',w.ssid||'driver '+w.driver)+
+    stat('MQTT',standalone?'không dùng':mq?'Đã kết nối':'Chưa kết nối','hàng đợi offline: '+S.events_queued)+
+    stat('Bluetooth',!b.enabled?'Tắt':b.advertising?'Đang quảng bá':'Bật',(CFG.adv_name||'')+' · '+b.driver)+
+    stat('NFC',n.enabled?'Bật':'Tắt','driver '+n.driver)+
+    stat('Camera',c.enabled?'Có':'Tắt',c.driver||'')+
+    stat('Chống cạy',S.tamper?'⚠ CẠY PHÁ':'Bình thường','',S.tamper?'bad':'')+
+    stat('Firmware',S.firmware,S.mac)+stat('Uptime',fmtUp(S.uptime||0),'tự khoá sau '+(CFG.unlock_seconds||'?')+'s');
+  for(const [id,v] of [['rWifi',w.enabled],['rBle',b.enabled],['rNfc',n.enabled]])$('#'+id).checked=v;
+  if(document.activeElement!==$('#bat'))$('#bat').value=S.battery;
+}
+function logLine(e){
+  const d=document.createElement('div'),t=new Date(e.ts*1000).toLocaleTimeString('vi-VN');
+  d.innerHTML=`<time>${t}</time><span class="k">${e.kind}</span><span class="${e.level}"></span>`;
+  d.lastChild.textContent=e.text;const L=$('#log');L.prepend(d);while(L.children.length>150)L.lastChild.remove();
+  if(e.level==='warn'||e.level==='crit')$('#state').classList.add('shake'),setTimeout(()=>$('#state').classList.remove('shake'),450);
+}
+function fillCfg(){
+  $('#cardSel').innerHTML=Object.entries(CFG.cards||{}).map(([k,v])=>`<option value="${v}">${k} (${v})</option>`).join('')||'<option value="">(chưa có thẻ - nhập UID)</option>';
+  $('#faceSel').innerHTML=(CFG.faces||[]).map(f=>`<option>${f}</option>`).join('')+'<option value="stranger">Người lạ</option>';
+  $('#simCard').style.display=CFG.sim_input===false?'none':'';
+}
+function connect(){
+  const es=new EventSource('/api/stream'+(TOKEN?'?token='+encodeURIComponent(TOKEN):''));
+  es.onmessage=m=>{const d=JSON.parse(m.data);
+    if(d.t==='hello'){S=d.s;CFG=d.cfg;fillCfg();$('#log').innerHTML='';d.logs.forEach(logLine);render()}
+    else if(d.t==='state'){S=d.s;render()}else if(d.t==='log')logLine(d.e)};
+  es.onerror=()=>{$('#pLink').textContent='Mất kết nối khoá';$('#pLink').className='pill bad';es.close();setTimeout(connect,2000)};
+}
+connect();setInterval(()=>$('#clock').textContent=new Date().toLocaleString('vi-VN'),1000);
+</script>
+</body>
+</html>

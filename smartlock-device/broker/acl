@@ -1,0 +1,9 @@
+# Tài khoản server (Django publisher/subscriber) = MQTT_PUBLISHER_USERNAME, khai báo cả trong MQTT_TRUSTED_USERNAMES
+user django
+topic readwrite smartlock/#
+
+# Mỗi khoá chỉ đụng topic của chính nó (khớp mqtt_acl_webhook): username = device_code
+pattern read  smartlock/%u/cmd
+pattern write smartlock/%u/status
+pattern write smartlock/%u/ack
+pattern write smartlock/%u/event

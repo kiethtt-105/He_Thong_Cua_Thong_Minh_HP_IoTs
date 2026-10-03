@@ -1,0 +1,5 @@
+__pycache__/
+firmware/device.conf
+firmware/state.json
+*.log
+node_modules/

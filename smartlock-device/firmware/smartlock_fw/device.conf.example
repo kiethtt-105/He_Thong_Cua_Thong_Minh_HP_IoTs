@@ -1,0 +1,116 @@
+; =====================================================================================
+;  device.conf - cấu hình khoá thông minh (giống file cấu hình trong flash của khoá thật)
+;  Sinh bằng:  python -m smartlock_fw init      Chạy:  python -m smartlock_fw run
+;  Mọi giá trị có thể ghi đè bằng biến môi trường  SMARTLOCK_<SECTION>_<KEY>  (vd SMARTLOCK_UI_PORT=9000)
+; =====================================================================================
+
+[device]
+code     = @CODE@              ; = Device.device_code (CHỮ HOA)
+secret   = @SECRET@            ; secret gốc. Server chỉ lưu sha256(secret). Dùng cả làm mật khẩu MQTT và khoá ký vé BLE/NFC
+name     = @NAME@
+mode     = simulated           ; simulated | physical   (khớp Device.device_mode)
+firmware = 1.0.0-sim
+mac      =                     ; để trống = lấy MAC máy; hoặc AA:BB:CC:DD:EE:FF
+location = Cửa chính
+state_file = state.json        ; lưu pin + hàng đợi sự kiện offline
+
+; ------------------------------------------------------------------ máy chủ
+[server]
+mode      = online             ; online = nối MQTT tới hệ thống | standalone = chạy ĐỘC LẬP, tự xác thực bằng [standalone.*]
+mqtt_host = localhost
+mqtt_port = 1883
+mqtt_tls  = false
+mqtt_ca   =                    ; đường dẫn CA nếu dùng TLS riêng
+keepalive = 30
+heartbeat_seconds = 30         ; gửi status định kỳ (server coi offline sau 180s)
+
+; ------------------------------------------------------------------ Wi-Fi
+[wifi]
+enabled = true
+driver  = sim                  ; sim = giả lập | system = đọc Wi-Fi THẬT của máy (netsh / nmcli / airport)
+ssid     =
+password =
+connect  = false               ; true = thử tự kết nối ssid khi khởi động (nmcli trên Linux; Windows cần profile đã lưu)
+allow_ethernet = true          ; driver=system: coi mạng dây là có kết nối
+sim_rssi = -52
+
+; ------------------------------------------------------------------ Bluetooth LE (khoá = peripheral GATT)
+[bluetooth]
+enabled  = true
+driver   = sim                 ; sim | bless  (pip install bless: quảng bá BLE THẬT trên Windows/Linux/macOS)
+adv_name =                     ; để trống = SmartLock-<6 ký tự cuối code>
+service_uuid     = 5a110c00-0000-4c0c-9e00-534d4c4f434b
+ticket_char_uuid = 5a110c01-0000-4c0c-9e00-534d4c4f434b   ; app GHI vé vào đây
+result_char_uuid = 5a110c02-0000-4c0c-9e00-534d4c4f434b   ; khoá trả OK / DENIED:<lý do> (read, notify)
+
+; ------------------------------------------------------------------ NFC
+[nfc]
+enabled = true
+driver  = sim                  ; sim | pcsc (đầu đọc USB ACR122U..., pip install pyscard) | rc522 (Raspberry Pi)
+reader  =                      ; pcsc: một phần tên đầu đọc (trống = đầu đọc đầu tiên)
+hce_aid = F0534D4C4F434B01     ; AID ứng dụng HCE trên điện thoại (SELECT AID -> điện thoại trả vé ASCII + 9000)
+
+; ------------------------------------------------------------------ bàn phím ma trận 4x4
+[keypad]
+driver  = sim                  ; sim | gpio (Raspberry Pi)
+rows    = 5,6,13,19
+cols    = 26,20,21,16
+layout  = 123A,456B,789C,*0#D  ; # = xác nhận PIN, * = xoá, A = quét khuôn mặt
+timeout_seconds = 10
+max_digits = 8
+
+; ------------------------------------------------------------------ camera / khuôn mặt
+[camera]
+enabled = true
+driver  = sim                  ; sim | opencv (pip install opencv-python face_recognition)
+index   = 0
+faces_dir = faces              ; faces/<tên>.json = {"name":..,"embedding":[128 số]}
+frames  = 3
+
+; ------------------------------------------------------------------ chốt khoá + còi
+[lock]
+driver  = sim                  ; sim | relay | servo   (relay/servo chạy trên Raspberry Pi)
+pin     = 17                   ; relay: chân GPIO (BCM)
+servo_pin = 18
+active_high = true
+unlock_seconds = 5             ; tự khoá lại sau n giây
+servo_locked_deg = 0
+servo_unlocked_deg = 90
+
+[buzzer]
+driver = sim                   ; sim | gpio
+pin    = 27
+
+; ------------------------------------------------------------------ nguồn
+[power]
+source = sim                   ; sim | system (đọc pin laptop thật qua psutil)
+initial_battery = 100
+drain_minutes_per_percent = 20 ; sim: bao nhiêu phút hao 1%
+
+; ------------------------------------------------------------------ bảo mật cục bộ (song song với khoá tạm của server)
+[security]
+local_lockout = true
+fail_threshold = 3
+fail_window_seconds = 60
+lockout_seconds = 60
+verify_timeout_seconds = 6     ; chờ server trả lệnh UNLOCK sau khi gửi thẻ/PIN/khuôn mặt
+
+; ------------------------------------------------------------------ giao diện live view cục bộ
+[ui]
+host  = 127.0.0.1              ; 0.0.0.0 nếu muốn xem từ máy khác trong LAN (nên đặt token)
+port  = 8765
+token =                        ; nếu đặt: truy cập http://host:port/?token=...
+allow_sim_input = true         ; cho phép bấm giả lập thẻ/PIN/khuôn mặt/vé trên web
+
+; ------------------------------------------------------------------ chế độ ĐỘC LẬP (server.mode = standalone)
+[standalone]
+default_user_id = 00000000-0000-0000-0000-000000000001   ; user_id mặc định khi cấp vé test
+face_threshold  = 0.5
+
+[standalone.cards]             ; tên = UID thẻ
+Thẻ chủ nhà = 04A1B2C3
+Thẻ khách   = 04D4E5F6
+
+[standalone.pins]              ; tên = PIN [, số lần dùng tối đa]   (bỏ trống số lần = dùng mãi)
+Chủ nhà = 123456
+Khách một lần = 654321, 1
