@@ -1,0 +1,74 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Khoá ảo 3D</title>
+<style>
+html,body{margin:0;height:100%;background:#0b1220;color:#e2e8f0;font-family:system-ui,sans-serif;overflow:hidden}
+#c{position:absolute;inset:0}
+.p{position:absolute;background:#111b2eE6;border:1px solid #243049;border-radius:12px;padding:12px;font-size:13px}
+#cfg{top:12px;left:12px;width:250px}#cfg input{width:100%;box-sizing:border-box;margin:3px 0 7px;padding:6px;border-radius:6px;border:1px solid #334155;background:#0b1220;color:#e2e8f0}
+button{padding:7px 10px;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer;margin:2px 2px 0 0}
+#st{top:12px;right:12px;text-align:right;font-size:15px}#lcd{font:20px monospace;background:#0a2a1a;color:#4ade80;padding:6px 10px;border-radius:6px;margin-top:6px;min-width:130px}
+#log{bottom:12px;left:12px;width:340px;height:120px;overflow:auto;font:12px monospace;white-space:pre-wrap}
+</style></head><body>
+<canvas id="c"></canvas>
+<div class="p" id="cfg"><b>Khoá ảo 3D</b><br>
+Broker (WebSocket)<input id="url" value="ws://localhost:9001">
+device_code<input id="code" placeholder="SL-DEMO-DEV-001">
+secret<input id="sec" type="password">
+<button onclick="connect()">Kết nối</button><button onclick="tamper=!tamper;status()" style="background:#b45309">Phá khoá</button><br>
+Thẻ RFID (UID)<input id="uid" value="04A1B2C3"><button onclick="ev({type:'rfid',uid:uid.value});lcd('QUET THE')">Quẹt thẻ</button>
+<div style="margin-top:6px">Click các nút số trên bàn phím 3D · <b>#</b> gửi · <b>*</b> xoá · kéo chuột để xoay</div></div>
+<div class="p" id="st"><span id="conn">Chưa kết nối</span><div id="lcd">----</div></div>
+<div class="p" id="log"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<script>
+const $=id=>document.getElementById(id), P=new URLSearchParams(location.search);
+['url','code'].forEach(k=>P.get(k)&&($(k).value=P.get(k)));P.get('secret')&&($('sec').value=P.get('secret'));
+// ---------- 3D ----------
+const R=new THREE.WebGLRenderer({canvas:$('c'),antialias:true}),S=new THREE.Scene(),C=new THREE.PerspectiveCamera(45,1,.1,100);
+S.background=new THREE.Color(0x0b1220);C.position.set(0,.6,7);
+S.add(new THREE.AmbientLight(0xffffff,.6));const dl=new THREE.DirectionalLight(0xffffff,.9);dl.position.set(3,4,5);S.add(dl);
+const G=new THREE.Group();S.add(G);
+const mat=c=>new THREE.MeshStandardMaterial({color:c,metalness:.3,roughness:.5}),box=(w,h,d,c,x,y,z,p=G)=>{const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(c));m.position.set(x,y,z);p.add(m);return m};
+box(3.6,6,.3,0x6b4f3a,0,0,-.2);                       // cánh cửa
+box(2.2,3.4,.5,0x334155,0,.4,.1);                      // thân khoá
+const bolt=box(1.3,.35,.4,0xcbd5e1,-1.4,-1.7,.1);        // chốt (trượt sang trái = mở)
+box(.5,.5,.2,0x1e293b,1.7,-1.7,.1);                    // lỗ chốt bên khung cửa
+const led=new THREE.Mesh(new THREE.SphereGeometry(.14),new THREE.MeshBasicMaterial({color:0xef4444}));led.position.set(.8,1.8,.4);G.add(led);
+box(1.2,.5,.15,0x0f172a,0,1.5,.38);                    // đầu đọc RFID
+const keys=[];'123456789*0#'.split('').forEach((k,i)=>{const m=box(.42,.32,.12,0x94a3b8,(i%3-1)*.55,.55-Math.floor(i/3)*.42,.4);m.userData.k=k;keys.push(m)});
+G.rotation.y=-.35;
+function size(){R.setSize(innerWidth,innerHeight);C.aspect=innerWidth/innerHeight;C.updateProjectionMatrix()}addEventListener('resize',size);size();
+let drag=null,moved=0;const ray=new THREE.Raycaster(),mv=new THREE.Vector2();
+R.domElement.onpointerdown=e=>{drag=e.clientX;moved=0};
+addEventListener('pointerup',e=>{if(drag!==null&&moved<4){mv.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);ray.setFromCamera(mv,C);const h=ray.intersectObjects(keys)[0];if(h)press(h.object)}drag=null});
+addEventListener('pointermove',e=>{if(drag!==null){G.rotation.y+=(e.clientX-drag)*.01;drag=e.clientX;moved++}});
+let target=-1.4;(function loop(){bolt.position.x+=(target-bolt.position.x)*.12;R.render(S,C);requestAnimationFrame(loop)})();
+// ---------- Logic khoá (cùng giao thức firmware thật) ----------
+let state='locked',tamper=false,battery=100,pin='',cli=null,relock=null;
+function lcd(t){$('lcd').textContent=t}
+function log(t){const l=$('log');l.textContent+=new Date().toLocaleTimeString()+' '+t+'\n';l.scrollTop=1e9}
+function setState(s){state=s;target=s==='unlocked'?-2.6:-1.4;led.material.color.set(s==='unlocked'?0x22c55e:0xef4444);lcd(s==='unlocked'?'MO KHOA':'DA KHOA')}
+function press(m){m.position.z=.34;setTimeout(()=>m.position.z=.4,120);const k=m.userData.k;
+  if(k==='*'){pin='';lcd('----')}else if(k==='#'){if(pin.length>=4)ev({type:'pin',pin});lcd('DANG KIEM TRA');pin=''}
+  else if(pin.length<8){pin+=k;lcd('*'.repeat(pin.length))}}
+const T=k=>`smartlock/${$('code').value.trim()}/${k}`;
+function pub(k,o){cli&&cli.connected&&cli.publish(T(k),JSON.stringify(o),{qos:1})}
+function ev(o){pub('event',o);log('event '+JSON.stringify(o))}
+function status(){pub('status',{lock_state:state,battery,tamper,rssi:-55,firmware:'sim3d-1.0'})}
+function connect(){
+  if(cli)cli.end(true);const code=$('code').value.trim();
+  cli=mqtt.connect($('url').value,{username:code,password:$('sec').value,clientId:'v3d-'+code+'-'+Math.random().toString(16).slice(2,6),
+    will:{topic:T('status'),payload:JSON.stringify({state:'offline'}),qos:1},reconnectPeriod:3000});
+  cli.on('connect',()=>{$('conn').textContent='🟢 '+code;cli.subscribe(T('cmd'),{qos:1});ev({type:'boot',firmware:'sim3d-1.0'});status();log('đã kết nối')});
+  cli.on('close',()=>$('conn').textContent='🔴 mất kết nối');cli.on('error',e=>log('lỗi '+e.message));
+  cli.on('message',(t,m)=>{let c;try{c=JSON.parse(m)}catch(e){return}log('cmd '+c.command);let ok=true;
+    if(c.command==='UNLOCK'){setState('unlocked');clearTimeout(relock);relock=setTimeout(()=>{setState('locked');status()},5000)}
+    else if(c.command==='LOCK')setState('locked');
+    else if(c.command==='BUZZER_ALERT'){lcd('!! CANH BAO !!');setTimeout(()=>lcd(state==='locked'?'DA KHOA':'MO KHOA'),3000);return}
+    else if(!['PING','REBOOT'].includes(c.command))ok=false;
+    if(c.command_id)pub('ack',{command_id:c.command_id,token:c.token,ok});status()});
+}
+setInterval(status,30000);
+if(P.get('auto')&&$('code').value)connect();
+</script></body></html>

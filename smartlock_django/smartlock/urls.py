@@ -1,4 +1,5 @@
 from django.urls import path
+from . import live
 from . import views
 
 app_name = 'smartlock'
@@ -21,6 +22,9 @@ urlpatterns = [
     path('devices/<uuid:device_id>/command/', views.device_command, name='device-command'),
     path('devices/<uuid:device_id>/ble-ticket/', views.device_ble_ticket, name='device-ble-ticket'),   # app: vé Bluetooth
     path('devices/<uuid:device_id>/nfc-ticket/', views.device_nfc_ticket, name='device-nfc-ticket'),   # app: vé NFC giả lập thẻ
+
+    path('devices/<uuid:device_id>/live/', live.live_page, name='device-live'),
+     path('devices/<uuid:device_id>/live/data/', live.live_data, name='device-live-data'),
 
     # ====================== SYNC: cache mã hoá về máy sau login ======================
     path('api/sync/', views.sync_bootstrap, name='sync-bootstrap'),

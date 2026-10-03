@@ -1,8 +1,11 @@
 # manage_sys/tests.py  ->  chạy:  python manage.py test manage_sys
+import json
 from datetime import timedelta
+from unittest import mock
 
 from django.conf import settings
-from django.test import TestCase, override_settings
+from django.core import mail
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -577,3 +580,154 @@ class AdminFullPowerTests(ManageSysBase):
         self.client.post(url, {'action': 'grant_admin', 'confirm': self.user.email, 'current_password': 'sai'})
         self.user.refresh_from_db()
         self.assertFalse(self.user.is_admin)
+
+
+# =====================================================================================================
+# EMAIL: link reset do admin gửi + mail cảnh báo thao tác nhạy cảm + log vào AuditLog (không có bảng riêng)
+# =====================================================================================================
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+class MailBase(ManageSysBase):
+    """Gửi mail ĐỒNG BỘ trong test; dùng self.captureOnCommitCallbacks(execute=True) để xả mail on_commit."""
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch('smartlock.emailing.EMAIL_ASYNC', False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.client.post(reverse('manage_sys:login'), {'identifier': 'admin@example.com', 'password': PW})
+
+    def req(self, user, ip='10.0.0.1'):
+        r = RequestFactory().get('/', REMOTE_ADDR=ip)
+        r.user = user
+        return r
+
+    def audit(self, user, action, ip='10.0.0.1', **kw):
+        with self.captureOnCommitCallbacks(execute=True):
+            services.audit(self.req(user, ip), action, **kw)
+
+
+class ResetLinkTests(MailBase):
+    def setUp(self):
+        super().setUp()
+        self.url = reverse('manage_sys:user-detail', args=[self.user.id])
+
+    def _post(self, **extra):
+        data = {'action': 'send_reset_link', 'user_requested': 'on'}
+        data.update(extra)
+        with self.captureOnCommitCallbacks(execute=True):
+            return self.client.post(self.url, data)
+
+    def test_link_goes_only_to_the_user_and_password_is_not_touched(self):
+        self._post()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.user.email])
+        self.assertIn('/reset-password/', mail.outbox[0].body)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(PW))                   # admin KHÔNG đổi mật khẩu
+        self.assertTrue(AuditLog.objects.filter(action='MANAGE_RESET_LINK_SENT', target_user=self.user,
+                                                success=True).exists())
+        self.assertTrue(Notification.objects.filter(user=self.user, type='SECURITY').exists())
+
+    def test_mail_is_logged_without_link_or_body(self):
+        self._post()
+        log = AuditLog.objects.get(action='MAIL_SENT', target_user=self.user)
+        blob = json.dumps(log.metadata)
+        self.assertNotIn('reset-password', blob)
+        self.assertNotIn(self.user.email, blob)                          # địa chỉ đã được che
+        self.assertEqual(log.metadata['template'], 'password_reset')
+
+    def test_requires_user_requested_checkbox(self):
+        self._post(user_requested='')
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_unverified_account_gets_nothing(self):
+        other = make_user('u2@example.com', 'user2', email_verified=False)
+        r = self.client.post(reverse('manage_sys:user-detail', args=[other.id]),
+                             {'action': 'send_reset_link', 'user_requested': 'on'})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_cooldown_blocks_a_second_send(self):
+        self._post()
+        self._post()
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_admin_has_no_way_to_set_a_password(self):
+        for action in ('set_password', 'change_password', 'reset_password'):
+            self.client.post(self.url, {'action': action, 'new_password': 'Hacked-12345!', 'password': 'Hacked-12345!'})
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password(PW))
+        self.assertEqual(len(mail.outbox), 0)
+
+
+class SecurityMailTests(MailBase):
+    def test_grant_admin_mails_the_target_without_links(self):
+        url = reverse('manage_sys:user-detail', args=[self.user.id])
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(url, {'action': 'grant_admin', 'confirm': self.user.email, 'current_password': PW})
+        self.assertEqual([m.to for m in mail.outbox], [[self.user.email]])
+        self.assertIn('quyền quản trị', mail.outbox[0].subject)
+        self.assertNotIn('http', mail.outbox[0].body)                    # email cảnh báo không chứa liên kết
+
+    def test_rotate_secret_mails_the_device_owner(self):
+        dev = Device.objects.create(device_code='DEV-MAIL0001', provisioning_secret_hash='x', name='Cửa', owner=self.user,
+                                    status='online')
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse('manage_sys:device-detail', args=[dev.id]),
+                             {'action': 'rotate_secret', 'confirm': dev.device_code, 'current_password': PW})
+        self.assertEqual([m.to for m in mail.outbox], [[self.user.email]])
+        body = mail.outbox[0].body
+        self.assertNotIn(services.hash_token('x'), body)
+        self.assertIn('Cửa', body)
+
+    def test_failed_action_is_not_mailed(self):
+        self.audit(self.user, 'PASSWORD_CHANGED', success=False, target_user=self.user)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_same_event_is_throttled(self):
+        self.audit(self.user, 'PASSWORD_CHANGED', target_user=self.user)
+        self.audit(self.user, 'PASSWORD_CHANGED', target_user=self.user)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_new_ip_login_mails_but_first_and_known_ip_do_not(self):
+        with self.settings(TRUST_PROXY_HEADERS=False):
+            self.audit(self.user, 'LOGIN', ip='10.0.0.1')               # lần đầu
+            self.audit(self.user, 'LOGIN', ip='10.0.0.1')               # IP quen
+            self.assertEqual(len(mail.outbox), 0)
+            self.audit(self.user, 'LOGIN', ip='10.0.0.2')               # IP mới
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('10.0.0.2', mail.outbox[0].body)
+
+    def test_share_revoke_mails_owner_and_grantee(self):
+        dev = Device.objects.create(device_code='DEV-MAIL0002', provisioning_secret_hash='x', name='Cửa', owner=self.user,
+                                    status='online')
+        guest = make_user('guest@example.com', 'guest1')
+        self.audit(self.user, 'ACCESS_REVOKED', device=dev, target_user=guest, severity='warning')
+        self.assertEqual(sorted(m.to[0] for m in mail.outbox), ['guest@example.com', 'user@example.com'])
+
+    def test_correct_secret_on_owned_device_alerts_the_owner(self):
+        dev = Device.objects.create(device_code='DEV-MAIL0003', provisioning_secret_hash='x', name='Cửa', owner=self.user,
+                                    status='online')
+        thief = make_user('thief@example.com', 'thief1')
+        self.audit(thief, 'DEVICE_CLAIM_FAILED', success=False, actor=thief,
+                   metadata={'device_code_input': dev.device_code, 'code': 'BAD_CREDENTIALS'})
+        self.assertEqual(len(mail.outbox), 0)                            # sai secret: không báo (tránh spam)
+        self.audit(thief, 'DEVICE_CLAIM_FAILED', success=False, actor=thief,
+                   metadata={'device_code_input': dev.device_code, 'code': 'ALREADY_OWNED'})
+        self.assertEqual([m.to for m in mail.outbox], [[self.user.email]])
+
+    def test_smtp_failure_is_logged_and_never_breaks_the_action(self):
+        with mock.patch('smartlock.emailing._django_send_mail', side_effect=OSError('smtp down')):
+            self.audit(self.user, 'PASSWORD_CHANGED', target_user=self.user)
+        log = AuditLog.objects.get(action='MAIL_FAILED', target_user=self.user)
+        self.assertFalse(log.success)
+        self.assertNotIn('body', json.dumps(log.metadata))
+        self.assertTrue(AuditLog.objects.filter(action='PASSWORD_CHANGED').exists())
+
+    def test_remote_unlock_mail_is_off_by_default(self):
+        dev = Device.objects.create(device_code='DEV-MAIL0004', provisioning_secret_hash='x', name='Cửa', owner=self.user,
+                                    status='online')
+        self.audit(self.user, 'CMD_UNLOCK', device=dev)
+        self.assertEqual(len(mail.outbox), 0)
+        with self.settings(SECURITY_MAIL_REMOTE_UNLOCK=True):
+            self.audit(self.user, 'CMD_UNLOCK', device=dev)
+        self.assertEqual(len(mail.outbox), 1)

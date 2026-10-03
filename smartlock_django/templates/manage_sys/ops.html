@@ -5,16 +5,16 @@
 {% if page == 'dashboard' %}
 {% url 'manage_sys:users' as users_url %}{% url 'manage_sys:devices' as devices_url %}
 <div class="row g-3 mb-3">
-    {% include 'manage_sys/_stat.html' with col="col-12 col-sm-4" href=users_url tone="primary" icon="users" num=stats.total_users active=stats.active_users label="Người dùng" %}
-    {% include 'manage_sys/_stat.html' with col="col-12 col-sm-4" href=devices_url tone="success" icon="plug" num=stats.online_devices of=stats.total_devices label="Thiết bị online" %}
-    {% url 'manage_sys:logs' as logs_url %}{% include 'manage_sys/_stat.html' with col="col-12 col-sm-4" href=logs_url q="?severity=critical" tone="danger" icon="triangle-exclamation" num=stats.critical_24h label="Sự kiện nghiêm trọng (24h)" %}
+    {% include 'manage_sys/_ui.html' with part="stat" col="col-12 col-sm-4" href=users_url tone="primary" icon="users" num=stats.total_users active=stats.active_users label="Người dùng" %}
+    {% include 'manage_sys/_ui.html' with part="stat" col="col-12 col-sm-4" href=devices_url tone="success" icon="plug" num=stats.online_devices of=stats.total_devices label="Thiết bị online" %}
+    {% url 'manage_sys:logs' as logs_url %}{% include 'manage_sys/_ui.html' with part="stat" col="col-12 col-sm-4" href=logs_url q="?severity=critical" tone="danger" icon="triangle-exclamation" num=stats.critical_24h label="Sự kiện nghiêm trọng (24h)" %}
 </div>
 
 <div class="row g-3 mb-4">
-    {% url 'manage_sys:login-attempts' as logins_url %}{% include 'manage_sys/_stat.html' with sm=True col="col-6 col-lg-3" href=logins_url q="?status=fail" tone="danger" icon="user-xmark" num=stats.failed_logins_24h label="Đăng nhập thất bại (24h)" %}
-    {% include 'manage_sys/_stat.html' with sm=True col="col-6 col-lg-3" href=users_url q="?status=locked" tone="secondary" icon="user-lock" num=stats.locked_accounts label="Tài khoản đang bị khóa" %}
-    {% include 'manage_sys/_stat.html' with sm=True col="col-6 col-lg-3" href=users_url q="?status=unverified" tone="info" icon="envelope-circle-check" num=stats.unverified_users label="Chưa xác thực email" %}
-    {% include 'manage_sys/_stat.html' with sm=True col="col-6 col-lg-3" href=devices_url q="?status=maintenance" tone="warning" icon="screwdriver-wrench" num=stats.maintenance_devices label="Thiết bị đang bảo trì" %}
+    {% url 'manage_sys:login-attempts' as logins_url %}{% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=logins_url q="?status=fail" tone="danger" icon="user-xmark" num=stats.failed_logins_24h label="Đăng nhập thất bại (24h)" %}
+    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=users_url q="?status=locked" tone="secondary" icon="user-lock" num=stats.locked_accounts label="Tài khoản đang bị khóa" %}
+    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=users_url q="?status=unverified" tone="info" icon="envelope-circle-check" num=stats.unverified_users label="Chưa xác thực email" %}
+    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=devices_url q="?status=maintenance" tone="warning" icon="screwdriver-wrench" num=stats.maintenance_devices label="Thiết bị đang bảo trì" %}
 </div>
 
 <div class="row g-4">
@@ -72,8 +72,9 @@
     <select name="scope" class="form-select" style="flex:1 1 190px">
         <option value="">Toàn hệ thống</option>
         <option value="manage" {% if scope == 'manage' %}selected{% endif %}>Chỉ thao tác quản trị</option>
+        <option value="mail" {% if scope == 'mail' %}selected{% endif %}>Chỉ email đã gửi (MAIL_*)</option>
     </select>
-    {% include 'manage_sys/_filter_btns.html' with reset='manage_sys:logs' %}
+    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:logs' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
 </form>
 
 <div class="card">
@@ -89,17 +90,17 @@
                     <td>{{ log.device.name|default:"—" }}</td>
                     <td class="mono text-break">{{ log.action }}</td>
                     <td><span class="badge text-bg-{{ log.severity|badge }}">{{ log.severity|vi }}</span></td>
-                    <td>{% include 'manage_sys/_ok.html' with ok=log.success %}</td>
+                    <td>{% if log.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td>
                     <td class="mono">{{ log.ip_address|default:"—" }}</td>
                 </tr>
             {% empty %}
-                {% include 'manage_sys/_empty_state.html' with cols=8 icon="file-lines" title="Không có log nào" %}
+                {% include 'manage_sys/_ui.html' with part="empty_state" cols=8 icon="file-lines" title="Không có log nào" %}
             {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
-{% include 'manage_sys/_pager.html' %}
+{% include 'manage_sys/_ui.html' with part="pager" %}
 {% elif page == 'audit_logins' %}
 <form method="get" class="filter-bar">
     <input type="search" name="q" value="{{ q }}" class="form-control" style="flex:2 1 260px" placeholder="Email/username thử đăng nhập hoặc IP...">
@@ -108,7 +109,7 @@
         <option value="ok" {% if status == 'ok' %}selected{% endif %}>Thành công</option>
         <option value="fail" {% if status == 'fail' %}selected{% endif %}>Thất bại</option>
     </select>
-    {% include 'manage_sys/_filter_btns.html' with reset='manage_sys:login-attempts' %}
+    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:login-attempts' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
 </form>
 
 <div class="card">
@@ -123,16 +124,16 @@
                     <td class="text-break">{% if a.user %}<a href="{% url 'manage_sys:user-detail' a.user.id %}">{{ a.user.email }}</a>{% else %}—{% endif %}</td>
                     <td class="mono">{{ a.ip_address }}</td>
                     <td class="small text-muted">{{ a.user_agent|default:"—"|truncatechars:50 }}</td>
-                    <td>{% include 'manage_sys/_ok.html' with ok=a.success %}</td>
+                    <td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td>
                 </tr>
             {% empty %}
-                {% include 'manage_sys/_empty_state.html' with cols=6 icon="right-to-bracket" title="Không có dữ liệu" %}
+                {% include 'manage_sys/_ui.html' with part="empty_state" cols=6 icon="right-to-bracket" title="Không có dữ liệu" %}
             {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
-{% include 'manage_sys/_pager.html' %}
+{% include 'manage_sys/_ui.html' with part="pager" %}
 {% elif page == 'announcements' %}
 <div class="row g-4">
     <div class="col-lg-4">
@@ -176,13 +177,13 @@
                             </td>
                         </tr>
                     {% empty %}
-                        {% include 'manage_sys/_empty_state.html' with cols=5 icon="bullhorn" title="Chưa có thông báo nào" hint="Đăng thông báo đầu tiên ở form bên cạnh." %}
+                        {% include 'manage_sys/_ui.html' with part="empty_state" cols=5 icon="bullhorn" title="Chưa có thông báo nào" hint="Đăng thông báo đầu tiên ở form bên cạnh." %}
                     {% endfor %}
                     </tbody>
                 </table>
             </div>
         </div>
-        {% include 'manage_sys/_pager.html' %}
+        {% include 'manage_sys/_ui.html' with part="pager" %}
     </div>
 </div>
 {% elif page == 'settings' %}

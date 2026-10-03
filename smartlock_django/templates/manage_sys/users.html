@@ -21,7 +21,7 @@
         <option value="locked" {% if status == 'locked' %}selected{% endif %}>Đang bị khóa đăng nhập</option>
         <option value="admin" {% if status == 'admin' %}selected{% endif %}>Quản trị viên (Admin + Superuser)</option>
     </select>
-    {% include 'manage_sys/_filter_btns.html' with reset='manage_sys:users' %}
+    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
 </form>
 
 <div class="card">
@@ -45,13 +45,13 @@
                     <td class="text-end"><a href="{% url 'manage_sys:user-detail' u.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
                 </tr>
             {% empty %}
-                {% include 'manage_sys/_empty_state.html' with cols=7 icon="users" title="Không tìm thấy người dùng nào" hint="Thử đổi từ khóa hoặc bỏ bộ lọc." %}
+                {% include 'manage_sys/_ui.html' with part="empty_state" cols=7 icon="users" title="Không tìm thấy người dùng nào" hint="Thử đổi từ khóa hoặc bỏ bộ lọc." %}
             {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
-{% include 'manage_sys/_pager.html' %}
+{% include 'manage_sys/_ui.html' with part="pager" %}
 {% elif page == 'user_detail' %}
 <div class="row g-4">
     <div class="col-lg-4">
@@ -87,6 +87,17 @@
                             <i class="fa-solid fa-power-off me-2"></i>{% if target.is_active %}Vô hiệu hóa tài khoản{% else %}Kích hoạt tài khoản{% endif %}
                         </button>
                     </form>
+                    {% if target.is_active and target.email_verified %}
+                    <form method="post" class="border rounded p-2" onsubmit="return confirm('Gửi liên kết đặt lại mật khẩu tới email của người dùng này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="send_reset_link">
+                        <div class="form-check small mb-2">
+                            <input class="form-check-input" type="checkbox" name="user_requested" id="ur" required>
+                            <label class="form-check-label" for="ur">Người dùng đã yêu cầu đặt lại mật khẩu</label>
+                        </div>
+                        <button class="btn btn-outline-primary w-100"><i class="fa-solid fa-envelope me-2"></i>Gửi link đặt lại mật khẩu</button>
+                        <div class="form-text">Link chỉ gửi tới email của người dùng; quản trị viên không xem được link và không đặt/đổi mật khẩu trực tiếp.</div>
+                    </form>
+                    {% endif %}
                     {% if is_locked or lock.failed_attempts %}
                     <form method="post">
                         {% csrf_token %}<input type="hidden" name="action" value="unlock">
@@ -139,7 +150,7 @@
                 <tbody>
                 {% for d in devices %}
                 <tr><td class="mono">{{ d.device_code }}</td><td>{{ d.name }}</td><td><span class="badge text-bg-{{ d.status|badge }}">{{ d.status|vi }}</span></td><td>{{ d.battery_level }}%</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'manage_sys:device-detail' d.id %}">Xem</a></td></tr>
-                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=5 text="Chưa sở hữu thiết bị nào" %}{% endfor %}
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=5 text="Chưa sở hữu thiết bị nào" %}{% endfor %}
                 </tbody></table></div>
         </div>
 
@@ -150,7 +161,7 @@
                 <tbody>
                 {% for a in accesses %}
                 <tr><td>{{ a.device.name }}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
-                {% empty %}{% include 'manage_sys/_empty_row.html' with cols=3 text="Không có" %}{% endfor %}
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=3 text="Không có" %}{% endfor %}
                 </tbody></table></div>
         </div>
 
@@ -162,8 +173,8 @@
                         <thead><tr><th>Thời gian</th><th>IP</th><th>KQ</th></tr></thead>
                         <tbody>
                         {% for a in login_attempts %}
-                        <tr><td>{{ a.created_at|date:"d/m H:i" }}</td><td class="mono">{{ a.ip_address }}</td><td>{% include 'manage_sys/_ok.html' with ok=a.success %}</td></tr>
-                        {% empty %}{% include 'manage_sys/_empty_row.html' with cols=3 text="Chưa có" %}{% endfor %}
+                        <tr><td>{{ a.created_at|date:"d/m H:i" }}</td><td class="mono">{{ a.ip_address }}</td><td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td></tr>
+                        {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=3 text="Chưa có" %}{% endfor %}
                         </tbody></table></div>
                 </div>
             </div>
@@ -175,7 +186,7 @@
                         <tbody>
                         {% for l in logs %}
                         <tr><td>{{ l.created_at|date:"d/m H:i" }}</td><td class="mono text-break">{{ l.action }}</td></tr>
-                        {% empty %}{% include 'manage_sys/_empty_row.html' with cols=2 text="Chưa có" %}{% endfor %}
+                        {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=2 text="Chưa có" %}{% endfor %}
                         </tbody></table></div>
                 </div>
             </div>

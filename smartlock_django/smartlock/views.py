@@ -61,7 +61,7 @@ from .services import (
     register_failure as _register_failure, render_email, reset_lockout as _reset_lockout,
     send_mail as _send_mail, send_verification as _send_verification,
     system_settings as _settings, user_agent as _user_agent, valid_ip as _valid_ip,
-    issue_ble_ticket,
+    issue_ble_ticket, notify_login as _notify_login,
 )
 from .models import (
     AccessCard, Announcement, AuditLog, CardDeviceAccess,
@@ -203,6 +203,7 @@ def login_view(request):
         login(request, auth_user)
         _ensure_sync_key(request)
         request.session.set_expiry(_settings().session_timeout_hours * 3600)
+        _notify_login(request, auth_user)      # trước audit LOGIN: so với lịch sử IP cũ
         _audit(request, 'LOGIN', actor=auth_user)
         messages.success(request, 'Đăng nhập thành công!')
 
@@ -582,6 +583,15 @@ def mqtt_auth_webhook(request):
     username = (request.POST.get('username') or '').strip()
     password = request.POST.get('password') or ''
     if not username or not password:
+        return JsonResponse({'ok': False}, status=401)
+
+    # Tài khoản server (publisher/subscriber của Django): so với MQTT_PUBLISHER_PASSWORD.
+    if username in getattr(dj_settings, 'MQTT_TRUSTED_USERNAMES', []):
+        expected = services.MQTT_PUBLISHER_PASSWORD
+        if expected and hmac.compare_digest(password, expected):
+            return JsonResponse({'ok': True})
+        _audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
+               username_attempt=username[:150])
         return JsonResponse({'ok': False}, status=401)
 
     device = Device.objects.filter(device_code=username).first()
@@ -1195,6 +1205,7 @@ def _complete(request, p, user, method):
         login(request, user, backend=p.get('backend') or DEFAULT_BACKEND)
         _ensure_sync_key(request)
         request.session.set_expiry(_settings().session_timeout_hours * 3600)
+        _notify_login(request, user)
         _audit(request, 'LOGIN', actor=user, metadata={'two_factor': method})
         messages.success(request, 'Đăng nhập thành công!')
         nxt = p.get('next') or ''
