@@ -391,10 +391,6 @@ if not DEBUG and SECURE_COOKIES:
 
 # ==================== APP DI ĐỘNG ====================
 MOBILE_ACCESS_TOKEN_SECONDS = 15 * 60
-MOBILE_REFRESH_TOKEN_DAYS = 30
-MOBILE_MAX_SESSIONS_PER_USER = 10
-MOBILE_MIN_APP_VERSION = '1.0.0'       # app thấp hơn -> hiện màn hình bắt cập nhật
-MOBILE_LATEST_APP_VERSION = '1.0.0'
 
 
 # =====================================================================================================

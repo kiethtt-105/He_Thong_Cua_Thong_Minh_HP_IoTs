@@ -1,33 +1,32 @@
 # smartlock/views.py
 import base64
-import hashlib
 import hmac
 import io
 import json
 import logging
-import math
-import re
 import secrets
 from datetime import timedelta
-from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from .models import DoorPinCode, FaceProfile, AccessEvent
 from . import services
-from .constants import EVENTS_BATCH, EVENTS_MAX_BACKLOG_SECONDS, RESET_NEUTRAL_MSG
+from .constants import EVENTS_BATCH, EVENTS_MAX_BACKLOG_SECONDS
 from .twofa import (
-    EMAIL_CODE_COOLDOWN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_TTL_MIN,
-    digits as _digits, get_cfg as _get_cfg, lock_minutes as _lock_minutes, pepper_hash as _pepper_hash,
-    send_email_code as _send_email_code, verify_email_code as _verify_email_code, verify_totp as _verify_totp,
+    EMAIL_CODE_COOLDOWN,
+    EMAIL_CODE_TTL_MIN,
+    digits as _digits,
+    get_cfg as _get_cfg,
+    send_email_code as _send_email_code,
+    verify_email_code as _verify_email_code,
+    verify_totp as _verify_totp,
 )
 import pyotp
 import qrcode
 import qrcode.image.svg
 from django.conf import settings as dj_settings
 from django.contrib import messages
-from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.password_validation import validate_password
-from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
@@ -38,10 +37,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.utils.encoding import force_bytes, force_str
-from django.utils.http import (
-    url_has_allowed_host_and_scheme, urlsafe_base64_decode, urlsafe_base64_encode,
-)
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_http_methods, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from webauthn import (
@@ -60,22 +56,41 @@ from webauthn.helpers.structs import (
 )
 
 from .services import (
-    accessible_devices as _accessible_devices, admins as _admins, audit as _audit,
-    client_ip as _client_ip, find_user as _find_user, has_permission as _has_permission,
-    hash_card_uid as _hash_card_uid, hash_token as _hash_token, is_admin as _is_admin,
-    notify as _notify, parse_dt as _parse_dt, parse_uuid as _parse_uuid, pick_device as _pick_device,
-    register_failure as _register_failure, render_email, reset_lockout as _reset_lockout,
-    send_mail as _send_mail, send_verification as _send_verification,
-    system_settings as _settings, user_agent as _user_agent, valid_ip as _valid_ip,
-    issue_ble_ticket, notify_login as _notify_login,
-    send_password_reset as _send_password_reset, mask_email as _mask_email,
+    accessible_devices as _accessible_devices,
+    audit as _audit,
+    client_ip as _client_ip,
+    find_user as _find_user,
+    has_permission as _has_permission,
+    hash_card_uid as _hash_card_uid,
+    hash_token as _hash_token,
+    is_admin as _is_admin,
+    notify as _notify,
+    parse_dt as _parse_dt,
+    parse_uuid as _parse_uuid,
+    pick_device as _pick_device,
+    register_failure as _register_failure,
+    system_settings as _settings,
+    user_agent as _user_agent,
+    mask_email as _mask_email,
 )
 from .models import (
-    AccessCard, Announcement, AuditLog, CardDeviceAccess,
-    Device, DeviceAccess, DeviceCommand, DeviceStatusLog, OneTimeCode, Fido2Credential,
-    NfcLog, NfcReader, Notification, Permission,
+    AccessCard,
+    Announcement,
+    AuditLog,
+    CardDeviceAccess,
+    Device,
+    DeviceAccess,
+    DeviceCommand,
+    DeviceStatusLog,
+    Fido2Credential,
+    NfcLog,
+    NfcReader,
+    Notification,
+    Permission,
     TwoFactorConfig,
-    User, fernet, sync_two_fa_flag,
+    User,
+    fernet,
+    sync_two_fa_flag,
 )
 
 logger = logging.getLogger('smartlock.views')
@@ -126,12 +141,6 @@ _visible_logs = services.visible_logs
 
 
 
-def _parse_int(value):
-    try:
-        return int(str(value).strip())
-    except (ValueError, TypeError):
-        return None
-
 def _redirect_with(url_name, **params):
     url = reverse(url_name)
     if params:
@@ -149,307 +158,36 @@ def _page(request, queryset):
     return Paginator(queryset, PAGE_SIZE).get_page(request.GET.get('page'))
 
 # ====================== AUTH ======================
+# ====================== TRANG XÁC THỰC: chỉ render khung, mọi thao tác gọi /api/v1/auth/... bằng JS ======================
+def _safe_next(request):
+    nxt = request.GET.get('next') or ''
+    ok = nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}, require_https=request.is_secure())
+    return nxt if ok else ''
+
+
 def login_view(request):
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
-
-    next_url = request.POST.get('next') or request.GET.get('next') or ''
-    ctx = {'next': next_url}
-
-    if request.method != 'POST':
-        return _render(request, 'login', ctx)
-
-    identifier = (request.POST.get('identifier') or '').strip()
-    password = request.POST.get('password') or ''
-
-    if not identifier or not password:
-        messages.error(request, 'Vui lòng điền đầy đủ thông tin.')
-        return _render(request, 'login', ctx)
-
-    ip = _client_ip(request)   # chỉ để ghi nhận IP lượt sai (không còn chặn/giới hạn theo IP)
-    user = _find_user(identifier)
-    now = timezone.now()
-
-    if user:
-        if user.login_locked_until and user.login_locked_until > now:
-            remaining = math.ceil((user.login_locked_until - now).total_seconds() / 60)
-            messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {remaining} phút.')
-            _audit(request, 'LOGIN_LOCKED', success=False, severity='warning',
-                   actor=None, target_user=user, username_attempt=identifier[:150])
-            return _render(request, 'login', ctx)
-
-    auth_user = authenticate(request, username=user.email, password=password) if user else None
-
-    # Tài khoản quản trị chỉ được đăng nhập ở cổng quản trị riêng (app manage_sys).
-    if auth_user and _is_admin(auth_user):
-        _audit(request, 'LOGIN_ADMIN_REJECTED', success=False, severity='warning',
-               actor=None, target_user=user, username_attempt=identifier[:150])
-        messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
-        return _render(request, 'login', ctx)
-
-    if auth_user:
-        # ---- 2FA: mật khẩu đúng nhưng chưa đăng nhập, chuyển sang bước xác thực 2 lớp ----
-        # Chưa reset lockout ở đây (chỉ reset sau khi qua bước 2) để không thể
-        # "đăng nhập lại bằng mật khẩu" nhằm xóa bộ đếm rồi dò tiếp mã 2FA.
-        if auth_user.two_fa_enabled:
-            request.session.cycle_key()
-            _start_pending(request, auth_user, 'login',
-                           backend=getattr(auth_user, 'backend', ''), next_url=next_url)
-            _audit(request, 'LOGIN_2FA_REQUIRED', actor=None, target_user=auth_user)
-            return redirect('smartlock:tf-verify')
-
-        _reset_lockout(auth_user)
-        login(request, auth_user)
-        _ensure_sync_key(request)
-        request.session.set_expiry(_settings().session_timeout_hours * 3600)
-        _notify_login(request, auth_user)      # trước audit LOGIN: so với lịch sử IP cũ
-        _audit(request, 'LOGIN', actor=auth_user)
-        messages.success(request, 'Đăng nhập thành công!')
-
-        if next_url and url_has_allowed_host_and_scheme(next_url, {request.get_host()}, require_https=request.is_secure()):
-            return redirect(next_url)
-
-        return redirect('smartlock:dashboard')
-
-    if user and not user.is_active and user.check_password(password):
-        messages.warning(request, 'Tài khoản chưa được kích hoạt. Vui lòng xác thực email.')
-    else:
-        if user:
-            locked = _register_failure(user, ip)
-            if locked:
-                _audit(request, 'ACCOUNT_LOCKED', success=False, severity='critical', actor=None,
-                       target_user=user, username_attempt=identifier[:150],
-                       metadata={'locked_minutes': locked})
-        messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
-    _audit(request, 'LOGIN_FAILED', success=False, severity='warning', actor=None,
-           target_user=user, username_attempt=identifier[:150])
-    return _render(request, 'login', ctx)
-
-
-def logout_view(request):
-    if request.user.is_authenticated:
-        _audit(request, 'LOGOUT')
-    logout(request)
-    messages.success(request, 'Đã đăng xuất.')
-    return redirect('smartlock:login')
+    return _render(request, 'login', {'next': _safe_next(request)})
 
 
 def register(request):
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
-
-    if not _settings().registration_enabled:
-        return _render(request, 'register', {'disabled': True})
-
-    if request.method != 'POST':
-        return _render(request, 'register')
-
-    email = (request.POST.get('email') or '').strip()
-    username = (request.POST.get('username') or '').strip()
-    full_name = (request.POST.get('full_name') or '').strip()
-    password1 = request.POST.get('password1') or ''
-    password2 = request.POST.get('password2') or ''
-    ctx = {'form': {'email': email, 'username': username, 'full_name': full_name}}
-
-    if '@' in username:
-        messages.error(request, 'Tên đăng nhập không được chứa ký tự @.')
-        return _render(request, 'register', ctx)
-    if password1 != password2:
-        messages.error(request, 'Mật khẩu không khớp.')
-        return _render(request, 'register', ctx)
-    try:
-        validate_password(password1)
-    except ValidationError as e:
-        messages.error(request, ' '.join(e.messages))
-        return _render(request, 'register', ctx)
-
-    # Kiểm tra trùng TRƯỚC khi tạo, để xử lý rõ ràng từng trường hợp thay vì chỉ báo lỗi
-    # chung chung "đã được sử dụng" rồi dừng lại (khiến người đăng ký thật sự bị bế tắc
-    # nếu lần gửi email xác thực trước đó thất bại - họ không có cách nào "đăng ký lại").
-    existing_email_user = User.objects.filter(email__iexact=email).first()
-    username_taken = User.objects.filter(username__iexact=username).exclude(
-        pk=existing_email_user.pk if existing_email_user else None).exists()
-
-    if username_taken:
-        messages.error(request, 'Tên đăng nhập đã được sử dụng.')
-        return _render(request, 'register', ctx)
-
-    if existing_email_user:
-        if existing_email_user.is_active or existing_email_user.email_verified:
-            # Email đã có tài khoản đang hoạt động -> KHÔNG tạo trùng, báo rõ hướng xử lý
-            # (khác với trước đây chỉ ném lỗi "đã được sử dụng" chung chung).
-            _audit(request, 'REGISTER_DUPLICATE_ACTIVE', actor=None, target_user=existing_email_user,
-                   success=False, severity='warning', username_attempt=email[:150])
-            messages.error(request, 'Email này đã có tài khoản đang hoạt động. Vui lòng đăng nhập, '
-                                    'hoặc dùng "Quên mật khẩu" nếu bạn không nhớ mật khẩu.')
-        else:
-            # Email đã đăng ký nhưng CHƯA xác thực (có thể do lần trước gửi mail xác thực bị lỗi,
-            # hoặc người dùng bỏ dở) -> đừng để họ kẹt vĩnh viễn (không tạo được tài khoản mới,
-            # cũng không biết cách kích hoạt tài khoản cũ) -> tự động gửi lại email xác thực.
-            recent = OneTimeCode.objects.filter(
-                user=existing_email_user, purpose='EMAIL_VERIFY',
-                created_at__gt=timezone.now() - timedelta(seconds=60)).exists()
-            if not recent:
-                sent = _send_verification(request, existing_email_user)
-                _audit(request, 'VERIFY_MAIL_RESENT', actor=None, target_user=existing_email_user,
-                       success=sent, metadata={'reason': 'duplicate_register_unverified'})
-            messages.info(request, 'Email này đã được đăng ký nhưng chưa xác thực. Mình vừa gửi lại '
-                                   'email xác thực, vui lòng kiểm tra hộp thư (kể cả mục Spam).')
-        return _render(request, 'verify_email', {'email': email})
-
-    try:
-        with transaction.atomic():
-            user = User.objects.create_user(
-                email=email, username=username, password=password1,
-                full_name=full_name or None,
-            )
-    except ValidationError as e:
-        _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
-               metadata={'reason': 'validation'})
-        messages.error(request, 'Không thể tạo tài khoản: ' + ' '.join(e.messages))
-        return _render(request, 'register', ctx)
-    except IntegrityError:
-        _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
-               metadata={'reason': 'duplicate'})
-        messages.error(request, 'Email hoặc tên đăng nhập đã được sử dụng.')
-        return _render(request, 'register', ctx)
-    except ValueError as e:
-        _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
-               metadata={'reason': 'invalid'})
-        messages.error(request, f'Không thể tạo tài khoản: {e}')
-        return _render(request, 'register', ctx)
-
-    logger.info("register: tạo user %s", email)
-    _audit(request, 'REGISTER', actor=user, target_user=user)
-    if not _send_verification(request, user):
-        _audit(request, 'VERIFY_MAIL_FAILED', actor=user, target_user=user, success=False,
-               severity='warning')
-        messages.warning(request, 'Chưa gửi được email xác thực. Vui lòng bấm "Gửi lại" sau ít phút.')
-    return _render(request, 'verify_email', {'email': email})
+    return _render(request, 'register', {'disabled': not _settings().registration_enabled})
 
 
 def verify_email(request, token):
-    try:
-        vt = OneTimeCode.objects.select_related('user').get(
-            token_hash=_hash_token(token), purpose='EMAIL_VERIFY',
-            is_used=False, expires_at__gt=timezone.now(),
-        )
-    except OneTimeCode.DoesNotExist:
-        _audit(request, 'EMAIL_VERIFY_FAILED', actor=None, success=False, severity='warning')
-        messages.error(request, 'Link xác thực không hợp lệ hoặc đã hết hạn.')
-        return redirect('smartlock:login')
-
-    user = vt.user
-    user.email_verified = True
-    user.is_active = True
-    user.save()
-    vt.is_used = True
-    vt.used_at = timezone.now()
-    vt.save()
-
-    _audit(request, 'EMAIL_VERIFIED', actor=user, target_user=user)
-    _notify(user, 'Chào mừng đến Smart Lock', 'Tài khoản của bạn đã được kích hoạt.', type_='WELCOME')
-    messages.success(request, 'Tài khoản đã được kích hoạt thành công!')
-    return redirect('smartlock:login')
-
-
-@require_POST
-def resend_verification(request):
-    email = (request.POST.get('email') or '').strip()
-    user = User.objects.filter(email__iexact=email, is_active=False, email_verified=False).first()
-    if user:
-        recent = OneTimeCode.objects.filter(
-            user=user, purpose='EMAIL_VERIFY',
-            created_at__gt=timezone.now() - timedelta(seconds=60),
-        ).exists()
-        if recent:
-            messages.warning(request, 'Vui lòng đợi 60 giây trước khi gửi lại.')
-        else:
-            sent = _send_verification(request, user)
-            _audit(request, 'VERIFY_MAIL_RESENT', actor=None, target_user=user, success=sent)
-            if sent:
-                messages.success(request, 'Đã gửi lại email xác thực.')
-            else:
-                messages.error(request, 'Không gửi được email. Vui lòng thử lại sau.')
-    else:
-        messages.success(request, 'Nếu tài khoản cần xác thực, email đã được gửi lại.')
-    return _render(request, 'verify_email', {'email': email})
-
-
+    """Link trong email: trang tự POST token tới /api/v1/auth/verify-email/."""
+    return _render(request, 'verify_email', {'token': str(token)})
 
 
 def password_reset_request(request):
-    if request.method != 'POST':
-        return _render(request, 'reset_password', {'mode': 'request'})
-
-    email = (request.POST.get('email') or '').strip()
-    ctx = {'mode': 'request', 'email': email}
-    user = User.objects.filter(email__iexact=email).first()
-
-    def _neutral():
-        # Mọi nhánh đều trả CÙNG một thông báo -> không lộ email nào đã đăng ký (chống user enumeration).
-        messages.success(request, RESET_NEUTRAL_MSG)
-        return _render(request, 'reset_password', ctx)
-
-    if not user:
-        _audit(request, 'PASSWORD_RESET_UNKNOWN_EMAIL', actor=None, success=False,
-               severity='warning', username_attempt=email[:150])
-        return _neutral()
-
-    if not user.is_active or not user.email_verified:
-        _audit(request, 'PASSWORD_RESET_UNVERIFIED', actor=None, success=False,
-               severity='warning', target_user=user)
-        return _neutral()
-
-    if AuditLog.objects.filter(action='PASSWORD_RESET_REQUEST', target_user=user,
-                               created_at__gte=timezone.now() - timedelta(seconds=60)).exists():
-        _audit(request, 'PASSWORD_RESET_THROTTLED', actor=None, success=False, target_user=user)
-        return _neutral()
-
-    sent = _send_password_reset(request, user)
-    _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user, success=sent,
-           severity='info' if sent else 'warning',
-           metadata=None if sent else {'error': 'send_mail_failed'})
-    return _neutral()   # gửi lỗi cũng không báo ra ngoài; đã có audit log
+    return _render(request, 'reset_password', {'mode': 'request'})
 
 
 def reset_password(request, uidb64, token):
-    try:
-        user = User.objects.get(pk=force_str(urlsafe_base64_decode(uidb64)))
-    except Exception:
-        user = None
-
-    if user is None or not user.is_active or not default_token_generator.check_token(user, token):
-        _audit(request, 'PASSWORD_RESET_INVALID', actor=None, success=False, severity='warning',
-               target_user=user)
-        messages.error(request, 'Yêu cầu không hợp lệ')
-        return _render(request, 'reset_password', {'mode': 'expired'})
-
-    ctx = {'mode': 'confirm'}
-    if request.method == 'POST':
-        p1 = request.POST.get('new_password1') or ''
-        p2 = request.POST.get('new_password2') or ''
-        if not p1 or p1 != p2:
-            messages.error(request, 'Mật khẩu không khớp.')
-            return _render(request, 'reset_password', ctx)
-        try:
-            validate_password(p1, user)
-        except ValidationError as e:
-            messages.error(request, ' '.join(e.messages))
-            return _render(request, 'reset_password', ctx)
-        user.set_password(p1)
-        user.save()
-        from .api.common import revoke_all_sessions       # thu hồi mọi phiên app (đổi mật khẩu = đăng xuất app)
-        revoke_all_sessions(user)
-        _reset_lockout(user)
-        _audit(request, 'PASSWORD_RESET_DONE', actor=user, target_user=user)
-        _notify(user, 'Mật khẩu đã thay đổi', 'Mật khẩu tài khoản vừa được đặt lại.',
-                severity='warning', type_='SECURITY')
-        messages.success(request, 'Mật khẩu đã được thay đổi thành công!')
-        return redirect('smartlock:login')
-    return _render(request, 'reset_password', ctx)
-
-
+    return _render(request, 'reset_password', {'mode': 'confirm', 'uid': uidb64, 'token': token})
 
 
 # ====================== SYNC: bootstrap toàn bộ dữ liệu dashboard cho client cache ======================
@@ -1108,19 +846,6 @@ def _complete(request, p, user, method):
     purpose = p.get('purpose')
     _clear_pending(request)
 
-    if purpose == 'login':
-        _reset_lockout(user)
-        login(request, user, backend=p.get('backend') or DEFAULT_BACKEND)
-        _ensure_sync_key(request)
-        request.session.set_expiry(_settings().session_timeout_hours * 3600)
-        _notify_login(request, user)
-        _audit(request, 'LOGIN', actor=user, metadata={'two_factor': method})
-        messages.success(request, 'Đăng nhập thành công!')
-        nxt = p.get('next') or ''
-        if nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}, require_https=request.is_secure()):
-            return nxt
-        return reverse('smartlock:dashboard')
-
     cfg = _get_cfg(user)
     if purpose == 'disable':
         # 2FA giờ luôn = "còn phương thức nào đang hoạt động không", không set tay được nữa.
@@ -1138,13 +863,6 @@ def verify_2fa(request):
     if not p:
         messages.error(request, 'Phiên xác thực 2FA đã hết hạn. Vui lòng thử lại.')
         return redirect('smartlock:login' if not request.user.is_authenticated else 'smartlock:profile')
-
-    if p.get('purpose') == 'login':
-        mins = _lock_minutes(user)
-        if mins:
-            _clear_pending(request)
-            messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {mins} phút.')
-            return redirect('smartlock:login')
 
     cfg = _get_cfg(user)
     methods = cfg.available_methods()          # danh sách 'totp' / 'fido2' / 'email'

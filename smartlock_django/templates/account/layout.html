@@ -448,8 +448,7 @@
                     <small class="text-truncate d-block">{{ user.email }}</small>
                 </div>
             </div>
-            <form method="post" action="{% url 'smartlock:logout' %}" class="mb-0">
-                {% csrf_token %}
+            <form class="mb-0" data-api-url="{% url 'smartlock_api:logout' %}" data-api-method="POST" data-after="{% url 'smartlock:login' %}" data-success="Đã đăng xuất.">
                 <button class="sb-logout"><i class="fa-solid fa-right-from-bracket me-2"></i>Đăng xuất</button>
             </form>
         </div>
@@ -677,7 +676,7 @@
             getBootstrap: () => load('bootstrap'),
             clear: () => { try { indexedDB.deleteDatabase(DB_NAME); } catch (e) {} },
         };
-        document.querySelectorAll('form[action*="logout"]').forEach(f => {
+        document.querySelectorAll('form[data-api-url*="auth/logout"]').forEach(f => {
             f.addEventListener('submit', () => window.SmartlockCache.clear());
         });
     })();

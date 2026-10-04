@@ -1,0 +1,202 @@
+{% extends 'manage_sys/base.html' %}
+{% load manage_sys_tags %}
+{# Gộp: user_list, user_detail (biến `page`). Tiêu đề tĩnh: PAGE_TITLES trong views. #}
+{% block page_title %}
+{% if page == 'user_detail' %}
+<span class="text-break">{{ target.email }}</span>
+    {% if target_role == 'superuser' %}<span class="role-badge role-superuser">Superuser</span>{% elif target_role == 'admin' %}<span class="role-badge role-admin">Admin</span>{% endif %}
+    {% if target.is_active %}<span class="badge text-bg-success align-middle">Hoạt động</span>{% else %}<span class="badge text-bg-secondary align-middle">Không hoạt động</span>{% endif %}
+    {% if is_locked %}<span class="badge text-bg-danger align-middle">Bị khóa</span>{% endif %}
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block content %}
+{% if page == 'user_list' %}
+<form method="get" class="filter-bar">
+    <input type="search" name="q" value="{{ q }}" class="form-control" style="flex:2 1 260px" placeholder="Tìm email, username, họ tên, SĐT...">
+    <select name="status" class="form-select" style="flex:1 1 200px">
+        <option value="">Tất cả trạng thái</option>
+        <option value="active" {% if status == 'active' %}selected{% endif %}>Đang hoạt động</option>
+        <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Chưa kích hoạt / vô hiệu</option>
+        <option value="unverified" {% if status == 'unverified' %}selected{% endif %}>Chưa xác thực email</option>
+        <option value="locked" {% if status == 'locked' %}selected{% endif %}>Đang bị khóa đăng nhập</option>
+        <option value="admin" {% if status == 'admin' %}selected{% endif %}>Quản trị viên (Admin + Superuser)</option>
+    </select>
+    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+</form>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead><tr><th>Email</th><th>Username</th><th>Họ tên</th><th class="text-center">Thiết bị</th><th>Đăng ký</th><th>Trạng thái</th><th class="text-end"></th></tr></thead>
+            <tbody>
+            {% for u in page_obj %}
+                <tr>
+                    <td class="text-break">{{ u.email }} {% if u.role == 'superuser' %}<span class="role-badge role-superuser">Superuser</span>{% elif u.role == 'admin' %}<span class="role-badge role-admin">Admin</span>{% endif %}</td>
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.full_name|default:"—" }}</td>
+                    <td class="text-center">{{ u.device_count }}</td>
+                    <td>{{ u.created_at|date:"d/m/Y H:i" }}</td>
+                    <td>
+                        {% if u.is_active %}<span class="badge text-bg-success">Hoạt động</span>
+                        {% elif u.email_verified %}<span class="badge text-bg-secondary">Vô hiệu</span>
+                        {% else %}<span class="badge text-bg-warning">Chưa xác thực</span>{% endif %}
+                        {% if u.is_locked %}<span class="badge text-bg-danger">Bị khóa</span>{% endif %}
+                    </td>
+                    <td class="text-end"><a href="{% url 'manage_sys:user-detail' u.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
+                </tr>
+            {% empty %}
+                {% include 'manage_sys/_ui.html' with part="empty_state" cols=7 icon="users" title="Không tìm thấy người dùng nào" hint="Thử đổi từ khóa hoặc bỏ bộ lọc." %}
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% include 'manage_sys/_ui.html' with part="pager" %}
+{% elif page == 'user_detail' %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">Thông tin tài khoản</div>
+            <div class="card-body">
+                <dl class="kv">
+                    <dt>Username</dt><dd>{{ target.username }}</dd>
+                    <dt>Họ tên</dt><dd>{{ target.full_name|default:"—" }}</dd>
+                    <dt>SĐT</dt><dd>{{ target.phone|default:"—" }}</dd>
+                    <dt>Email xác thực</dt><dd>{{ target.email_verified|yesno:"Có,Chưa" }}</dd>
+                    <dt>Quyền</dt><dd>{% if target_role == 'superuser' %}Superuser{% elif target_role == 'admin' %}Admin{% else %}User{% endif %}</dd>
+                    <dt>Đăng ký</dt><dd>{{ target.created_at|date:"d/m/Y H:i" }}</dd>
+                    <dt>Cập nhật</dt><dd>{{ target.updated_at|date:"d/m/Y H:i" }}</dd>
+                    {% if lock %}
+                    <dt>Lần sai / mốc khóa</dt><dd>{{ lock.failed_attempts }} / {{ lock.stage }}</dd>
+                    {% if is_locked %}<dt>Khóa đến</dt><dd>{{ lock.locked_until|date:"d/m H:i" }}</dd>{% endif %}
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Thao tác</div>
+            <div class="card-body">
+                {% if deny_reason %}
+                    <div class="alert alert-secondary small mb-0">{{ deny_reason }}</div>
+                {% else %}
+                <div class="d-grid gap-2">
+                    <form method="post" onsubmit="return confirm('{% if target.is_active %}Vô hiệu hóa{% else %}Kích hoạt{% endif %} tài khoản này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="toggle_active">
+                        <button class="btn w-100 {% if target.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}">
+                            <i class="fa-solid fa-power-off me-2"></i>{% if target.is_active %}Vô hiệu hóa tài khoản{% else %}Kích hoạt tài khoản{% endif %}
+                        </button>
+                    </form>
+                    {% if target.is_active and target.email_verified %}
+                    <form method="post" class="border rounded p-2" onsubmit="return confirm('Gửi liên kết đặt lại mật khẩu tới email của người dùng này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="send_reset_link">
+                        <div class="form-check small mb-2">
+                            <input class="form-check-input" type="checkbox" name="user_requested" id="ur" required>
+                            <label class="form-check-label" for="ur">Người dùng đã yêu cầu đặt lại mật khẩu</label>
+                        </div>
+                        <button class="btn btn-outline-primary w-100"><i class="fa-solid fa-envelope me-2"></i>Gửi link đặt lại mật khẩu</button>
+                        <div class="form-text">Link chỉ gửi tới email của người dùng; quản trị viên không xem được link và không đặt/đổi mật khẩu trực tiếp.</div>
+                    </form>
+                    {% endif %}
+                    {% if is_locked or lock.failed_attempts %}
+                    <form method="post">
+                        {% csrf_token %}<input type="hidden" name="action" value="unlock">
+                        <button class="btn btn-outline-warning w-100"><i class="fa-solid fa-lock-open me-2"></i>Mở khóa đăng nhập</button>
+                    </form>
+                    {% endif %}
+                </div>
+
+                {% if can_sensitive %}
+                <div class="danger-zone p-3 mt-3">
+                    <div class="dz-title mb-2"><i class="fa-solid fa-user-shield me-1"></i>Quyền quản trị</div>
+                    {% if target_is_manager %}
+                    <p class="small text-muted mb-2">Thu hồi sẽ gỡ <strong>toàn bộ</strong> cờ quản trị và cắt các phiên app di động của tài khoản này.</p>
+                    <form method="post" onsubmit="return confirm('Thu hồi TOÀN BỘ quyền quản trị của tài khoản này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="revoke_admin">
+                        <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Gõ lại email: {{ target.email }}" required autocomplete="off" autocapitalize="none">
+                        <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+                        <button class="btn btn-danger btn-sm w-100"><i class="fa-solid fa-user-slash me-2"></i>Thu hồi quyền quản trị</button>
+                    </form>
+                    {% else %}
+                    {% if not target.is_active %}
+                        <div class="alert alert-warning small py-2 mb-0">Cần kích hoạt tài khoản trước khi cấp quyền quản trị.</div>
+                    {% elif owned_count %}
+                        <div class="alert alert-warning small py-2 mb-0">Tài khoản đang là chủ của <strong>{{ owned_count }}</strong> khoá. Tài khoản quản trị không được làm chủ khoá, hãy gỡ chủ các khoá đó trước.</div>
+                    {% else %}
+                    <p class="small text-muted mb-2">Admin xem và vận hành được hầu hết hệ thống, nhưng <strong>không</strong> được cấp/thu hồi quyền, xoay secret, gỡ chủ khoá hay đổi cài đặt.</p>
+                    <form method="post" onsubmit="return confirm('Cấp quyền quản trị cho tài khoản này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="grant_admin">
+                        <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Gõ lại email: {{ target.email }}" required autocomplete="off" autocapitalize="none">
+                        <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+                        <button class="btn btn-primary btn-sm w-100"><i class="fa-solid fa-user-shield me-2"></i>Cấp quyền quản trị</button>
+                    </form>
+                    {% endif %}
+                    {% endif %}
+                    <div class="form-text mt-2">Nhập sai mật khẩu sẽ bị ghi log và tính vào bộ đếm khoá tài khoản của bạn.</div>
+                </div>
+                {% else %}
+                <div class="alert alert-secondary small mt-3 mb-0"><i class="fa-solid fa-lock me-1"></i>Cấp/thu hồi quyền quản trị cần quyền cao nhất (Superuser).</div>
+                {% endif %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header">Thiết bị sở hữu ({{ devices|length }})</div>
+            <div class="table-responsive"><table class="table table-hover mb-0">
+                <thead><tr><th>Mã</th><th>Tên</th><th>Trạng thái</th><th>Pin</th><th class="text-end"></th></tr></thead>
+                <tbody>
+                {% for d in devices %}
+                <tr><td class="mono">{{ d.device_code }}</td><td>{{ d.name }}</td><td><span class="badge text-bg-{{ d.status|badge }}">{{ d.status|vi }}</span></td><td>{{ d.battery_level }}%</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'manage_sys:device-detail' d.id %}">Xem</a></td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=5 text="Chưa sở hữu thiết bị nào" %}{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Được chia sẻ quyền truy cập (10 gần nhất)</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Thiết bị</th><th>Nguồn</th><th>Hết hạn</th></tr></thead>
+                <tbody>
+                {% for a in accesses %}
+                <tr><td>{{ a.device.name }}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=3 text="Không có" %}{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-xl-6">
+                <div class="card h-100">
+                    <div class="card-header">Đăng nhập gần đây</div>
+                    <div class="table-responsive"><table class="table mb-0">
+                        <thead><tr><th>Thời gian</th><th>IP</th><th>KQ</th></tr></thead>
+                        <tbody>
+                        {% for a in login_attempts %}
+                        <tr><td>{{ a.created_at|date:"d/m H:i" }}</td><td class="mono">{{ a.ip_address }}</td><td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td></tr>
+                        {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=3 text="Chưa có" %}{% endfor %}
+                        </tbody></table></div>
+                </div>
+            </div>
+            <div class="col-xl-6">
+                <div class="card h-100">
+                    <div class="card-header">Nhật ký liên quan</div>
+                    <div class="table-responsive"><table class="table mb-0">
+                        <thead><tr><th>Thời gian</th><th>Hành động</th></tr></thead>
+                        <tbody>
+                        {% for l in logs %}
+                        <tr><td>{{ l.created_at|date:"d/m H:i" }}</td><td class="mono text-break">{{ l.action }}</td></tr>
+                        {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=2 text="Chưa có" %}{% endfor %}
+                        </tbody></table></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block page_actions %}
+{% if page == 'user_detail' %}
+<a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}

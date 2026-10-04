@@ -14,7 +14,7 @@ Xác thực tài khoản
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 {% block extra_head %}
-{% if page == 'verify_2fa' %}
+{% if page == 'verify_2fa' or page == 'login' %}
 <style>.tf-tab.active { pointer-events: none; background: var(--accent); color:#fff; border-color: var(--accent); } .tf-code { letter-spacing: .4em; font-size: 1.4rem; text-align: center; font-family: var(--font-mono); font-weight: 600; }</style>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
@@ -75,6 +75,200 @@ Xác thực tài khoản
     });
 })();
 </script>
+{% elif page == 'login' or page == 'register' or page == 'reset_password' or page == 'verify_email' %}
+<script>
+(function () {
+    var box = document.getElementById('auth-alert');
+    function alertBox(msg, type) {
+        box.innerHTML = '';
+        var d = document.createElement('div');
+        d.className = 'alert alert-' + (type || 'danger');
+        d.textContent = msg;
+        box.appendChild(d);
+    }
+    function busy(form, on) { form.querySelectorAll('button').forEach(function (b) { b.disabled = on; }); }
+    function err(res) { return SL.errorMessage(res); }
+    function el(id) { return document.getElementById(id); }
+    var API = {
+        login: "{% url 'smartlock_api:login' %}",
+        register: "{% url 'smartlock_api:register' %}",
+        verify2fa: "{% url 'smartlock_api:2fa-verify' %}",
+        emailSend: "{% url 'smartlock_api:2fa-email-send' %}",
+        pkOptions: "{% url 'smartlock_api:2fa-passkey-options' %}",
+        pkFinish: "{% url 'smartlock_api:2fa-passkey-finish' %}",
+        resend: "{% url 'smartlock_api:resend-verification' %}",
+        pwReset: "{% url 'smartlock_api:password-reset' %}",
+        pwConfirm: "{% url 'smartlock_api:password-reset-confirm' %}",
+        verifyEmail: "{% url 'smartlock_api:verify-email' %}"
+    };
+    var LOGIN_URL = "{% url 'smartlock:login' %}";
+    {% if page == 'login' %}
+    var NEXT = "{{ next|escapejs }}", DASH = "{% url 'smartlock:dashboard' %}";
+    var challenge = '', lastIdentifier = '';
+    var LABEL = { totp: ['fa-mobile-screen-button', 'Authenticator'], fido2: ['fa-fingerprint', 'Passkey'], email: ['fa-envelope', 'Email'] };
+    function done() { SL.flash('Đăng nhập thành công!'); location.href = NEXT || DASH; }
+    function showStep(n) {
+        el('login-step1').classList.toggle('d-none', n !== 1);
+        el('login-step2').classList.toggle('d-none', n !== 2);
+        el('auth-title').textContent = n === 1 ? 'Chào mừng trở lại' : 'Xác thực 2 lớp';
+        el('auth-sub').textContent = n === 1 ? 'Đăng nhập để quản lý khóa thông minh của bạn' : 'Nhập mã xác thực để hoàn tất đăng nhập.';
+    }
+    function showTab(m) {
+        document.querySelectorAll('.tf-panel').forEach(function (p) { p.classList.toggle('d-none', p.id !== 'panel-' + m); });
+        document.querySelectorAll('.tf-tab').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === m); });
+        var i = document.querySelector('#panel-' + m + ' input[name=code]'); if (i) i.focus();
+    }
+    function startStep2(d) {
+        challenge = d.challenge_token;
+        var tabs = el('tf-tabs'); tabs.innerHTML = '';
+        d.methods.forEach(function (m) {
+            var b = document.createElement('button');
+            b.type = 'button'; b.className = 'btn btn-sm btn-outline-primary tf-tab'; b.dataset.tab = m;
+            b.innerHTML = '<i class="fa-solid ' + LABEL[m][0] + ' me-1"></i>' + LABEL[m][1];
+            b.addEventListener('click', function () { showTab(m); });
+            tabs.appendChild(b);
+        });
+        showStep(2);
+        showTab(d.preferred_method || d.methods[0]);
+    }
+    function backToLogin(msg) { challenge = ''; showStep(1); if (msg) alertBox(msg, 'warning'); }
+    el('login-form').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var f = e.target, ident = f.identifier.value.trim(), pw = f.password.value;
+        if (!ident || !pw) { alertBox('Vui lòng điền đầy đủ thông tin.'); return; }
+        lastIdentifier = ident; busy(f, true); box.innerHTML = '';
+        var res = await SL.api('POST', API.login, { identifier: ident, password: pw, client: 'web' });
+        busy(f, false);
+        if (!res.ok) {
+            var code = res.data.error && res.data.error.code;
+            alertBox(err(res), code === 'EMAIL_NOT_VERIFIED' ? 'warning' : 'danger');
+            if (code === 'EMAIL_NOT_VERIFIED' && ident.indexOf('@') > 0) {
+                var a = document.createElement('a'); a.href = '#'; a.className = 'alert-link d-block mt-1'; a.textContent = 'Gửi lại email xác thực';
+                a.addEventListener('click', async function (ev) {
+                    ev.preventDefault();
+                    var r = await SL.api('POST', API.resend, { email: ident });
+                    alertBox(r.ok ? (r.data.message || 'Đã gửi lại email xác thực.') : err(r), r.ok ? 'success' : 'danger');
+                });
+                box.firstChild.appendChild(a);
+            }
+            return;
+        }
+        if (res.data.two_factor_required) { f.password.value = ''; startStep2(res.data); return; }
+        done();
+    });
+    async function verifyCode(e) {
+        e.preventDefault();
+        var f = e.target; busy(f, true);
+        var res = await SL.api('POST', API.verify2fa, { challenge_token: challenge, method: f.dataset.method, code: f.code.value });
+        busy(f, false);
+        if (res.ok) { done(); return; }
+        var code = res.data.error && res.data.error.code;
+        if (['CHALLENGE_EXPIRED', 'CHALLENGE_INVALID', 'ACCOUNT_LOCKED'].indexOf(code) >= 0) { backToLogin(err(res)); return; }
+        showToast(err(res), 'danger'); f.code.select();
+    }
+    el('tf-totp-form').addEventListener('submit', verifyCode);
+    el('tf-email-form').addEventListener('submit', verifyCode);
+    el('tf-email-send').addEventListener('click', async function (e) {
+        var b = e.currentTarget; b.disabled = true;
+        var res = await SL.api('POST', API.emailSend, { challenge_token: challenge });
+        showToast(res.ok ? 'Đã gửi mã đến ' + res.data.masked_email + '.' : err(res), res.ok ? 'success' : 'danger');
+        setTimeout(function () { b.disabled = false; }, 3000);
+    });
+    el('tf-back').addEventListener('click', function (e) { e.preventDefault(); backToLogin(''); });
+
+    // ---- Passkey (WebAuthn) ----
+    function b64uToBuf(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); s += '='.repeat((4 - s.length % 4) % 4);
+        var bin = atob(s), b = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return b.buffer; }
+    function bufToB64u(buf) { var b = new Uint8Array(buf), s = ''; for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+        return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+    el('passkeyBtn').addEventListener('click', async function (e) {
+        var btn = e.currentTarget;
+        if (!window.PublicKeyCredential) { showToast('Trình duyệt không hỗ trợ passkey/WebAuthn.', 'danger'); return; }
+        btn.disabled = true;
+        try {
+            var r = await SL.api('POST', API.pkOptions, { challenge_token: challenge });
+            if (!r.ok) { backToLogin(err(r)); return; }
+            var o = r.data.options;
+            o.challenge = b64uToBuf(o.challenge);
+            (o.allowCredentials || []).forEach(function (c) { c.id = b64uToBuf(c.id); });
+            var a = await navigator.credentials.get({ publicKey: o });
+            var r2 = await SL.api('POST', API.pkFinish, { challenge_token: challenge, credential: {
+                id: a.id, rawId: bufToB64u(a.rawId), type: a.type,
+                authenticatorAttachment: a.authenticatorAttachment || null,
+                response: {
+                    authenticatorData: bufToB64u(a.response.authenticatorData),
+                    clientDataJSON: bufToB64u(a.response.clientDataJSON),
+                    signature: bufToB64u(a.response.signature),
+                    userHandle: a.response.userHandle ? bufToB64u(a.response.userHandle) : null
+                },
+                clientExtensionResults: a.getClientExtensionResults ? a.getClientExtensionResults() : {}
+            } });
+            if (r2.ok) { done(); return; }
+            var code = r2.data.error && r2.data.error.code;
+            if (['CHALLENGE_EXPIRED', 'CHALLENGE_INVALID', 'ACCOUNT_LOCKED'].indexOf(code) >= 0) { backToLogin(err(r2)); return; }
+            showToast(err(r2), 'danger');
+        } catch (ex) {
+            showToast((ex && ex.name === 'NotAllowedError') ? 'Đã hủy hoặc hết thời gian chờ.' : (ex.message || 'Xác thực thất bại.'), 'danger');
+        }
+        btn.disabled = false;
+    });
+    {% elif page == 'register' %}
+    var regForm = el('register-form');
+    if (regForm) {
+        var regEmail = '';
+        function showPending(email) {
+            regEmail = email; el('reg-email').textContent = email;
+            el('reg-wrap').classList.add('d-none'); el('reg-pending').classList.remove('d-none');
+            el('auth-title').textContent = 'Xác thực tài khoản';
+            el('auth-sub').textContent = 'Chúng tôi đã gửi email xác thực tới';
+        }
+        regForm.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            var f = e.target;
+            if (f.password1.value !== f.password2.value) { alertBox('Mật khẩu không khớp.'); return; }
+            busy(f, true); box.innerHTML = '';
+            var res = await SL.api('POST', API.register, {
+                email: f.email.value.trim(), username: f.username.value.trim(),
+                full_name: f.full_name.value.trim(), password: f.password1.value });
+            busy(f, false);
+            if (!res.ok) { alertBox(err(res)); return; }
+            if (res.data.email_sent === false) showToast('Chưa gửi được email xác thực. Hãy bấm "Gửi lại" sau ít phút.', 'warning');
+            box.innerHTML = '';
+            showPending(res.data.email || f.email.value.trim());
+        });
+        el('reg-resend').addEventListener('click', async function (e) {
+            var b = e.currentTarget; b.disabled = true;
+            var res = await SL.api('POST', API.resend, { email: regEmail });
+            showToast(res.ok ? (res.data.message || 'Đã gửi lại email xác thực.') : err(res), res.ok ? 'success' : 'danger');
+            setTimeout(function () { b.disabled = false; }, 60000);
+        });
+    }
+    {% elif page == 'reset_password' %}
+    var rq = el('reset-request-form'), rc = el('reset-confirm-form');
+    if (rq) rq.addEventListener('submit', async function (e) {
+        e.preventDefault(); var f = e.target; busy(f, true);
+        var res = await SL.api('POST', API.pwReset, { email: f.email.value.trim() });
+        busy(f, false);
+        alertBox(res.ok ? res.data.message : err(res), res.ok ? 'success' : 'danger');
+    });
+    if (rc) rc.addEventListener('submit', async function (e) {
+        e.preventDefault(); var f = e.target;
+        if (!f.new_password1.value || f.new_password1.value !== f.new_password2.value) { alertBox('Mật khẩu không khớp.'); return; }
+        busy(f, true);
+        var res = await SL.api('POST', API.pwConfirm, { uid: f.dataset.uid, token: f.dataset.token, new_password: f.new_password1.value });
+        if (!res.ok) { busy(f, false); alertBox(err(res)); return; }
+        SL.flash(res.data.message || 'Mật khẩu đã được thay đổi thành công!'); location.href = LOGIN_URL;
+    });
+    {% elif page == 'verify_email' %}
+    (async function () {
+        var res = await SL.api('POST', API.verifyEmail, { token: "{{ token|escapejs }}" });
+        el('verify-wait').classList.add('d-none'); el('verify-login').classList.remove('d-none');
+        el('auth-sub').textContent = res.ok ? 'Email đã được xác thực.' : 'Không thể xác thực email.';
+        alertBox(res.ok ? (res.data.message || 'Tài khoản đã được kích hoạt thành công!') : err(res), res.ok ? 'success' : 'danger');
+    })();
+    {% endif %}
+})();
+</script>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 {% block shell %}
@@ -111,7 +305,7 @@ fa-envelope-circle-check
 {% elif page == 'verify_2fa' %}
 fa-shield-halved
 {% else %}fa-lock{% endif %}"></i></div>
-                <h3 class="fw-bold mb-1">{% if page == 'login' %}
+                <h3 class="fw-bold mb-1" id="auth-title">{% if page == 'login' %}
 Chào mừng trở lại
 {% elif page == 'register' %}
 Tạo tài khoản
@@ -122,59 +316,84 @@ Xác thực tài khoản
 {% elif page == 'verify_2fa' %}
 {{ title }}
 {% else %}{% endif %}</h3>
-                <p class="text-muted mb-0">{% if page == 'login' %}
+                <p class="text-muted mb-0" id="auth-sub">{% if page == 'login' %}
 Đăng nhập để quản lý khóa thông minh của bạn
 {% elif page == 'register' %}
 Đăng ký Smart Lock chỉ mất vài giây
 {% elif page == 'reset_password' %}
-{% if mode == 'confirm' %}Nhập mật khẩu mới cho tài khoản của bạn.{% elif mode != 'expired' %}Nhập email để nhận link đặt lại mật khẩu.{% endif %}
+{% if mode == 'confirm' %}Nhập mật khẩu mới cho tài khoản của bạn.{% else %}Nhập email để nhận link đặt lại mật khẩu.{% endif %}
 {% elif page == 'verify_email' %}
-Chúng tôi đã gửi email xác thực tới
+Vui lòng đợi trong giây lát…
 {% elif page == 'verify_2fa' %}
 {{ subtitle }}
 {% else %}{% endif %}</p>
             </div>
             {% for m in messages %}<div class="alert alert-{% if m.tags == 'error' %}danger{% else %}{{ m.tags|default:'info' }}{% endif %}">{{ m }}</div>{% endfor %}
             {% if page == 'login' %}
-<form id="login-form" method="post">
-    {% csrf_token %}
-    <input type="hidden" name="next" value="{{ next }}">
-    <div class="mb-3">
-        <label class="form-label">Email hoặc tên đăng nhập</label>
-        <div class="input-group">
-            <span class="input-group-text"><i class="fa-solid fa-user"></i></span>
-            <input type="text" name="identifier" class="form-control" placeholder="ten@email.com"
-                   required autofocus autocomplete="username">
+<div id="auth-alert"></div>
+<div id="login-step1">
+    <form id="login-form" novalidate>
+        <div class="mb-3">
+            <label class="form-label">Email hoặc tên đăng nhập</label>
+            <div class="input-group">
+                <span class="input-group-text"><i class="fa-solid fa-user"></i></span>
+                <input type="text" name="identifier" class="form-control" placeholder="ten@email.com"
+                       required autofocus autocomplete="username">
+            </div>
         </div>
-    </div>
-    <div class="mb-4">
-        <div class="d-flex justify-content-between"><label class="form-label">Mật khẩu</label>
-            <a href="{% url 'smartlock:password_reset' %}" class="small">Quên mật khẩu?</a></div>
-        <div class="input-group">
-            <span class="input-group-text"><i class="fa-solid fa-key"></i></span>
-            <input type="password" name="password" class="form-control" placeholder="••••••••"
-                   required autocomplete="current-password">
+        <div class="mb-4">
+            <div class="d-flex justify-content-between"><label class="form-label">Mật khẩu</label>
+                <a href="{% url 'smartlock:password_reset' %}" class="small">Quên mật khẩu?</a></div>
+            <div class="input-group">
+                <span class="input-group-text"><i class="fa-solid fa-key"></i></span>
+                <input type="password" name="password" class="form-control" placeholder="••••••••"
+                       required autocomplete="current-password">
+            </div>
         </div>
+        <button type="submit" class="btn btn-primary w-100 py-2">Đăng nhập</button>
+    </form>
+    <p class="text-center text-muted small mt-4 mb-0">Chưa có tài khoản? <a href="{% url 'smartlock:register' %}">Đăng ký ngay</a></p>
+</div>
+<div id="login-step2" class="d-none">
+    <div class="d-flex flex-wrap gap-2 mb-4" id="tf-tabs"></div>
+    <div class="tf-panel d-none" id="panel-totp">
+        <form id="tf-totp-form" autocomplete="off" data-method="totp">
+            <label class="form-label">Mã 6 số từ ứng dụng Authenticator</label>
+            <input type="text" name="code" class="form-control form-control-lg tf-code mb-3" inputmode="numeric" maxlength="7" placeholder="000000" autocomplete="one-time-code" required>
+            <button class="btn btn-primary w-100 py-2">Xác nhận</button>
+        </form>
     </div>
-    <button type="submit" class="btn btn-primary w-100 py-2">Đăng nhập</button>
-</form>
-<p class="text-center text-muted small mt-4 mb-0">Chưa có tài khoản? <a href="{% url 'smartlock:register' %}">Đăng ký ngay</a></p>
+    <div class="tf-panel d-none" id="panel-fido2">
+        <p class="small text-muted">Dùng vân tay, Face ID, Windows Hello hoặc khóa bảo mật đã đăng ký.</p>
+        <button type="button" id="passkeyBtn" class="btn btn-primary w-100 py-2"><i class="fa-solid fa-key me-2"></i>Xác thực bằng passkey</button>
+    </div>
+    <div class="tf-panel d-none" id="panel-email">
+        <p class="small text-muted mb-2">Mã 6 số sẽ được gửi tới email của bạn.</p>
+        <button type="button" id="tf-email-send" class="btn btn-outline-primary w-100 mb-3"><i class="fa-solid fa-paper-plane me-1"></i>Gửi mã</button>
+        <form id="tf-email-form" autocomplete="off" data-method="email">
+            <input type="text" name="code" class="form-control form-control-lg tf-code mb-3" inputmode="numeric" maxlength="7" placeholder="000000" autocomplete="one-time-code" required>
+            <button class="btn btn-primary w-100 py-2">Xác nhận</button>
+        </form>
+    </div>
+    <p class="text-center mt-4 mb-0"><a href="#" id="tf-back" class="small"><i class="fa-solid fa-arrow-left me-1"></i>Quay lại đăng nhập</a></p>
+</div>
 {% elif page == 'register' %}
+<div id="auth-alert"></div>
 {% if disabled %}
     <div class="alert alert-warning mb-3"><i class="fa-solid fa-triangle-exclamation me-2"></i>Hệ thống hiện đang tạm đóng đăng ký tài khoản mới.</div>
 {% else %}
-<form method="post">
-    {% csrf_token %}
+<div id="reg-wrap">
+<form id="register-form" novalidate>
     <div class="mb-3"><label class="form-label">Email</label>
         <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-envelope"></i></span>
-            <input type="email" name="email" class="form-control" placeholder="ten@email.com" value="{{ form.email }}" required></div></div>
+            <input type="email" name="email" class="form-control" placeholder="ten@email.com" required></div></div>
     <div class="row g-3 mb-3">
         <div class="col-sm-6"><label class="form-label">Tên đăng nhập</label>
             <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-at"></i></span>
-                <input type="text" name="username" class="form-control" placeholder="username" value="{{ form.username }}" required maxlength="50"></div></div>
+                <input type="text" name="username" class="form-control" placeholder="username" required maxlength="50"></div></div>
         <div class="col-sm-6"><label class="form-label">Họ và tên <span class="text-muted fw-normal">(tùy chọn)</span></label>
             <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-id-badge"></i></span>
-                <input type="text" name="full_name" class="form-control" placeholder="Nguyễn Văn A" value="{{ form.full_name }}" maxlength="100"></div></div>
+                <input type="text" name="full_name" class="form-control" placeholder="Nguyễn Văn A" maxlength="100"></div></div>
     </div>
     <div class="row g-3 mb-4">
         <div class="col-sm-6"><label class="form-label">Mật khẩu</label>
@@ -186,12 +405,19 @@ Chúng tôi đã gửi email xác thực tới
     </div>
     <button type="submit" class="btn btn-primary w-100 py-2">Đăng ký</button>
 </form>
+</div>
+<div id="reg-pending" class="d-none">
+    <div class="card mb-3"><div class="card-body py-3 text-center"><span class="fw-bold fs-5" id="reg-email"></span></div></div>
+    <p class="text-muted small">Bấm vào link trong email để kích hoạt tài khoản. Nếu không thấy, hãy kiểm tra thư mục Spam.</p>
+    <button type="button" id="reg-resend" class="btn btn-outline-primary w-100 mb-2"><i class="fa-solid fa-paper-plane me-2"></i>Gửi lại email</button>
+    <a href="{% url 'smartlock:login' %}" class="btn btn-primary w-100">Về trang đăng nhập</a>
+</div>
 {% endif %}
 <p class="text-center text-muted small mt-4 mb-0">Đã có tài khoản? <a href="{% url 'smartlock:login' %}">Đăng nhập</a></p>
 {% elif page == 'reset_password' %}
+<div id="auth-alert"></div>
 {% if mode == 'confirm' %}
-    <form method="post">
-        {% csrf_token %}
+    <form id="reset-confirm-form" novalidate data-uid="{{ uid }}" data-token="{{ token }}">
         <div class="mb-3"><label class="form-label">Mật khẩu mới</label>
             <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-key"></i></span>
                 <input type="password" name="new_password1" class="form-control" placeholder="Mật khẩu mới" required autocomplete="new-password"></div></div>
@@ -201,11 +427,7 @@ Chúng tôi đã gửi email xác thực tới
         <button type="submit" class="btn btn-primary w-100 py-2">Cập nhật mật khẩu</button>
     </form>
 {% else %}
-    {% if mode == 'expired' %}
-    <div class="alert alert-warning"><i class="fa-solid fa-clock me-2"></i>Yêu cầu đặt lại mật khẩu đã hoàn tất hoặc hết hạn</div>
-    {% endif %}
-    <form method="post" action="{% url 'smartlock:password_reset' %}">
-        {% csrf_token %}
+    <form id="reset-request-form" novalidate>
         <div class="mb-4"><label class="form-label">Email</label>
             <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-envelope"></i></span>
                 <input type="email" name="email" class="form-control" placeholder="ten@email.com" required></div></div>
@@ -214,14 +436,9 @@ Chúng tôi đã gửi email xác thực tới
 {% endif %}
 <p class="text-center small mt-4 mb-0"><a href="{% url 'smartlock:login' %}"><i class="fa-solid fa-arrow-left me-1"></i>Quay lại đăng nhập</a></p>
 {% elif page == 'verify_email' %}
-<div class="card mb-3"><div class="card-body py-3 text-center"><span class="fw-bold fs-5">{{ email }}</span></div></div>
-<p class="text-muted small">Bấm vào link trong email để kích hoạt tài khoản. Nếu không thấy, hãy kiểm tra thư mục Spam.</p>
-<form method="post" action="{% url 'smartlock:resend_verification' %}" class="mb-2">
-    {% csrf_token %}
-    <input type="hidden" name="email" value="{{ email }}">
-    <button class="btn btn-outline-primary w-100"><i class="fa-solid fa-paper-plane me-2"></i>Gửi lại email</button>
-</form>
-<a href="{% url 'smartlock:login' %}" class="btn btn-primary w-100">Về trang đăng nhập</a>
+<div id="auth-alert"></div>
+<div id="verify-wait" class="text-center py-3"><div class="spinner-border text-primary" role="status"></div></div>
+<a id="verify-login" href="{% url 'smartlock:login' %}" class="btn btn-primary w-100 d-none">Về trang đăng nhập</a>
 {% elif page == 'verify_2fa' %}
 <!-- Chọn phương thức -->
 <div class="d-flex flex-wrap gap-2 mb-4">

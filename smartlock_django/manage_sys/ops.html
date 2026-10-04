@@ -1,0 +1,258 @@
+{% extends 'manage_sys/base.html' %}
+{% load manage_sys_tags %}
+{# Gộp: dashboard, audit_logs, audit_logins, announcements, settings (biến `page`). Tiêu đề tĩnh: PAGE_TITLES trong views. #}
+{% block content %}
+{% if page == 'dashboard' %}
+{% url 'manage_sys:users' as users_url %}{% url 'manage_sys:devices' as devices_url %}
+<div class="row g-3 mb-3">
+    {% include 'manage_sys/_ui.html' with part="stat" col="col-12 col-sm-4" href=users_url tone="primary" icon="users" num=stats.total_users active=stats.active_users label="Người dùng" %}
+    {% include 'manage_sys/_ui.html' with part="stat" col="col-12 col-sm-4" href=devices_url tone="success" icon="plug" num=stats.online_devices of=stats.total_devices label="Thiết bị online" %}
+    {% url 'manage_sys:logs' as logs_url %}{% include 'manage_sys/_ui.html' with part="stat" col="col-12 col-sm-4" href=logs_url q="?severity=critical" tone="danger" icon="triangle-exclamation" num=stats.critical_24h label="Sự kiện nghiêm trọng (24h)" %}
+</div>
+
+<div class="row g-3 mb-4">
+    {% url 'manage_sys:login-attempts' as logins_url %}{% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=logins_url q="?status=fail" tone="danger" icon="user-xmark" num=stats.failed_logins_24h label="Đăng nhập thất bại (24h)" %}
+    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=users_url q="?status=locked" tone="secondary" icon="user-lock" num=stats.locked_accounts label="Tài khoản đang bị khóa" %}
+    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=users_url q="?status=unverified" tone="info" icon="envelope-circle-check" num=stats.unverified_users label="Chưa xác thực email" %}
+    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=devices_url q="?status=maintenance" tone="warning" icon="screwdriver-wrench" num=stats.maintenance_devices label="Thiết bị đang bảo trì" %}
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header"><i class="fa-solid fa-chart-column me-2 text-muted"></i>Hoạt động hệ thống 7 ngày qua</div>
+            <div class="card-body">
+                <div class="bar-wrap">
+                    {% for c in chart %}<div class="bar" style="height: {{ c.pct }}%" title="{{ c.label }}: {{ c.count }}"></div>{% endfor %}
+                </div>
+                <div class="d-flex gap-2 mt-2 small text-muted text-center">
+                    {% for c in chart %}<div class="flex-fill">{{ c.label }}<br><strong class="text-body">{{ c.count }}</strong></div>{% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fa-solid fa-triangle-exclamation me-2 text-muted"></i>Cảnh báo gần đây</span>
+                <a href="{% url 'manage_sys:logs' %}" class="small">Nhật ký</a>
+            </div>
+            <div class="list-group list-group-flush">
+                {% for log in alert_logs %}
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="badge text-bg-{{ log.severity|badge }}">{{ log.severity|vi }}</span>
+                        <small class="text-muted">{{ log.created_at|date:"d/m H:i" }}</small>
+                    </div>
+                    <div class="mono mt-2 text-break">{{ log.action }}</div>
+                    <small class="text-muted">{{ log.actor_user.email|default:log.username_attempt|default:"—" }}</small>
+                </div>
+                {% empty %}
+                <div class="list-group-item"><div class="empty-state py-4"><div class="ei"><i class="fa-solid fa-shield-check"></i></div><h6>Không có cảnh báo</h6></div></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% elif page == 'audit_logs' %}
+<form method="get" class="filter-bar">
+    <input type="search" name="q" value="{{ q }}" class="form-control" style="flex:2 1 240px" placeholder="Hành động, email, username, IP...">
+    <select name="status" class="form-select" style="flex:1 1 150px">
+        <option value="">Mọi kết quả</option>
+        <option value="ok" {% if status == 'ok' %}selected{% endif %}>Thành công</option>
+        <option value="fail" {% if status == 'fail' %}selected{% endif %}>Thất bại</option>
+    </select>
+    <select name="severity" class="form-select" style="flex:1 1 150px">
+        <option value="">Mọi mức độ</option>
+        <option value="info" {% if severity == 'info' %}selected{% endif %}>Thông tin</option>
+        <option value="warning" {% if severity == 'warning' %}selected{% endif %}>Cảnh báo</option>
+        <option value="critical" {% if severity == 'critical' %}selected{% endif %}>Nghiêm trọng</option>
+    </select>
+    <select name="scope" class="form-select" style="flex:1 1 190px">
+        <option value="">Toàn hệ thống</option>
+        <option value="manage" {% if scope == 'manage' %}selected{% endif %}>Chỉ thao tác quản trị</option>
+        <option value="mail" {% if scope == 'mail' %}selected{% endif %}>Chỉ email đã gửi (MAIL_*)</option>
+    </select>
+    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:logs' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+</form>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead><tr><th>Thời gian</th><th>Người thực hiện</th><th>Đối tượng</th><th>Thiết bị</th><th>Hành động</th><th>Mức độ</th><th>KQ</th><th>IP</th></tr></thead>
+            <tbody>
+            {% for log in page_obj %}
+                <tr>
+                    <td class="text-nowrap">{{ log.created_at|date:"d/m/Y H:i:s" }}</td>
+                    <td class="text-break">{{ log.actor_user.email|default:log.username_attempt|default:"—" }}</td>
+                    <td class="text-break">{{ log.target_user.email|default:"—" }}</td>
+                    <td>{{ log.device.name|default:"—" }}</td>
+                    <td class="mono text-break">{{ log.action }}</td>
+                    <td><span class="badge text-bg-{{ log.severity|badge }}">{{ log.severity|vi }}</span></td>
+                    <td>{% if log.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td>
+                    <td class="mono">{{ log.ip_address|default:"—" }}</td>
+                </tr>
+            {% empty %}
+                {% include 'manage_sys/_ui.html' with part="empty_state" cols=8 icon="file-lines" title="Không có log nào" %}
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% include 'manage_sys/_ui.html' with part="pager" %}
+{% elif page == 'audit_logins' %}
+<form method="get" class="filter-bar">
+    <input type="search" name="q" value="{{ q }}" class="form-control" style="flex:2 1 260px" placeholder="Email/username thử đăng nhập hoặc IP...">
+    <select name="status" class="form-select" style="flex:1 1 170px">
+        <option value="">Mọi kết quả</option>
+        <option value="ok" {% if status == 'ok' %}selected{% endif %}>Thành công</option>
+        <option value="fail" {% if status == 'fail' %}selected{% endif %}>Thất bại</option>
+    </select>
+    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:login-attempts' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+</form>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead><tr><th>Thời gian</th><th>Định danh thử</th><th>Tài khoản khớp</th><th>IP</th><th>Trình duyệt</th><th>KQ</th></tr></thead>
+            <tbody>
+            {% for a in page_obj %}
+                <tr>
+                    <td class="text-nowrap">{{ a.created_at|date:"d/m/Y H:i:s" }}</td>
+                    <td class="text-break">{{ a.identifier }}</td>
+                    <td class="text-break">{% if a.user %}<a href="{% url 'manage_sys:user-detail' a.user.id %}">{{ a.user.email }}</a>{% else %}—{% endif %}</td>
+                    <td class="mono">{{ a.ip_address }}</td>
+                    <td class="small text-muted">{{ a.user_agent|default:"—"|truncatechars:50 }}</td>
+                    <td>{% if a.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td>
+                </tr>
+            {% empty %}
+                {% include 'manage_sys/_ui.html' with part="empty_state" cols=6 icon="right-to-bracket" title="Không có dữ liệu" %}
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% include 'manage_sys/_ui.html' with part="pager" %}
+{% elif page == 'announcements' %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">Đăng thông báo mới</div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}<input type="hidden" name="action" value="create">
+                    <div class="mb-3"><label class="form-label">Tiêu đề</label><input type="text" name="title" class="form-control" maxlength="200" required></div>
+                    <div class="mb-3"><label class="form-label">Nội dung</label><textarea name="body" class="form-control" rows="4" required></textarea></div>
+                    <div class="mb-3"><label class="form-label">Mức độ</label>
+                        <select name="level" class="form-select">
+                            <option value="info">Thông tin</option>
+                            <option value="warning">Cảnh báo</option>
+                            <option value="danger">Nguy hiểm</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary w-100"><i class="fa-solid fa-paper-plane me-2"></i>Đăng thông báo</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead><tr><th>Nội dung</th><th>Mức độ</th><th>Trạng thái</th><th>Đăng lúc</th><th class="text-end"></th></tr></thead>
+                    <tbody>
+                    {% for a in page_obj %}
+                        <tr>
+                            <td><strong>{{ a.title }}</strong><br><small class="text-muted">{{ a.body|truncatewords:25 }}</small><br><small class="text-muted">bởi {{ a.created_by.email|default:"—" }}</small></td>
+                            <td><span class="badge text-bg-{{ a.level|badge }}">{{ a.level|vi }}</span></td>
+                            <td>{% if a.is_active %}<span class="badge text-bg-success">Đang hiển thị</span>{% else %}<span class="badge text-bg-secondary">Đã ẩn</span>{% endif %}</td>
+                            <td>{{ a.created_at|date:"d/m/Y H:i" }}</td>
+                            <td class="text-end text-nowrap">
+                                <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="{{ a.id }}">
+                                    <button class="btn btn-sm btn-outline-secondary">{% if a.is_active %}Ẩn{% else %}Hiện{% endif %}</button></form>
+                                <form method="post" class="d-inline" onsubmit="return confirm('Xóa thông báo này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="{{ a.id }}">
+                                    <button class="btn btn-sm btn-outline-danger" aria-label="Xóa"><i class="fa-solid fa-trash"></i></button></form>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        {% include 'manage_sys/_ui.html' with part="empty_state" cols=5 icon="bullhorn" title="Chưa có thông báo nào" hint="Đăng thông báo đầu tiên ở form bên cạnh." %}
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% include 'manage_sys/_ui.html' with part="pager" %}
+    </div>
+</div>
+{% elif page == 'settings' %}
+{% if not can_edit %}
+<div class="alert alert-secondary small"><i class="fa-solid fa-lock me-1"></i>Cài đặt hệ thống là thao tác nhạy cảm: bạn chỉ được xem, chỉ Superuser mới được lưu thay đổi.</div>
+{% endif %}
+<form method="post">
+    {% csrf_token %}
+    <fieldset {% if not can_edit %}disabled{% endif %}>
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header">Đăng ký &amp; xác thực</div>
+                <div class="card-body">
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" role="switch" name="registration_enabled" id="reg" {% if st.registration_enabled %}checked{% endif %}>
+                        <label class="form-check-label" for="reg">Cho phép người dùng đăng ký mới</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Hiệu lực token xác thực email (phút)</label>
+                        <input type="number" min="1" max="10080" name="verification_token_expiry_minutes" class="form-control" value="{{ st.verification_token_expiry_minutes }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Thời hạn mã chia sẻ mặc định (phút)</label>
+                        <input type="number" min="1" max="1440" name="share_code_expiry_minutes" class="form-control" value="{{ st.share_code_expiry_minutes }}" required>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label">Thời gian phiên đăng nhập của user (giờ)</label>
+                        <input type="number" min="1" max="720" name="session_timeout_hours" class="form-control" value="{{ st.session_timeout_hours }}" required>
+                        <div class="form-text"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header">Bảo mật</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Các mốc khóa đăng nhập (phút)</label>
+                        <input type="text" name="lockout_stages" class="form-control" value="{{ stages_text }}" placeholder="5, 10, 30" required>
+                        <div class="form-text">Mỗi lần sai quá số lần cho phép sẽ khóa theo mốc kế tiếp, cách nhau bằng dấu phẩy.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    </fieldset>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-4">
+        <small class="text-muted">Cập nhật lần cuối: {{ st.updated_at|date:"d/m/Y H:i" }}{% if st.updated_by %} bởi {{ st.updated_by.email }}{% endif %}</small>
+        {% if can_edit %}<button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>{% endif %}
+    </div>
+</form>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block page_actions %}
+{% if page == 'audit_logs' or page == 'audit_logins' %}
+<div class="btn-group btn-group-sm" role="group">
+    <a class="btn {% if page == 'audit_logs' %}btn-primary{% else %}btn-outline-secondary{% endif %}" href="{% url 'manage_sys:logs' %}">Audit log</a>
+    <a class="btn {% if page == 'audit_logins' %}btn-primary{% else %}btn-outline-secondary{% endif %}" href="{% url 'manage_sys:login-attempts' %}">Lượt đăng nhập</a>
+</div>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block page_sub %}
+{% if page == 'audit_logins' %}
+<p class="page-sub">Lượt đăng nhập qua trang quản trị có tiền tố <span class="mono">[manage]</span>.</p>
+{% elif page == 'announcements' %}
+<p class="page-sub">Thông báo đang bật sẽ hiển thị trên trang tổng quan của người dùng.</p>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}

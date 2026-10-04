@@ -1,0 +1,133 @@
+{% extends 'account/layout.html' %}
+{% comment %}
+    Manage Sys dùng chung layout.html của project (CSS, token, script, WebView helper).
+    Chỉ override block `shell` để thay sidebar/bottom-nav bằng menu quản trị.
+    Tiêu đề lấy từ `page_heading` (PAGE_TITLES trong views); trang con chỉ override page_title khi tiêu đề động. Còn dùng:  page_sub, page_actions, content, scripts.
+{% endcomment %}
+{% block title %}{% if page == 'login' %}Đăng nhập quản trị{% else %}{{ page_heading|default:'Quản trị' }}{% endif %}{% endblock %}
+
+{% block extra_head %}{% if page == 'login' %}<meta name="robots" content="noindex,nofollow">{% else %}
+<style>
+    .mono { font-family: var(--font-mono); font-size: .88em; }
+    a.stat-card { color: inherit; display: block; transition: transform .15s, box-shadow .15s; }
+    a.stat-card:hover { transform: translateY(-2px); box-shadow: 0 12px 28px -14px rgba(15,23,42,.25); color: inherit; }
+    .stat-card.sm .stat-num { font-size: 1.4rem; }
+    .bar-wrap { display: flex; align-items: flex-end; gap: .5rem; height: 160px; }
+    .bar-wrap .bar { flex: 1; min-height: 3px; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--accent-2), var(--accent)); opacity: .85; transition: opacity .15s; }
+    .bar-wrap .bar:hover { opacity: 1; }
+    .filter-bar .btn { white-space: nowrap; }
+    .role-badge { font-size: .68rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; padding: .2em .55em; border-radius: 999px; vertical-align: middle; }
+    .role-superuser { background: linear-gradient(135deg, #f59e0b, #dc2626); color: #fff; }
+    .role-admin { background: #1e293b; color: #fff; }
+    .danger-zone { border: 1px solid rgba(220,38,38,.35); border-radius: var(--radius, 12px); background: rgba(220,38,38,.04); }
+    .danger-zone .dz-title { color: #dc2626; font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; }
+    .sb-user .role-badge { margin-top: 2px; display: inline-block; }
+    .pagination { flex-wrap: wrap; }
+    @media (hover: none) { a.stat-card:hover { transform: none; box-shadow: var(--shadow); } }
+</style>
+{% endif %}{% endblock %}
+
+{% block shell %}
+{% if page == 'login' %}
+<div class="auth-bg">
+    <div class="container px-3 py-4">
+        <div class="mx-auto" style="max-width:440px">
+            <div class="text-center text-white mb-4">
+                <div class="brand-icon mx-auto mb-3"><i class="fa-solid fa-shield-halved"></i></div>
+                <h4 class="mb-1">Manage Sys</h4>
+                <div class="small" style="color:var(--sb-text)">Khu vực dành riêng cho quản trị viên</div>
+                <div class="small mt-1" style="color:var(--sb-text);opacity:.7"><i class="fa-solid fa-lock me-1"></i>Mọi lượt đăng nhập đều được ghi nhật ký</div>
+            </div>
+            <div class="card auth-card mx-auto">
+                <div class="card-body p-4">
+                    {% for m in messages %}
+                    <div class="alert alert-{% if m.tags == 'error' %}danger{% else %}{{ m.tags }}{% endif %} py-2">{{ m }}</div>
+                    {% endfor %}
+                    <form method="post" autocomplete="off">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ next }}">
+                        <div class="mb-3">
+                            <label class="form-label">Email hoặc Username</label>
+                            <input type="text" name="identifier" class="form-control" required autofocus autocapitalize="none" autocorrect="off">
+                        </div>
+                        <div class="mb-4">
+                            <label class="form-label">Mật khẩu</label>
+                            <input type="password" name="password" class="form-control" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-right-to-bracket me-2"></i>Đăng nhập</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+{% with u=request.resolver_match.url_name %}
+<div class="app">
+    <aside class="sidebar" id="sidebar">
+        <a class="sb-brand" href="{% url 'manage_sys:dashboard' %}">
+            <span class="brand-mark"><i class="fa-solid fa-shield-halved"></i></span>
+            <span class="brand-word">Manage Sys<span class="brand-sub">Quản trị hệ thống</span></span>
+        </a>
+
+        <nav class="sb-nav">
+            <div class="sb-label">Tổng quan</div>
+            <a class="sb-link {% if u == 'dashboard' %}active{% endif %}" href="{% url 'manage_sys:dashboard' %}"><i class="fa-solid fa-gauge"></i> Tổng quan</a>
+
+            <div class="sb-label">Quản lý</div>
+            <a class="sb-link {% if u|slice:':4' == 'user' %}active{% endif %}" href="{% url 'manage_sys:users' %}"><i class="fa-solid fa-users"></i> Người dùng</a>
+            <a class="sb-link {% if u|slice:':6' == 'device' %}active{% endif %}" href="{% url 'manage_sys:devices' %}"><i class="fa-solid fa-plug"></i> Thiết bị</a>
+
+            <div class="sb-label">Hệ thống</div>
+            <a class="sb-link {% if u == 'logs' or u == 'login-attempts' %}active{% endif %}" href="{% url 'manage_sys:logs' %}"><i class="fa-solid fa-file-lines"></i> Nhật ký</a>
+            <a class="sb-link {% if u == 'announcements' %}active{% endif %}" href="{% url 'manage_sys:announcements' %}"><i class="fa-solid fa-bullhorn"></i> Thông báo</a>
+            <a class="sb-link {% if u == 'settings' %}active{% endif %}" href="{% url 'manage_sys:settings' %}"><i class="fa-solid fa-gear"></i> Cài đặt</a>
+        </nav>
+
+        <div class="sb-foot">
+            <div class="sb-user">
+                <div class="avatar-sm">{{ request.user.username|default:request.user.email|upper|slice:":1" }}</div>
+                <div class="text-truncate">
+                    <div class="name text-truncate">{{ request.user.full_name|default:request.user.username }}</div>
+                    <small class="text-truncate d-block">{{ request.user.email }}</small>
+                    {% if request.user.is_superuser %}<span class="role-badge role-superuser">Superuser</span>{% else %}<span class="role-badge role-admin">Admin</span>{% endif %}
+                </div>
+            </div>
+            <form method="post" action="{% url 'manage_sys:logout' %}" class="mb-0">
+                {% csrf_token %}
+                <button class="sb-logout"><i class="fa-solid fa-right-from-bracket me-2"></i>Đăng xuất</button>
+            </form>
+        </div>
+    </aside>
+    <div class="sb-backdrop" onclick="document.body.classList.remove('sb-open')"></div>
+
+    <div class="content-wrap">
+        <header class="m-top d-lg-none">
+            <a class="m-brand" href="{% url 'manage_sys:dashboard' %}"><span class="brand-mark sm"><i class="fa-solid fa-shield-halved"></i></span><span>Manage Sys</span></a>
+            <button type="button" class="sb-toggle border-0 text-white bg-transparent" onclick="document.body.classList.toggle('sb-open')" aria-label="Menu"><i class="fa-solid fa-bars"></i></button>
+        </header>
+        <main class="main">
+            <div class="page-head">
+                <div class="page-head-l">
+                    <div class="min-w-0"><h4 class="page-title">{% block page_title %}{{ page_heading }}{% endblock %}</h4>{% block page_sub %}{% endblock %}</div>
+                </div>
+                <div>{% block page_actions %}{% endblock %}</div>
+            </div>
+            {% for m in messages %}
+            <div class="alert alert-{% if m.tags == 'error' %}danger{% else %}{{ m.tags }}{% endif %} alert-dismissible fade show">{{ m }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+            {% endfor %}
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <nav class="bottom-nav d-lg-none" aria-label="Điều hướng nhanh">
+        <a class="bn-item {% if u == 'dashboard' %}active{% endif %}" href="{% url 'manage_sys:dashboard' %}"><i class="fa-solid fa-gauge"></i><span>Tổng quan</span></a>
+        <a class="bn-item {% if u|slice:':4' == 'user' %}active{% endif %}" href="{% url 'manage_sys:users' %}"><i class="fa-solid fa-users"></i><span>Người dùng</span></a>
+        <a class="bn-item {% if u|slice:':6' == 'device' %}active{% endif %}" href="{% url 'manage_sys:devices' %}"><i class="fa-solid fa-plug"></i><span>Thiết bị</span></a>
+        <a class="bn-item {% if u == 'logs' or u == 'login-attempts' %}active{% endif %}" href="{% url 'manage_sys:logs' %}"><i class="fa-solid fa-file-lines"></i><span>Nhật ký</span></a>
+        <button type="button" class="bn-item" onclick="document.body.classList.toggle('sb-open')" aria-label="Menu"><i class="fa-solid fa-bars"></i><span>Menu</span></button>
+    </nav>
+</div>
+{% endwith %}
+{% endif %}
+{% endblock %}

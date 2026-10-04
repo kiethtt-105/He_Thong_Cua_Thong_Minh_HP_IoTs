@@ -4,6 +4,7 @@ Dùng chung APP và WEB. Đăng nhập gửi thêm `"client": "web"` => server t
 thay vì access/refresh token; mọi request ghi dữ liệu sau đó của web gửi header X-CSRFToken.
 Lấy CSRF cookie lần đầu bằng GET /api/v1/auth/csrf/.
 """
+import json
 import math
 from datetime import timedelta
 
@@ -17,21 +18,25 @@ from django.utils import timezone
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 
+from webauthn import generate_authentication_options, options_to_json, verify_authentication_response
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
+
 from smartlock import services, twofa
 from smartlock.constants import RESET_NEUTRAL_MSG
 from smartlock.api.common import (
     api, ApiError, CHALLENGE_TTL_SECONDS, check_csrf, create_session, device_info, make_challenge, ok,
     read_challenge, read_json, revoke_all_sessions, rotate_refresh, s, web_login,
 )
-from smartlock.models import AuditLog, OneTimeCode, User
+from smartlock.models import AuditLog, Fido2Credential, OneTimeCode, User
 
 from .serializers import user_json
 
 
-def _mobile_2fa_methods(user) -> list:
-    """Passkey/FIDO2 chưa hỗ trợ trong app (cần RP/origin riêng) -> chỉ totp + email."""
-    cfg = twofa.get_cfg(user)
-    return [m for m in cfg.available_methods() if m in ('totp', 'email')]
+def _2fa_methods(user, web=False) -> list:
+    """App: chỉ totp + email (passkey cần RP/origin của trình duyệt). Web: thêm passkey (fido2)."""
+    allowed = ('totp', 'email', 'fido2') if web else ('totp', 'email')
+    return [m for m in twofa.get_cfg(user).available_methods() if m in allowed]
 
 
 def _is_web(info) -> bool:
@@ -182,11 +187,9 @@ def login(request):
 
     if auth_user:
         if auth_user.two_fa_enabled:
-            methods = _mobile_2fa_methods(auth_user)
+            methods = _2fa_methods(auth_user, _is_web(info))
             if not methods:
                 raise ApiError('TWO_FACTOR_UNSUPPORTED',
-                               'Tài khoản chỉ bật Passkey. Hãy đăng nhập bằng trang đăng nhập chính của web '
-                               'để dùng Passkey.' if _is_web(info) else
                                'Tài khoản chỉ bật Passkey. Hãy thêm Google Authenticator hoặc Email OTP '
                                'trên web để đăng nhập bằng app.', 403)
             cfg = twofa.get_cfg(auth_user)
@@ -222,8 +225,8 @@ def _challenge_user(data):
 
 @api('POST', auth=False)
 def two_factor_email_send(request):
-    user, _info = _challenge_user(read_json(request))
-    if 'email' not in _mobile_2fa_methods(user):
+    user, info = _challenge_user(read_json(request))
+    if 'email' not in _2fa_methods(user, _is_web(info)):
         raise ApiError('BAD_METHOD', 'Tài khoản chưa bật Email OTP.', 400)
     result = twofa.send_email_code(user, 'VERIFY')
     if result == 'cooldown':
@@ -247,7 +250,7 @@ def two_factor_verify(request):
                        retry_after_minutes=minutes)
     method = s(data, 'method', 10).lower()
     code = s(data, 'code', 20)
-    if method not in _mobile_2fa_methods(user):
+    if method not in ('totp', 'email') or method not in _2fa_methods(user, _is_web(info)):
         raise ApiError('BAD_METHOD', 'Phương thức xác thực không hợp lệ.', 400)
     good = (twofa.verify_totp(twofa.get_cfg(user), code) if method == 'totp'
             else twofa.verify_email_code(user, code, 'VERIFY'))
@@ -264,6 +267,72 @@ def two_factor_verify(request):
                            retry_after_minutes=locked)
         raise ApiError('TWO_FACTOR_INVALID', 'Mã xác thực không đúng hoặc đã hết hạn.', 401)
     return _finish_login(request, user, info, method)
+
+
+@api('POST', auth=False)
+def two_factor_passkey_options(request):
+    """WEB: lấy tuỳ chọn WebAuthn cho bước 2FA bằng passkey (cần challenge_token từ /auth/login/)."""
+    user, info = _challenge_user(read_json(request))
+    if not _is_web(info):
+        raise ApiError('WEB_ONLY', 'Passkey chỉ dùng được trên web.', 400)
+    check_csrf(request)
+    creds = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(c.credential_id))
+             for c in Fido2Credential.objects.filter(user=user)]
+    if not creds:
+        raise ApiError('NO_PASSKEY', 'Tài khoản chưa đăng ký passkey.', 400)
+    rp_id, _origin, _name = twofa.webauthn_rp(request)
+    options = generate_authentication_options(rp_id=rp_id, allow_credentials=creds,
+                                              user_verification=UserVerificationRequirement.PREFERRED)
+    request.session['webauthn_auth'] = {'challenge': bytes_to_base64url(options.challenge),
+                                        'uid': str(user.id), 'ts': int(timezone.now().timestamp())}
+    return ok({'options': json.loads(options_to_json(options))})
+
+
+@api('POST', auth=False)
+def two_factor_passkey_finish(request):
+    """WEB: hoàn tất đăng nhập bằng passkey: {challenge_token, credential}."""
+    data = read_json(request)
+    user, info = _challenge_user(data)
+    if not _is_web(info):
+        raise ApiError('WEB_ONLY', 'Passkey chỉ dùng được trên web.', 400)
+    check_csrf(request)
+    minutes = twofa.lock_minutes(user)
+    if minutes:
+        raise ApiError('ACCOUNT_LOCKED', f'Tài khoản đang bị khóa tạm thời. Thử lại sau {minutes} phút.', 423,
+                       retry_after_minutes=minutes)
+    state = request.session.pop('webauthn_auth', None)
+    now_ts = int(timezone.now().timestamp())
+    if (not state or state.get('uid') != str(user.id)
+            or now_ts - int(state.get('ts', 0)) > twofa.WEBAUTHN_TTL):
+        raise ApiError('PASSKEY_EXPIRED', 'Yêu cầu passkey đã hết hạn. Hãy thử lại.', 400)
+    credential = data.get('credential')
+    credential = credential if isinstance(credential, dict) else {}
+    cred = Fido2Credential.objects.filter(user=user, credential_id=credential.get('id') or '').first()
+    rp_id, origin, _name = twofa.webauthn_rp(request)
+    good = False
+    if cred:
+        try:
+            v = verify_authentication_response(
+                credential=credential, expected_challenge=base64url_to_bytes(state['challenge']),
+                expected_rp_id=rp_id, expected_origin=origin,
+                credential_public_key=bytes(cred.public_key), credential_current_sign_count=cred.sign_count,
+                require_user_verification=False)
+            cred.sign_count = v.new_sign_count
+            cred.last_used_at = timezone.now()
+            cred.save(update_fields=['sign_count', 'last_used_at'])
+            good = True
+        except Exception:
+            pass
+    if not good:
+        locked = services.register_failure(user, services.client_ip(request))
+        services.audit(request, 'TWO_FACTOR_FAILED', actor=None, target_user=user, success=False,
+                       severity='warning', metadata={'method': 'fido2', 'purpose': 'login', 'channel': 'web',
+                                                     'locked_minutes': locked})
+        if locked:
+            raise ApiError('ACCOUNT_LOCKED', f'Sai quá nhiều lần. Tài khoản bị khóa {locked} phút.', 423,
+                           retry_after_minutes=locked)
+        raise ApiError('TWO_FACTOR_INVALID', 'Passkey không hợp lệ.', 401)
+    return _finish_login(request, user, info, 'fido2')
 
 
 @api('POST', auth=False)

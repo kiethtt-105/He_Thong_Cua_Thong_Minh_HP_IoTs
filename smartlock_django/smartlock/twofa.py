@@ -20,6 +20,8 @@ from .services import render_email, send_mail
 EMAIL_CODE_TTL_MIN = 10
 EMAIL_CODE_COOLDOWN = 60               # giây giữa 2 lần gửi mã
 EMAIL_CODE_MAX_ATTEMPTS = 5
+WEBAUTHN_TTL = 5 * 60                  # giây được phép hoàn tất 1 lượt passkey
+TOTP_ISSUER = 'Smart Lock'
 
 
 def pepper_hash(user, value: str) -> str:
@@ -108,3 +110,15 @@ def lock_minutes(user) -> int:
     if locked_until and locked_until > now:
         return math.ceil((locked_until - now).total_seconds() / 60)
     return 0
+
+
+def webauthn_rp(request):
+    """(rp_id, origin, rp_name). Ghi đè được bằng settings.WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN / WEBAUTHN_RP_NAME."""
+    host = request.get_host()
+    rp_id = getattr(settings, 'WEBAUTHN_RP_ID', None) or host.split(':')[0]
+    scheme = 'https' if request.is_secure() else 'http'
+    if getattr(settings, 'TRUST_PROXY_HEADERS', False) and \
+            request.META.get('HTTP_X_FORWARDED_PROTO', '').split(',')[0].strip() == 'https':
+        scheme = 'https'
+    origin = getattr(settings, 'WEBAUTHN_ORIGIN', None) or f'{scheme}://{host}'
+    return rp_id, origin, getattr(settings, 'WEBAUTHN_RP_NAME', TOTP_ISSUER)

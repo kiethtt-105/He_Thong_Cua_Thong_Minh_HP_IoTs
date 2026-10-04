@@ -7,9 +7,7 @@ urlpatterns = [
     # ====================== USER ROUTES (User thường) ======================
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_view, name='login'),                    # User thường
-    path('logout/', views.logout_view, name='logout'),
     path('register/', views.register, name='register'),
-    path('verify-email/resend/', views.resend_verification, name='resend_verification'),
     path('verify-email/<uuid:token>/', views.verify_email, name='verify_email'),
     path('password-reset/', views.password_reset_request, name='password_reset'),
     path('reset-password/<uidb64>/<token>/', views.reset_password, name='reset_password_confirm'),
