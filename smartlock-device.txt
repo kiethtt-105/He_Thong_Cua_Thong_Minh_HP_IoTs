@@ -26,3 +26,9 @@ Mở device.conf
 mode = standalone
 
 Nếu bỏ qua bước này, mặc định là online và khoá sẽ báo thiếu paho-mqtt hoặc chờ broker.
+
+
+
+========================
+Chạy khoá
+python -m smartlock_fw run
