@@ -1,0 +1,325 @@
+{% extends 'manage_sys/base.html' %}
+{% load manage_sys_tags %}
+{# Gộp: device_list, device_create, device_created, device_detail (biến `page`). Tiêu đề tĩnh: PAGE_TITLES trong views. #}
+{% block page_title %}{% if page == 'device_detail' %}{{ device.name }} <span class="badge text-bg-{{ device.status|badge }} align-middle">{{ device.status|vi }}</span>{% else %}{{ block.super }}{% endif %}{% endblock %}
+{% block page_actions %}
+{% if page == 'device_list' %}
+<a href="{% url 'manage_sys:device-create' %}" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus me-1"></i> Thêm thiết bị</a>
+{% elif page == 'device_create' %}
+<a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>
+{% elif page == 'device_created' %}
+<a href="{% url 'manage_sys:device-detail' device.id %}" class="btn btn-outline-primary btn-sm">Xem chi tiết</a>
+{% elif page == 'device_detail' %}
+<a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary btn-sm"><i class="fa-solid fa-arrow-left me-1"></i> Danh sách</a>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block content %}
+{% if page == 'device_list' %}
+<form method="get" class="filter-bar">
+    <input type="search" name="q" value="{{ q }}" class="form-control" style="flex:2 1 260px" placeholder="Tìm tên, mã thiết bị, MAC, chủ sở hữu...">
+    <select name="status" class="form-select" style="flex:1 1 170px">
+        <option value="">Mọi trạng thái</option>
+        {% for value, label in status_choices %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ value|vi }}</option>{% endfor %}
+    </select>
+    <select name="mode" class="form-select" style="flex:1 1 170px">
+        <option value="">Thật + mô phỏng</option>
+        <option value="physical" {% if mode == 'physical' %}selected{% endif %}>Thiết bị thật</option>
+        <option value="simulated" {% if mode == 'simulated' %}selected{% endif %}>Mô phỏng</option>
+    </select>
+    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+</form>
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead><tr><th>Mã thiết bị</th><th>Tên</th><th>Loại</th><th>Chủ sở hữu</th><th>Trạng thái</th><th>Pin</th><th>Thấy lần cuối</th><th class="text-end"></th></tr></thead>
+            <tbody>
+            {% for d in page_obj %}
+                <tr>
+                    <td class="mono fw-bold">{{ d.device_code }}</td>
+                    <td>{{ d.name }}</td>
+                    <td>{{ d.device_mode|vi }}</td>
+                    <td class="text-break">{{ d.owner.email|default:"—" }}</td>
+                    <td><span class="badge text-bg-{{ d.status|badge }}">{{ d.status|vi }}</span></td>
+                    <td>{{ d.battery_level }}%</td>
+                    <td>{{ d.last_seen_at|date:"d/m H:i"|default:"—" }}</td>
+                    <td class="text-end"><a href="{% url 'manage_sys:device-detail' d.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
+                </tr>
+            {% empty %}
+                {% include 'manage_sys/_ui.html' with part="empty_state" cols=8 icon="plug" title="Không có thiết bị nào" hint="Thử đổi từ khóa hoặc bỏ bộ lọc." %}
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% include 'manage_sys/_ui.html' with part="pager" %}
+{% elif page == 'device_create' %}
+<div class="row">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">Thông tin thiết bị</div>
+            <div class="card-body">
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="mb-3">
+                        <label class="form-label">Mã thiết bị <span class="text-danger">*</span></label>
+                        <input type="text" name="device_code" class="form-control mono" value="{{ form.device_code }}" maxlength="50" required placeholder="LOCK-0001" autocapitalize="characters">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tên thiết bị <span class="text-danger">*</span></label>
+                        <input type="text" name="name" class="form-control" value="{{ form.name }}" maxlength="100" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Loại</label>
+                        <select name="device_mode" class="form-select">
+                            <option value="physical" {% if form.device_mode != 'simulated' %}selected{% endif %}>Thiết bị thật</option>
+                            <option value="simulated" {% if form.device_mode == 'simulated' %}selected{% endif %}>Mô phỏng</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">MAC (tùy chọn)</label>
+                        <input type="text" name="mac_address" class="form-control mono" value="{{ form.mac_address }}" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17">
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label">Chủ sở hữu (email hoặc username)</label>
+                        <input type="text" name="owner_email" class="form-control" value="{{ form.owner_email }}" autocapitalize="none">
+                        <div class="form-text">Chỉ để ghi nhớ chủ dự kiến. Thiết bị luôn được tạo ở trạng thái "chờ cấu hình"; việc gán chủ làm ở trang chi tiết và chỉ được khi khoá đã kết nối thật.</div>
+                    </div>
+                    <button class="btn btn-primary w-100"><i class="fa-solid fa-plus me-2"></i>Tạo thiết bị</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% elif page == 'device_created' %}
+<div class="alert alert-warning">
+    <i class="fa-solid fa-triangle-exclamation me-2"></i>
+    <strong>Secret chỉ hiển thị một lần</strong> (tải lại trang sẽ không còn). Hãy chép vào firmware / file cấu hình của thiết bị ngay. Nếu chưa kịp chép, vào trang chi tiết dùng <em>Xoay secret</em> để tạo secret mới.
+</div>
+<div class="card">
+    <div class="card-header">Thông tin kết nối</div>
+    <div class="card-body">
+        <dl class="kv">
+            <dt>Server</dt><dd class="mono text-break">{{ api_base }}</dd>
+            <dt>Mã thiết bị</dt><dd class="mono">{{ device.device_code }}</dd>
+            <dt>Secret</dt>
+            <dd><span class="mono text-break" id="sec">{{ secret }}</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
+                    onclick="navigator.clipboard.writeText(document.getElementById('sec').textContent);this.textContent='Đã chép'">Chép</button></dd>
+            <dt>Chủ sở hữu</dt><dd>{{ device.owner.email|default:"— (chờ cấu hình)" }}</dd>
+        </dl>
+        <div class="small text-muted">Thiết bị kết nối MQTT broker với username = <span class="mono">{{ device.device_code }}</span>, password = secret ở trên; publish lên <span class="mono">smartlock/{{ device.device_code }}/status|ack|event</span> và subscribe <span class="mono">smartlock/{{ device.device_code }}/cmd</span>.</div>
+    </div>
+</div>
+{% elif page == 'device_detail' %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card mb-4">
+            <div class="card-header">Thông tin thiết bị</div>
+            <div class="card-body">
+                <dl class="kv">
+                    <dt>Mã thiết bị</dt><dd class="mono">{{ device.device_code }}</dd>
+                    <dt>Loại</dt><dd>{{ device.device_mode|vi }}</dd>
+                    <dt>Chủ sở hữu</dt><dd>{% if device.owner %}<a href="{% url 'manage_sys:user-detail' device.owner.id %}">{{ device.owner.email }}</a>{% else %}—{% endif %}</dd>
+                    <dt>MAC</dt><dd class="mono">{{ device.mac_address|default:"—" }}</dd>
+                    <dt>Firmware</dt><dd>{{ device.firmware_version|default:"—" }}</dd>
+                    <dt>Vị trí</dt><dd>{{ device.location|default:"—" }}</dd>
+                    <dt>Pin</dt><dd>{{ device.battery_level }}%</dd>
+                    <dt>Kết nối</dt><dd>{% if device.wifi_enabled %}<i class="fa-solid fa-wifi me-1"></i>{% endif %}{% if device.bluetooth_enabled %}<i class="fa-brands fa-bluetooth-b me-1"></i>{% endif %}{% if device.nfc_enabled %}NFC{% endif %}{% if not device.wifi_enabled and not device.bluetooth_enabled and not device.nfc_enabled %}—{% endif %}</dd>
+                    <dt>Thấy lần cuối</dt><dd>{{ device.last_seen_at|date:"d/m/Y H:i"|default:"—" }}</dd>
+                    <dt>Tạo lúc</dt><dd>{{ device.created_at|date:"d/m/Y H:i" }}</dd>
+                    {% if last_log %}
+                    <dt>Trạng thái khóa</dt><dd>{{ last_log.lock_state }}{% if last_log.tamper_detected %} <span class="badge text-bg-danger">Bị phá</span>{% endif %}</dd>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+
+        <div class="card mb-4" id="linkCard" data-url="{% url 'manage_sys:device-link' device.id %}">
+            <div class="card-header d-flex justify-content-between align-items-center"><span>Kết nối</span><span id="linkBadge" class="badge text-bg-secondary">Đang kiểm tra…</span></div>
+            <div class="card-body">
+                <dl class="kv mb-3">
+                    <dt>Thấy lần cuối</dt><dd id="linkSeen">—</dd>
+                    <dt>PING gần nhất</dt><dd id="linkPing">{{ link.ping_status|default:"—" }}</dd>
+                </dl>
+                <form method="post">{% csrf_token %}<input type="hidden" name="action" value="ping">
+                    <button class="btn btn-outline-primary btn-sm w-100"><i class="fa-solid fa-satellite-dish me-2"></i>Gửi PING</button></form>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Thông tin thiết lập</div>
+            <div class="card-body">
+                <dl class="kv mb-0">
+                    <dt>MQTT username</dt><dd class="mono">{{ setup.mqtt_username }}</dd>
+                    <dt>Dấu vân tay secret</dt><dd class="mono">{{ setup.secret_fingerprint }}…</dd>
+                    <dt>Topic lệnh</dt><dd class="mono text-break">{{ setup.cmd_topic }}</dd>
+                    <dt>Topic thiết bị gửi</dt><dd class="mono text-break">{% for t in setup.publish_topics %}{{ t }}<br>{% endfor %}</dd>
+                </dl>
+            </div>
+        </div>
+
+        {% if admin_can_claim %}
+        <div class="card mb-4">
+            <div class="card-header">Gán chủ sở hữu</div>
+            <div class="card-body">
+                <form method="post">{% csrf_token %}<input type="hidden" name="action" value="claim">
+                    <input type="text" name="owner" class="form-control mb-2" placeholder="Email hoặc username" required autocapitalize="none">
+                    <button class="btn btn-primary w-100">Gán chủ</button>
+                    <div class="form-text">Chỉ được khi khoá đã kết nối (xem chỉ báo ở trên).</div>
+                </form>
+            </div>
+        </div>
+        {% elif user_must_claim %}
+        <div class="alert alert-info small">Khoá đã bị gỡ chủ: quản trị viên không gán lại được. Người dùng phải tự thêm bằng mã thiết bị + secret.</div>
+        {% endif %}
+
+        {% if can_sensitive %}
+        <div class="card mb-4 border-danger-subtle">
+            <div class="card-header text-danger">Vùng nguy hiểm</div>
+            <div class="card-body d-grid gap-3">
+                <div class="small text-muted"><i class="fa-solid fa-triangle-exclamation me-1 text-danger"></i>Cần gõ đúng mã thiết bị và nhập lại mật khẩu. Sai mật khẩu sẽ bị ghi log và tính vào bộ đếm khoá tài khoản.</div>
+                {% if device.owner %}
+                <form method="post" onsubmit="return confirm('Gỡ chủ và vô hiệu hóa MỌI quyền truy cập, thẻ, PIN, khuôn mặt của khoá này?')">{% csrf_token %}<input type="hidden" name="action" value="remove_owner">
+                    <label class="form-label small mb-1">Gỡ chủ sở hữu</label>
+                    <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Nhập mã: {{ device.device_code }}" required autocomplete="off">
+                    <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+                    <button class="btn btn-outline-danger btn-sm w-100">Gỡ chủ</button></form>
+                {% endif %}
+                <form method="post" onsubmit="return confirm('Xoay secret? Thiết bị phải nạp lại secret mới, secret cũ mất hiệu lực.')">{% csrf_token %}<input type="hidden" name="action" value="rotate_secret">
+                    <label class="form-label small mb-1">Xoay secret kết nối</label>
+                    <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Nhập mã: {{ device.device_code }}" required autocomplete="off">
+                    <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+                    <button class="btn btn-outline-danger btn-sm w-100">Xoay secret</button></form>
+            </div>
+        </div>
+
+        {% else %}
+        <div class="alert alert-secondary small mb-4"><i class="fa-solid fa-lock me-1"></i>Gỡ chủ và xoay secret là thao tác nhạy cảm, chỉ Superuser được thực hiện.</div>
+        {% endif %}
+
+        <div class="card">
+            <div class="card-header">Thao tác</div>
+            <div class="card-body">
+                {% if not device.owner %}
+                    <div class="alert alert-secondary small mb-0">Thiết bị chưa có chủ sở hữu (đang chờ cấu hình) nên chưa thể đổi trạng thái.</div>
+                {% elif device.status == 'maintenance' %}
+                    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="maintenance_off">
+                        <button class="btn btn-outline-success w-100"><i class="fa-solid fa-circle-check me-2"></i>Kết thúc bảo trì</button></form>
+                {% else %}
+                    <form method="post" onsubmit="return confirm('Đặt thiết bị vào chế độ bảo trì? Chủ sở hữu sẽ được thông báo.')">{% csrf_token %}<input type="hidden" name="action" value="maintenance_on">
+                        <button class="btn btn-outline-warning w-100"><i class="fa-solid fa-screwdriver-wrench me-2"></i>Đặt chế độ bảo trì</button></form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card mb-4">
+            <div class="card-header">Người được cấp quyền ({{ accesses|length }})</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Người dùng</th><th>Quyền</th><th>Nguồn</th><th>Hết hạn</th></tr></thead>
+                <tbody>
+                {% for a in accesses %}<tr><td class="text-break">{{ a.user.email }}</td><td>{% for p in a.permissions.all %}<span class="badge text-bg-light border">{{ p.code }}</span> {% empty %}—{% endfor %}</td><td>{{ a.source }}</td><td>{{ a.expires_at|date:"d/m/Y H:i"|default:"Không giới hạn" }}</td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=4 text="Chưa chia sẻ cho ai" %}{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Đầu đọc NFC ({{ readers|length }})</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Tên</th><th>Loại</th><th>Hoạt động</th><th>Thấy lần cuối</th></tr></thead>
+                <tbody>
+                {% for r in readers %}<tr><td>{{ r.name|default:"—" }}</td><td>{{ r.reader_mode|vi }}</td><td>{{ r.is_active|yesno:"Có,Không" }}</td><td>{{ r.last_seen_at|date:"d/m H:i"|default:"—" }}</td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=4 text="Chưa có đầu đọc" %}{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Thẻ NFC được gán ({{ cards|length }})</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Tên thẻ</th><th>Chủ thẻ</th><th>Hoạt động</th><th>Gán lúc</th></tr></thead>
+                <tbody>
+                {% for c in cards %}<tr><td>{{ c.access_card.name|default:"—" }}</td><td class="text-break">{{ c.access_card.user.email }}</td><td>{{ c.is_active|yesno:"Có,Không" }}</td><td>{{ c.created_at|date:"d/m/Y H:i" }}</td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=4 text="Chưa có thẻ" %}{% endfor %}
+                </tbody></table></div>
+            <div class="card-footer small text-muted">Không hiển thị UID thẻ.</div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Mã PIN (50 gần nhất)</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Nhãn</th><th>Người tạo</th><th>Hết hạn</th><th>Đã dùng</th><th>Trạng thái</th></tr></thead>
+                <tbody>
+                {% for p in pins %}<tr><td>{{ p.label|default:"—" }}</td><td class="text-break">{{ p.created_by.email }}</td><td>{{ p.expires_at|date:"d/m/Y H:i" }}</td><td>{{ p.use_count }}/{{ p.max_uses }}</td><td>{% if p.is_revoked %}<span class="badge text-bg-secondary">Đã thu hồi</span>{% else %}<span class="badge text-bg-success">Còn hiệu lực</span>{% endif %}</td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=5 text="Chưa có mã PIN" %}{% endfor %}
+                </tbody></table></div>
+            <div class="card-footer small text-muted">Không hiển thị giá trị PIN (chỉ lưu hash).</div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Khuôn mặt đăng ký ({{ faces|length }})</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Tên</th><th>Người dùng</th><th>Hoạt động</th><th>Đã đồng ý</th><th>Tạo lúc</th></tr></thead>
+                <tbody>
+                {% for f in faces %}<tr><td>{{ f.name|default:"—" }}</td><td class="text-break">{{ f.user.email }}</td><td>{{ f.is_active|yesno:"Có,Không" }}</td><td>{{ f.consent_confirmed|yesno:"Có,Không" }}</td><td>{{ f.created_at|date:"d/m/Y H:i" }}</td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=5 text="Chưa có khuôn mặt" %}{% endfor %}
+                </tbody></table></div>
+            <div class="card-footer small text-muted">Không hiển thị dữ liệu khuôn mặt (embedding đã mã hoá).</div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Lịch sử ra vào (30 gần nhất)</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Thời gian</th><th>Cách mở</th><th>Người dùng</th><th>Kết quả</th></tr></thead>
+                <tbody>
+                {% for e in access_events %}<tr><td>{{ e.created_at|date:"d/m H:i" }}</td><td>{{ e.method|vi }}</td><td class="text-break">{{ e.user.email|default:"—" }}</td><td>{% if e.success %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}{% if not e.success %} <small class="text-muted">{{ e.reason|default:"" }}</small>{% endif %}</td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=4 text="Chưa có lượt ra vào" %}{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">Lệnh gần đây</div>
+            <div class="table-responsive"><table class="table mb-0">
+                <thead><tr><th>Thời gian</th><th>Lệnh</th><th>Người gửi</th><th>Trạng thái</th></tr></thead>
+                <tbody>
+                {% for c in commands %}<tr><td>{{ c.created_at|date:"d/m H:i" }}</td><td>{{ c.command_type }}</td><td class="text-break">{{ c.issued_by.email }}</td><td>{{ c.status }}</td></tr>
+                {% empty %}{% include 'manage_sys/_ui.html' with part="empty_row" cols=4 text="Chưa có lệnh" %}{% endfor %}
+                </tbody></table></div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-12"><div class="card h-100">
+                <div class="card-header">Nhật ký thiết bị</div>
+                <div class="list-group list-group-flush">
+                    {% for l in logs %}<div class="list-group-item d-flex justify-content-between align-items-center gap-2"><span class="mono text-break">{{ l.action }}</span><small class="text-muted text-nowrap">{{ l.created_at|date:"d/m H:i" }}</small></div>
+                    {% empty %}<div class="list-group-item text-center text-muted">Không có</div>{% endfor %}
+                </div></div></div>
+        </div>
+    </div>
+</div>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+{% block scripts %}{{ block.super }}
+{% if page == 'device_detail' %}
+<script>
+(function () {
+    var card = document.getElementById('linkCard');
+    if (!card) return;
+    var badge = document.getElementById('linkBadge'), seen = document.getElementById('linkSeen'), ping = document.getElementById('linkPing');
+    function tick() {
+        fetch(card.dataset.url, {credentials: 'same-origin', cache: 'no-store'})
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                badge.textContent = d.connected ? 'Đã kết nối' : 'Chưa kết nối';
+                badge.className = 'badge text-bg-' + (d.connected ? 'success' : 'secondary');
+                seen.textContent = d.seconds_ago === null ? '—' : d.seconds_ago + ' giây trước';
+                if (d.ping_status) ping.textContent = d.ping_status;
+            })
+            .catch(function () { badge.textContent = 'Lỗi kiểm tra'; });
+    }
+    tick(); setInterval(tick, 5000);
+})();
+</script>
+{% endif %}
+{% endblock %}

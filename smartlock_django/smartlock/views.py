@@ -13,6 +13,12 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from .models import DoorPinCode, FaceProfile, AccessEvent
 from . import services
+from .constants import EVENTS_BATCH, EVENTS_MAX_BACKLOG_SECONDS, RESET_NEUTRAL_MSG
+from .twofa import (
+    EMAIL_CODE_COOLDOWN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_TTL_MIN,
+    digits as _digits, get_cfg as _get_cfg, lock_minutes as _lock_minutes, pepper_hash as _pepper_hash,
+    send_email_code as _send_email_code, verify_email_code as _verify_email_code, verify_totp as _verify_totp,
+)
 import pyotp
 import qrcode
 import qrcode.image.svg
@@ -75,10 +81,7 @@ from .models import (
 logger = logging.getLogger('smartlock.views')
 
 # ====================== CONSTANTS ======================
-COMMAND_TTL_SECONDS = 120
 PAGE_SIZE = 20
-# lệnh -> quyền cần có (None = chỉ chủ khoá)
-ALLOWED_COMMANDS = {'LOCK': 'LOCK', 'UNLOCK': 'UNLOCK', 'REBOOT': None}
 
 # ====================== AUTH REQUIRED DECORATOR (đưa lên đầu) ======================
 auth_required = login_required(login_url='smartlock:login')
@@ -116,12 +119,7 @@ def _render(request, page, context=None, **kwargs):
 
 # ====================== HELPERS ======================
 
-def _visible_logs(user):
-    """Log user được phép xem: mình làm, mình là đối tượng (bị admin/người khác tác động,
-    bị đăng nhập sai...), hoặc xảy ra trên thiết bị của mình."""
-    return AuditLog.objects.filter(
-        Q(actor_user=user) | Q(target_user=user) | Q(device__owner=user)
-    )
+_visible_logs = services.visible_logs
 
 
 
@@ -378,8 +376,6 @@ def resend_verification(request):
     return _render(request, 'verify_email', {'email': email})
 
 
-RESET_NEUTRAL_MSG = ('Nếu email này đã đăng ký, chúng tôi đã gửi link đặt lại mật khẩu. '
-                     'Vui lòng kiểm tra hộp thư (kể cả mục Spam).')
 
 
 def password_reset_request(request):
@@ -443,7 +439,7 @@ def reset_password(request, uidb64, token):
             return _render(request, 'reset_password', ctx)
         user.set_password(p1)
         user.save()
-        from .api.mobile_auth import revoke_all_sessions
+        from .api.common import revoke_all_sessions       # thu hồi mọi phiên app (đổi mật khẩu = đăng xuất app)
         revoke_all_sessions(user)
         _reset_lockout(user)
         _audit(request, 'PASSWORD_RESET_DONE', actor=user, target_user=user)
@@ -961,9 +957,6 @@ def public_system_logs_api(request):
 SESSION_KEY = 'pending_2fa'            # {user_id, purpose, backend, next, ts, fails}
 PENDING_TTL = 10 * 60                  # 10 phút để hoàn tất bước 2
 MAX_PENDING_FAILS = 5                  # sai quá 5 lần trong 1 phiên -> hủy phiên, phải nhập lại mật khẩu
-EMAIL_CODE_TTL_MIN = 10
-EMAIL_CODE_COOLDOWN = 60               # giây giữa 2 lần gửi mã
-EMAIL_CODE_MAX_ATTEMPTS = 5
 TOTP_ISSUER = 'Smart Lock'
 SETUP_TTL = 10 * 60
 WEBAUTHN_TTL = 5 * 60
@@ -981,18 +974,10 @@ def _now_ts():
 
 
 # ====================== HÀM PHỤ (mã hóa / TOTP / email) ======================
-def _pepper_hash(user, value: str) -> str:
-    """HMAC-SHA256 gắn với SECRET_KEY + user để lưu hash của mã OTP."""
-    msg = f'{user.pk}:{value}'.encode()
-    return hmac.new(dj_settings.SECRET_KEY.encode(), msg, hashlib.sha256).hexdigest()
 
 
-def _digits(value) -> str:
-    return re.sub(r'\D', '', value or '')
 
 
-def _get_cfg(user) -> TwoFactorConfig:
-    return TwoFactorConfig.objects.get_or_create(user=user)[0]
 
 
 def _qr_data_uri(text: str) -> str:
@@ -1003,70 +988,10 @@ def _qr_data_uri(text: str) -> str:
     return 'data:image/svg+xml;base64,' + base64.b64encode(buf.getvalue()).decode()
 
 
-def _verify_totp(cfg: TwoFactorConfig, code: str) -> bool:
-    """Kiểm tra mã TOTP (±1 bước 30s) và chặn dùng lại cùng một mã (replay)."""
-    code = _digits(code)
-    secret = cfg.get_totp_secret()
-    if len(code) != 6 or not secret:
-        return False
-    totp = pyotp.TOTP(secret)
-    step_now = int(timezone.now().timestamp() // totp.interval)
-    with transaction.atomic():
-        locked = TwoFactorConfig.objects.select_for_update().get(pk=cfg.pk)
-        for offset in (-1, 0, 1):
-            step = step_now + offset
-            if step <= locked.totp_last_step:
-                continue
-            if hmac.compare_digest(totp.at(step * totp.interval), code):
-                locked.totp_last_step = step
-                locked.save(update_fields=['totp_last_step', 'updated_at'])
-                return True
-    return False
 
 
-def _send_email_code(user, purpose):
-    """purpose: 'SETUP' (thiết lập Email OTP) hoặc 'VERIFY' (login/enable/disable).
-    Trả về 'sent' | 'cooldown' | 'failed'."""
-    now = timezone.now()
-    if OneTimeCode.objects.filter(
-            user=user, purpose__in=('TF_SETUP', 'TF_VERIFY'),
-            created_at__gt=now - timedelta(seconds=EMAIL_CODE_COOLDOWN)).exists():
-        return 'cooldown'
-    code = f'{secrets.randbelow(10 ** 6):06d}'
-    OneTimeCode.objects.filter(user=user, purpose__in=('TF_SETUP', 'TF_VERIFY'),
-                               is_used=False).update(is_used=True)
-    OneTimeCode.objects.create(
-        user=user, purpose='TF_' + purpose, token_hash=_pepper_hash(user, 'em:' + code),
-        expires_at=now + timedelta(minutes=EMAIL_CODE_TTL_MIN),
-    )
-    subject, html, plain = render_email('two_factor_code', {
-        'full_name': user.full_name or user.username,
-        'otp_code': code,
-        'expiry_minutes': EMAIL_CODE_TTL_MIN,
-    })
-    return 'sent' if _send_mail(subject, plain, html, user.email, log_body=False) else 'failed'
 
 
-def _verify_email_code(user, code, purpose) -> bool:
-    code = _digits(code)
-    if len(code) != 6:
-        return False
-    with transaction.atomic():
-        rec = OneTimeCode.objects.select_for_update().filter(
-            user=user, purpose='TF_' + purpose, is_used=False, expires_at__gt=timezone.now(),
-        ).order_by('-created_at').first()
-        if not rec:
-            return False
-        rec.attempts += 1
-        if rec.attempts > EMAIL_CODE_MAX_ATTEMPTS:
-            rec.is_used = True
-            rec.save(update_fields=['attempts', 'is_used'])
-            return False
-        ok = hmac.compare_digest(rec.token_hash, _pepper_hash(user, 'em:' + code))
-        if ok:
-            rec.is_used = True
-        rec.save(update_fields=['attempts', 'is_used'])
-        return ok
 
 
 def _require_password(request) -> bool:
@@ -1150,12 +1075,6 @@ def _pending_exit_url(p):
     return reverse('smartlock:login') if (p or {}).get('purpose') == 'login' else reverse('smartlock:profile')
 
 
-def _lock_minutes(user) -> int:
-    locked_until = User.objects.filter(pk=user.pk).values_list('login_locked_until', flat=True).first()
-    now = timezone.now()
-    if locked_until and locked_until > now:
-        return math.ceil((locked_until - now).total_seconds() / 60)
-    return 0
 
 
 def _fail(request, p, user, method, flash=True):
@@ -1681,48 +1600,12 @@ def two_factor_context(request, user):
 # User tự thêm khoá (kể cả khoá đã bị gỡ chủ / chủ cũ) bằng mã thiết bị + secret.
 # Mọi nhánh (kể cả từ chối/lỗi) đều ghi AuditLog.
 @auth_required
-@require_http_methods(['GET', 'POST'])
 def device_claim(request):
-    if request.method == 'POST':
-        code = (request.POST.get('device_code') or '').strip()[:50]
-        secret = request.POST.get('secret') or ''
-        try:
-            device = services.user_claim_device(request.user, code, secret, request)
-        except services.ClaimError as exc:
-            services.audit(request, 'DEVICE_CLAIM_FAILED', success=False, severity='warning',
-                           metadata={'device_code_input': code.upper(), 'code': exc.code})
-            messages.error(request, exc.message)
-            return redirect('smartlock:device-claim')
-        services.audit(request, 'DEVICE_CLAIMED', device=device, target_user=request.user,
-                       severity='warning', metadata={'by': 'user'})
-        services.notify(request.user, 'Đã thêm khoá vào tài khoản',
-                        f'Khoá "{device.name}" ({device.device_code}) đã được gán cho bạn.',
-                        device=device, type_='DEVICE')
-        messages.success(request, f'Đã thêm khoá "{device.name}".')
-        return redirect('smartlock:device-detail', device_id=device.id)
+    """Trang nhập mã thiết bị + secret. Việc thêm khoá do form gọi API: POST /api/v1/devices/claim/."""
     return _render(request, 'device_claim')
 
 
 # ====================== FACE: XOÁ HẲN HỒ SƠ KHUÔN MẶT (dữ liệu sinh trắc - NĐ 13/2023) ======================
-@auth_required
-@require_POST
-def face_profile_delete(request, profile_id):
-    pid = services.parse_uuid(profile_id)
-    profile = FaceProfile.objects.select_related('device').filter(id=pid).first() if pid else None
-    # Chủ khoá xoá được mọi hồ sơ của khoá; người khác chỉ xoá hồ sơ của chính mình.
-    if profile and profile.user_id != request.user.id and profile.device.owner_id != request.user.id:
-        profile = None
-    if not profile:
-        services.audit(request, 'FACE_PROFILE_DELETE_DENIED', success=False, severity='warning',
-                       metadata={'profile_id': str(profile_id)[:64]})
-        messages.error(request, 'Không tìm thấy hồ sơ khuôn mặt.')
-        return redirect('smartlock:face-profiles')
-    device, owner_of_profile, info = profile.device, profile.user, {'face_profile_id': str(profile.id)}
-    profile.delete()
-    services.audit(request, 'FACE_PROFILE_DELETED', device=device, target_user=owner_of_profile,
-                   severity='warning', metadata=info)
-    messages.success(request, 'Đã xoá hồ sơ khuôn mặt.')
-    return redirect(f"{reverse('smartlock:face-profiles')}?device={device.id}")
 
 
 # =====================================================================================================
@@ -1781,28 +1664,6 @@ def device_detail(request, device_id):
     device = get_object_or_404(_accessible_devices(request.user), id=device_id)
     is_owner = device.owner_id == request.user.id
 
-    if request.method == 'POST':
-        if not is_owner:
-            _audit(request, 'DEVICE_UPDATE_DENIED', device=device, success=False, severity='warning')
-            messages.error(request, 'Chỉ chủ thiết bị mới được chỉnh sửa.')
-            return redirect('smartlock:device-detail', device_id=device.id)
-        name = (request.POST.get('name') or '').strip()
-        if not name:
-            messages.error(request, 'Tên thiết bị không được để trống.')
-        else:
-            fields = ('name', 'location', 'wifi_enabled', 'bluetooth_enabled', 'nfc_enabled')
-            before = {f: getattr(device, f) for f in fields}
-            device.name = name[:100]
-            device.location = (request.POST.get('location') or '').strip()[:255] or None
-            device.wifi_enabled = 'wifi_enabled' in request.POST
-            device.bluetooth_enabled = 'bluetooth_enabled' in request.POST
-            device.nfc_enabled = 'nfc_enabled' in request.POST
-            device.save()
-            changes = {f: [before[f], getattr(device, f)] for f in fields if before[f] != getattr(device, f)}
-            _audit(request, 'DEVICE_UPDATED', device=device, metadata={'changes': changes} if changes else None)
-            messages.success(request, 'Đã cập nhật thiết bị.')
-        return redirect('smartlock:device-detail', device_id=device.id)
-
     last_log = DeviceStatusLog.objects.filter(device=device).order_by('-recorded_at').first()
     device.lock_state = last_log.lock_state if last_log else 'unknown'
     caps = services.capabilities(request.user, device)
@@ -1823,59 +1684,10 @@ def device_detail(request, device_id):
 
 
 # ====================== MỞ / KHOÁ TỪ XA (trình duyệt, qua Wi-Fi/Internet) ======================
-COMMAND_LABELS = {'LOCK': 'Khóa', 'UNLOCK': 'Mở khóa', 'REBOOT': 'Khởi động lại'}
 
 
-def _command_reply(ok, message, status=200, **extra):
-    """JSON cho JS: `popup` để hiện popup trong trang (SmartLockPopup.show), không dùng thông báo trình duyệt."""
-    popup = {'title': 'Thành công' if ok else 'Không thực hiện được', 'message': message,
-             'severity': 'info' if ok else 'warning'}
-    return JsonResponse({'ok': ok, 'message': message, 'popup': popup, **extra}, status=status)
 
 
-@auth_required
-@require_POST
-def device_command(request, device_id):
-    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
-    command = (request.POST.get('command') or '').upper()
-    if command not in ALLOWED_COMMANDS:
-        _audit(request, 'CMD_INVALID', device=device, success=False, severity='warning',
-               metadata={'command': command[:30]})
-        return _command_reply(False, 'Lệnh không hợp lệ.', 400)
-
-    needed = ALLOWED_COMMANDS[command]
-    allowed = (device.owner_id == request.user.id) if needed is None \
-        else _has_permission(request.user, device, needed)
-    if not allowed:
-        _audit(request, f'CMD_{command}_DENIED', device=device, success=False, severity='warning')
-        return _command_reply(False, 'Bạn không có quyền thực hiện lệnh này.', 403)
-    if not device.wifi_enabled:
-        return _command_reply(False, 'Wi-Fi của khoá đang tắt nên không điều khiển từ xa được.', 409)
-    if device.status != 'online':
-        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
-               metadata={'reason': 'device_not_online', 'status': device.status})
-        return _command_reply(False, 'Thiết bị đang không online.', 409)
-
-    now = timezone.now()
-    # 'sent' cũng là trạng thái chưa xong (đã publish, chờ ack) -> phải tính vào hết hạn & chống trùng.
-    DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'),
-                                 expires_at__lte=now).update(status='expired')
-    if DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'), command_type=command,
-                                    created_at__gte=now - timedelta(seconds=10)).exists():
-        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
-               metadata={'reason': 'duplicate_pending'})
-        return _command_reply(False, 'Lệnh này vừa được gửi, vui lòng chờ vài giây.', 429)
-
-    cmd = services.dispatch_command(device, command, source='web', issued_by=request.user,
-                                    ttl=COMMAND_TTL_SECONDS)
-    if cmd.status != 'sent':
-        _audit(request, f'CMD_{command}_FAILED', device=device, success=False,
-               metadata={'reason': 'mqtt_publish_failed', 'error': cmd.publish_error})
-        return _command_reply(False, 'Không kết nối được tới thiết bị. Vui lòng thử lại.', 502)
-
-    _audit(request, f'CMD_{command}', device=device, metadata={'command_id': str(cmd.id)})
-    return _command_reply(True, f'Đã gửi lệnh {COMMAND_LABELS.get(command, command)} tới "{device.name}".',
-                          command_id=str(cmd.id))
 
 
 # ====================== ĐIỆN THOẠI: VÉ BLUETOOTH / NFC GIẢ LẬP THẺ ======================
@@ -2222,8 +2034,7 @@ def door_pins(request):
     """Chủ khoá (hoặc người có quyền manage_pins) cấp PIN cho khách; khách bấm PIN trên bàn phím
     ma trận của khoá để mở cửa. PIN KHÔNG phải thứ để nhập vào web/app."""
     devices = services.devices_with_permission(request.user, 'manage_pins').order_by('name')
-    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
-                          strict=request.method == 'POST')
+    device = _pick_device(devices, request.GET.get('device'), strict=False)
 
     if request.method == 'POST':
         if not device:
@@ -2285,38 +2096,7 @@ def face_profiles(request):
     trên khoá đó; người khác chỉ thấy hồ sơ của chính mình."""
     user = request.user
     devices = services.devices_with_permission(user, 'manage_face_profiles').order_by('name')
-    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'),
-                          strict=request.method == 'POST')
-
-    if request.method == 'POST':
-        if not device:
-            _audit(request, 'FACE_PROFILE_CREATE_DENIED', success=False, severity='warning')
-            messages.error(request, 'Không tìm thấy thiết bị hoặc bạn không có quyền quản lý khuôn mặt.')
-            return redirect('smartlock:face-profiles')
-        action = request.POST.get('action')
-
-        if action == 'register':
-            # Luồng cũ (người dùng dán vector đặc trưng) đã bỏ: vector phải do camera trích xuất, người dùng
-            # không nhìn thấy/không nhập. Đăng ký bằng nút "Quét khuôn mặt" (gọi smartlock:face-enroll).
-            messages.error(request, 'Hãy dùng nút "Quét khuôn mặt" để đăng ký bằng camera.')
-            return _redirect_with('smartlock:face-profiles', device=device.id)
-
-        if action == 'toggle':
-            profile = FaceProfile.objects.filter(id=_parse_uuid(request.POST.get('profile_id')),
-                                                 device=device).first()
-            # Chủ khoá bật/tắt được hồ sơ của mọi người; người khác chỉ hồ sơ của chính mình.
-            if profile and profile.user_id != user.id and device.owner_id != user.id:
-                profile = None
-            if not profile:
-                messages.error(request, 'Không tìm thấy hồ sơ khuôn mặt.')
-            else:
-                profile.is_active = not profile.is_active
-                profile.save(update_fields=['is_active', 'updated_at'])
-                _audit(request, 'FACE_PROFILE_TOGGLED', device=device, target_user=profile.user,
-                       metadata={'face_profile_id': str(profile.id), 'is_active': profile.is_active})
-                messages.success(request, 'Đã cập nhật trạng thái.')
-            return _redirect_with('smartlock:face-profiles', device=device.id)
-        return _redirect_with('smartlock:face-profiles', device=device.id)
+    device = _pick_device(devices, request.GET.get('device'), strict=False)
 
     profiles = FaceProfile.objects.none()
     if device:
@@ -2325,43 +2105,11 @@ def face_profiles(request):
             profiles = profiles.filter(user=user)
     return _render(request, 'face_profiles', {
         'device_list': devices, 'device': device, 'face_profiles': profiles,
-        'face_enroll_url': reverse('smartlock:face-enroll'),
+        'face_enroll_url': reverse('smartlock_api:device-faces', args=[device.id]) if device else '',
         'face_min_frames': services.FACE_MIN_FRAMES,
     })
 
 
-@auth_required
-@require_POST
-def face_enroll(request):
-    """Nhận kết quả QUÉT khuôn mặt (JSON) từ trình duyệt/app: {device, name, consent_confirmed, embeddings:[[128 số] x N]}.
-    Camera + trích vector chạy ở phía client (ảnh không rời máy, không lưu ảnh); server kiểm tra chất lượng, lấy
-    trung bình, mã hoá rồi lưu (NĐ 13/2023). Người dùng không thấy và không nhập vector."""
-    if len(request.body) > 64 * 1024:
-        return JsonResponse({'ok': False, 'message': 'Dữ liệu quá lớn.'}, status=413)
-    data = _json_body(request)
-    if not isinstance(data, dict):
-        return JsonResponse({'ok': False, 'message': 'Yêu cầu không hợp lệ.'}, status=400)
-    user = request.user
-    devices = services.devices_with_permission(user, 'manage_face_profiles')
-    device = _pick_device(devices, data.get('device'), strict=True)
-    if not device:
-        _audit(request, 'FACE_PROFILE_CREATE_DENIED', success=False, severity='warning')
-        return JsonResponse({'ok': False, 'message': 'Không tìm thấy khoá hoặc bạn không có quyền đăng ký khuôn mặt.'},
-                            status=403)
-    if data.get('consent_confirmed') is not True:
-        return JsonResponse({'ok': False, 'message': 'Cần xác nhận người được đăng ký đã đồng ý thu thập dữ liệu khuôn mặt.'},
-                            status=400)
-    name = str(data.get('name') or user.full_name or user.username)[:100]
-    try:
-        profile = services.enroll_face(device, user, data.get('embeddings'), name=name, request=request)
-    except services.FaceEnrollError as exc:
-        _audit(request, 'FACE_PROFILE_ENROLL_FAILED', device=device, success=False, severity='warning',
-               metadata={'code': exc.code})
-        return JsonResponse({'ok': False, 'message': exc.message, 'code': exc.code}, status=422)
-    if device.owner_id != user.id:
-        _notify(device.owner, 'Có khuôn mặt mới trên khoá của bạn',
-                f'{user.username} vừa đăng ký khuôn mặt cho "{device.name}".', device=device, type_='FACE')
-    return JsonResponse({'ok': True, 'message': 'Đã đăng ký khuôn mặt.', 'profile_id': str(profile.id)})
 
 
 # ====================== LỊCH SỬ RA VÀO ======================
@@ -2384,8 +2132,6 @@ def access_events_history(request):
 
 
 # ====================== POPUP TRÊN MÀN HÌNH (poll) ======================
-EVENTS_MAX_BACKLOG_SECONDS = 300     # tab mở lại sau lâu: không dội cả đống popup cũ
-EVENTS_BATCH = 10
 
 
 @auth_required
@@ -2429,25 +2175,3 @@ def _device_or_404(request, device_id):
 def live_page(request, device_id):
     return render(request, 'account/live.html', {'device': _device_or_404(request, device_id)})
 
-
-@auth_required
-def live_data(request, device_id):
-    d = _device_or_404(request, device_id)
-    # .using('default'): đọc thẳng Supabase, tránh trễ của bản sao local (~2s)
-    log = DeviceStatusLog.objects.using('default').filter(device=d).order_by('-recorded_at').first()
-    link = services.link_status(d)
-    events = (AccessEvent.objects.using('default').filter(device=d).select_related('user')
-              .order_by('-created_at')[:8])
-    cmds = DeviceCommand.objects.filter(device=d).order_by('-created_at')[:5]
-    resp = JsonResponse({
-        'name': d.name, 'code': d.device_code, 'now': timezone.now().isoformat(),
-        'connected': link['connected'], 'seconds_ago': link['seconds_ago'],
-        'lock_state': log.lock_state if log else 'unknown', 'tamper': bool(log and log.tamper_detected),
-        'battery': d.battery_level, 'firmware': d.firmware_version,
-        'locked_out': services.in_lockout(d),
-        'events': [{'at': e.created_at.isoformat(), 'method': e.method, 'ok': e.success, 'reason': e.reason,
-                    'who': (e.user.full_name or e.user.username) if e.user_id else ''} for e in events],
-        'commands': [{'at': c.created_at.isoformat(), 'type': c.command_type, 'status': c.status} for c in cmds],
-    })
-    resp['Cache-Control'] = 'no-store'
-    return resp

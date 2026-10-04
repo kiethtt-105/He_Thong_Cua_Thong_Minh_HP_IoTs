@@ -126,7 +126,6 @@ INSTALLED_APPS = [
     'django_otp.plugins.otp_totp',
     'django_otp.plugins.otp_static',
     'smartlock',
-    'rest_framework',
     'allauth',
     'allauth.account',
     'manage_sys'
@@ -383,28 +382,12 @@ if not DEBUG and SECURE_COOKIES:
     SECURE_REFERRER_POLICY = "same-origin"
 
 
-# ==================== REST FRAMEWORK (API cho app di động) ====================
-REST_FRAMEWORK = {
-    # Bearer (app) đứng trước, Session (web) đứng sau. Session vẫn bị kiểm tra CSRF; Bearer thì không cần CSRF.
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'smartlock.api.mobile_auth.MobileTokenAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
-    ],
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
-    'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
-    'DEFAULT_THROTTLE_RATES': {
-        'command': '30/min',       # gửi lệnh khoá/mở
-        'redeem': '10/min',        # nhập mã chia sẻ
-        'auth_login': '10/min',    # theo IP
-        'auth_2fa': '10/min',
-        'auth_register': '5/min',
-        'auth_reset': '5/min',
-        'auth_refresh': '30/min',
-    },
-    'NUM_PROXIES': env_int('DRF_NUM_PROXIES', 1),
-    'EXCEPTION_HANDLER': 'smartlock.api.common.api_exception_handler',
-    'DEFAULT_PAGINATION_CLASS': 'smartlock.api.common.StandardPagination',  
-}
+# ==================== API v1 (dùng chung APP + WEB) ====================
+# API viết bằng Django thuần (smartlock/api/), KHÔNG dùng Django REST Framework.
+#   * App (Android/iOS): Authorization: Bearer <access_token>
+#   * Web: session cookie + header X-CSRFToken (lấy bằng GET /api/v1/auth/csrf/)
+# Khối REST_FRAMEWORK cũ trỏ tới smartlock.api.mobile_auth, api_exception_handler, StandardPagination
+# (các module này không còn tồn tại) nên đã được gỡ.
 
 # ==================== APP DI ĐỘNG ====================
 MOBILE_ACCESS_TOKEN_SECONDS = 15 * 60

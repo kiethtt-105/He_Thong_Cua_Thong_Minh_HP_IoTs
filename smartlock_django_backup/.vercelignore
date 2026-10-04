@@ -1,0 +1,6 @@
+templates_backup/
+python fix_templates.py
+*.log
+__pycache__/
+*.pyc
+db.sqlite3

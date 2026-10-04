@@ -12,7 +12,7 @@ from .constants import DEVICE_EVENTS
 
 def raise_event(device, kind, meta=None):
     level, title, audience, cooldown = DEVICE_EVENTS[kind]
-    from .models import AuditLog, Notification
+    from smartlock.models import AuditLog, Notification
     AuditLog.objects.create(device=device, action=f'DEVICE_EVENT_{kind}', severity=level, metadata=meta or None)
     if not audience or not device.owner_id:
         return False

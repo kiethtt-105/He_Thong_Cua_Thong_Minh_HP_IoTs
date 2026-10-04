@@ -1,10 +1,15 @@
-"""Token + phiên đăng nhập của APP: access token (15 phút), refresh token xoay vòng, challenge 2FA, FCM token.
+"""Phiên đăng nhập dùng chung cho APP và WEB.
+
+APP : access token (15 phút) + refresh token xoay vòng (MobileSession), challenge 2FA, FCM token.
+WEB : session cookie của Django + header X-CSRFToken (đăng nhập bằng web_login).
 """
 import secrets
 from datetime import timedelta
 
+from django.contrib.auth import login as django_login
 from django.core import signing
 from django.db import transaction
+from django.middleware.csrf import CsrfViewMiddleware
 from django.utils import timezone
 
 from smartlock import services
@@ -129,11 +134,69 @@ def authenticate_request(request):
         raise ApiError('ACCOUNT_DISABLED', 'Tài khoản không được phép dùng app.', 403)
     request.user = user                  # để services.audit(request, ...) tự nhận actor
     request.api_session = session
+    request.client_type = 'app'
+
+
+_SAFE_METHODS = ('GET', 'HEAD', 'OPTIONS', 'TRACE')
+
+
+def _check_csrf(request):
+    """Web dùng cookie => request ghi dữ liệu phải có header X-CSRFToken (cùng cơ chế CSRF của Django).
+    Các view API đều @csrf_exempt (để Bearer của app không cần CSRF) nên ở đây kiểm tra thủ công."""
+    reason = CsrfViewMiddleware(lambda r: None).process_view(request, None, (), {})
+    if reason is not None:
+        raise ApiError('CSRF_FAILED', 'Phiên làm việc không hợp lệ (CSRF). Hãy tải lại trang.', 403)
+
+
+check_csrf = _check_csrf          # tên công khai: login/2FA của web (chưa có session) cũng phải qua CSRF
+
+
+WEB_AUTH_BACKEND = 'django.contrib.auth.backends.ModelBackend'
+
+
+def web_login(request, user):
+    """Đăng nhập WEB bằng session cookie (giống hệt login_view/_complete của trang HTML):
+    đăng nhập Django, cấp sync_key cho cache dashboard, đặt hạn phiên theo SystemSettings."""
+    django_login(request, user, backend=getattr(user, 'backend', None) or WEB_AUTH_BACKEND)
+    request.session['sync_key'] = secrets.token_urlsafe(32)
+    request.session.set_expiry(services.user_session_seconds())
+
+
+def authenticate_web_session(request):
+    """Web: người dùng đã đăng nhập bằng session cookie của Django (user thường, KHÔNG phải admin)."""
+    user = getattr(request, 'user', None)
+    if user is None or not user.is_authenticated:
+        raise ApiError('UNAUTHENTICATED', 'Bạn chưa đăng nhập.', 401)
+    if not user.is_active or services.is_admin(user):
+        raise ApiError('ACCOUNT_DISABLED', 'Tài khoản không được phép dùng chức năng này.', 403)
+    if request.method not in _SAFE_METHODS:
+        _check_csrf(request)
+    request.api_session = None           # web không có MobileSession
+    request.client_type = 'web'
+
+
+def authenticate_any(request):
+    """Có header Authorization: Bearer => app (bắt buộc hợp lệ, không rơi về cookie); không có => web (cookie)."""
+    if _bearer(request):
+        return authenticate_request(request)
+    return authenticate_web_session(request)
 
 
 def revoke_session(session, reason=''):
     session.revoke()
     return session
+
+
+def revoke_all_sessions(user, exclude=None) -> int:
+    """Thu hồi mọi phiên APP còn hiệu lực của user (trừ `exclude` nếu có). Trả về số phiên đã thu hồi."""
+    qs = MobileSession.objects.filter(user=user, revoked_at__isnull=True)
+    if exclude is not None:
+        qs = qs.exclude(pk=exclude.pk)
+    n = 0
+    for m in qs:
+        m.revoke()
+        n += 1
+    return n
 
 
 def rotate_refresh(request, refresh_token: str, fcm_token: str = ''):

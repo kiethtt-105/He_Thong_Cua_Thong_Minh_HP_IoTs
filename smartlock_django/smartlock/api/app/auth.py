@@ -1,31 +1,59 @@
-"""Đăng ký, đăng nhập, 2FA, làm mới token, đăng xuất, quên mật khẩu."""
+"""Đăng ký, đăng nhập, 2FA, làm mới token, đăng xuất, quên mật khẩu, xác thực email.
+
+Dùng chung APP và WEB. Đăng nhập gửi thêm `"client": "web"` => server tạo session cookie (kèm csrf_token)
+thay vì access/refresh token; mọi request ghi dữ liệu sau đó của web gửi header X-CSRFToken.
+Lấy CSRF cookie lần đầu bằng GET /api/v1/auth/csrf/.
+"""
 import math
 from datetime import timedelta
 
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, logout as django_logout
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.middleware.csrf import get_token
 from django.utils import timezone
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
 
-from smartlock import services, views as web
+from smartlock import services, twofa
+from smartlock.constants import RESET_NEUTRAL_MSG
 from smartlock.api.common import (
-    api, ApiError, CHALLENGE_TTL_SECONDS, create_session, device_info, make_challenge, ok,
-    read_challenge, read_json, rotate_refresh, s,
+    api, ApiError, CHALLENGE_TTL_SECONDS, check_csrf, create_session, device_info, make_challenge, ok,
+    read_challenge, read_json, revoke_all_sessions, rotate_refresh, s, web_login,
 )
-from smartlock.models import AuditLog, MobileSession, OneTimeCode, User
+from smartlock.models import AuditLog, OneTimeCode, User
 
 from .serializers import user_json
 
 
 def _mobile_2fa_methods(user) -> list:
     """Passkey/FIDO2 chưa hỗ trợ trong app (cần RP/origin riêng) -> chỉ totp + email."""
-    cfg = web._get_cfg(user)
+    cfg = twofa.get_cfg(user)
     return [m for m in cfg.available_methods() if m in ('totp', 'email')]
+
+
+def _is_web(info) -> bool:
+    return (info or {}).get('client') == 'web'
+
+
+def _client_info(data) -> dict:
+    """Thông tin thiết bị + loại client. `client` = 'web' (cookie + CSRF) hoặc 'app' (mặc định, Bearer token)."""
+    info = device_info(data)
+    if s(data, 'client', 10).lower() == 'web':
+        info['client'] = 'web'
+    return info
 
 
 def _finish_login(request, user, info, method=None):
     services.reset_lockout(user)
+    if _is_web(info):
+        web_login(request, user)                      # session cookie (giống trang đăng nhập HTML)
+        services.notify_login(request, user)          # PHẢI trước audit LOGIN
+        services.audit(request, 'LOGIN', actor=user, metadata={'channel': 'web', 'two_factor': method})
+        return ok({'user': user_json(user), 'client': 'web', 'csrf_token': get_token(request),
+                   'session_expires_in': services.user_session_seconds()})
     session, tokens = create_session(request, user, info)
     services.notify_login(request, user)          # PHẢI trước audit LOGIN (so với lịch sử IP cũ)
     services.audit(request, 'LOGIN', actor=user,
@@ -105,7 +133,7 @@ def resend_verification(request):
 @api('POST', auth=False)
 def password_reset(request):
     email = s(read_json(request), 'email', 254)
-    neutral = ok({'message': web.RESET_NEUTRAL_MSG})
+    neutral = ok({'message': RESET_NEUTRAL_MSG})
     user = User.objects.filter(email__iexact=email).first()
     if not user:
         services.audit(request, 'PASSWORD_RESET_UNKNOWN_EMAIL', actor=None, success=False, severity='warning',
@@ -131,7 +159,9 @@ def login(request):
     password = str(data.get('password') or '')
     if not identifier or not password:
         raise ApiError('MISSING_FIELD', 'Vui lòng nhập email/username và mật khẩu.', 400)
-    info = device_info(data)
+    info = _client_info(data)
+    if _is_web(info):
+        check_csrf(request)                           # web: chống login-CSRF (cần X-CSRFToken)
     ip = services.client_ip(request)
     user = services.find_user(identifier)
     now = timezone.now()
@@ -155,11 +185,13 @@ def login(request):
             methods = _mobile_2fa_methods(auth_user)
             if not methods:
                 raise ApiError('TWO_FACTOR_UNSUPPORTED',
+                               'Tài khoản chỉ bật Passkey. Hãy đăng nhập bằng trang đăng nhập chính của web '
+                               'để dùng Passkey.' if _is_web(info) else
                                'Tài khoản chỉ bật Passkey. Hãy thêm Google Authenticator hoặc Email OTP '
                                'trên web để đăng nhập bằng app.', 403)
-            cfg = web._get_cfg(auth_user)
+            cfg = twofa.get_cfg(auth_user)
             services.audit(request, 'LOGIN_2FA_REQUIRED', actor=None, target_user=auth_user,
-                           metadata={'channel': 'mobile'})
+                           metadata={'channel': 'web' if _is_web(info) else 'mobile'})
             return ok({'two_factor_required': True,
                        'challenge_token': make_challenge(auth_user, info),
                        'methods': methods,
@@ -176,7 +208,7 @@ def login(request):
                            target_user=user, username_attempt=identifier[:150],
                            metadata={'locked_minutes': locked})
     services.audit(request, 'LOGIN_FAILED', success=False, severity='warning', actor=None, target_user=user,
-                   username_attempt=identifier[:150], metadata={'channel': 'mobile'})
+                   username_attempt=identifier[:150], metadata={'channel': 'web' if _is_web(info) else 'mobile'})
     raise ApiError('INVALID_CREDENTIALS', 'Email/Username hoặc mật khẩu không đúng.', 401)
 
 
@@ -193,21 +225,23 @@ def two_factor_email_send(request):
     user, _info = _challenge_user(read_json(request))
     if 'email' not in _mobile_2fa_methods(user):
         raise ApiError('BAD_METHOD', 'Tài khoản chưa bật Email OTP.', 400)
-    result = web._send_email_code(user, 'VERIFY')
+    result = twofa.send_email_code(user, 'VERIFY')
     if result == 'cooldown':
-        raise ApiError('COOLDOWN', f'Vui lòng đợi {web.EMAIL_CODE_COOLDOWN} giây trước khi gửi lại.', 429,
-                       retry_after_seconds=web.EMAIL_CODE_COOLDOWN)
+        raise ApiError('COOLDOWN', f'Vui lòng đợi {twofa.EMAIL_CODE_COOLDOWN} giây trước khi gửi lại.', 429,
+                       retry_after_seconds=twofa.EMAIL_CODE_COOLDOWN)
     if result != 'sent':
         raise ApiError('MAIL_FAILED', 'Không gửi được email. Vui lòng thử lại.', 502)
     return ok({'sent': True, 'masked_email': services.mask_email(user.email),
-               'expires_in': web.EMAIL_CODE_TTL_MIN * 60})
+               'expires_in': twofa.EMAIL_CODE_TTL_MIN * 60})
 
 
 @api('POST', auth=False)
 def two_factor_verify(request):
     data = read_json(request)
     user, info = _challenge_user(data)
-    minutes = web._lock_minutes(user)
+    if _is_web(info):
+        check_csrf(request)                           # bước này tạo session cookie => phải qua CSRF
+    minutes = twofa.lock_minutes(user)
     if minutes:
         raise ApiError('ACCOUNT_LOCKED', f'Tài khoản đang bị khóa tạm thời. Thử lại sau {minutes} phút.', 423,
                        retry_after_minutes=minutes)
@@ -215,12 +249,13 @@ def two_factor_verify(request):
     code = s(data, 'code', 20)
     if method not in _mobile_2fa_methods(user):
         raise ApiError('BAD_METHOD', 'Phương thức xác thực không hợp lệ.', 400)
-    good = (web._verify_totp(web._get_cfg(user), code) if method == 'totp'
-            else web._verify_email_code(user, code, 'VERIFY'))
+    good = (twofa.verify_totp(twofa.get_cfg(user), code) if method == 'totp'
+            else twofa.verify_email_code(user, code, 'VERIFY'))
     if not good:
         locked = services.register_failure(user, services.client_ip(request))
         services.audit(request, 'TWO_FACTOR_FAILED', actor=None, target_user=user, success=False,
-                       severity='warning', metadata={'method': method, 'purpose': 'login', 'channel': 'mobile',
+                       severity='warning', metadata={'method': method, 'purpose': 'login',
+                                                     'channel': 'web' if _is_web(info) else 'mobile',
                                                      'locked_minutes': locked})
         if locked:
             services.audit(request, 'ACCOUNT_LOCKED', success=False, severity='critical', actor=None,
@@ -238,17 +273,82 @@ def refresh(request):
     return ok(tokens)
 
 
-@api('POST')
+@api('POST', auth='any')
 def logout(request):
+    """App: thu hồi phiên token hiện tại (all=true: mọi phiên app). Web: đăng xuất session cookie
+    (all=true: đồng thời thu hồi mọi phiên app của tài khoản)."""
     data = read_json(request)
     user = request.user
+    if request.client_type == 'web':
+        revoked = 0
+        if data.get('all') is True:
+            revoked = revoke_all_sessions(user)
+            services.audit(request, 'LOGOUT_ALL', metadata={'channel': 'web', 'sessions': revoked})
+        services.audit(request, 'LOGOUT', metadata={'channel': 'web'})
+        django_logout(request)
+        return ok({'client': 'web', 'revoked': revoked})
     if data.get('all') is True:
-        n = 0
-        for m in MobileSession.objects.filter(user=user, revoked_at__isnull=True):
-            m.revoke()
-            n += 1
+        n = revoke_all_sessions(user)
         services.audit(request, 'LOGOUT_ALL', metadata={'channel': 'mobile', 'sessions': n})
         return ok({'revoked': n})
     request.api_session.revoke()
     services.audit(request, 'LOGOUT', metadata={'channel': 'mobile'})
     return ok({'revoked': 1})
+
+
+@api('GET', auth=False)
+def csrf(request):
+    """Web: gọi 1 lần khi mở trang để nhận CSRF cookie + token (gửi lại ở header X-CSRFToken). App không cần."""
+    return ok({'csrf_token': get_token(request)})
+
+
+@api('POST', auth=False)
+def verify_email(request):
+    """Xác thực email bằng token trong link (UUID). Dùng cho cả web lẫn app (deep link)."""
+    token = services.parse_uuid(s(read_json(request), 'token', 64, required=True))
+    now = timezone.now()
+    vt = None
+    if token:
+        vt = (OneTimeCode.objects.select_related('user')
+              .filter(token_hash=services.hash_token(token), purpose='EMAIL_VERIFY', is_used=False,
+                      expires_at__gt=now).first())
+    # đánh dấu đã dùng bằng UPDATE có điều kiện => 2 request song song không cùng dùng được 1 token
+    if vt is None or not OneTimeCode.objects.filter(pk=vt.pk, is_used=False).update(is_used=True, used_at=now):
+        services.audit(request, 'EMAIL_VERIFY_FAILED', actor=None, success=False, severity='warning')
+        raise ApiError('TOKEN_INVALID', 'Link xác thực không hợp lệ hoặc đã hết hạn.', 400)
+    user = vt.user
+    user.email_verified = True
+    user.is_active = True
+    user.save()
+    services.audit(request, 'EMAIL_VERIFIED', actor=user, target_user=user)
+    services.notify(user, 'Chào mừng đến Smart Lock', 'Tài khoản của bạn đã được kích hoạt.', type_='WELCOME')
+    return ok({'verified': True, 'message': 'Tài khoản đã được kích hoạt thành công!'})
+
+
+@api('POST', auth=False)
+def password_reset_confirm(request):
+    """Đặt mật khẩu mới từ link trong email: {uid, token, new_password}. Dùng cho cả web lẫn app."""
+    data = read_json(request)
+    uid, token = s(data, 'uid', 200, required=True), s(data, 'token', 200, required=True)
+    new = str(data.get('new_password') or '')
+    try:
+        user = User.objects.get(pk=force_str(urlsafe_base64_decode(uid)))
+    except Exception:
+        user = None
+    if user is None or not user.is_active or not default_token_generator.check_token(user, token):
+        services.audit(request, 'PASSWORD_RESET_INVALID', actor=None, success=False, severity='warning',
+                       target_user=user)
+        raise ApiError('RESET_INVALID', 'Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.', 400)
+    try:
+        validate_password(new, user)
+    except ValidationError as e:
+        raise ApiError('WEAK_PASSWORD', ' '.join(e.messages), 400, field='new_password')
+    user.set_password(new)
+    user.save()
+    revoke_all_sessions(user)                         # đổi mật khẩu = đăng xuất mọi app
+    services.reset_lockout(user)
+    services.audit(request, 'PASSWORD_RESET_DONE', actor=user, target_user=user,
+                   metadata={'channel': 'api'})
+    services.notify(user, 'Mật khẩu đã thay đổi', 'Mật khẩu tài khoản vừa được đặt lại.',
+                    severity='warning', type_='SECURITY')
+    return ok({'message': 'Mật khẩu đã được thay đổi thành công!'})
