@@ -1531,3 +1531,11 @@ def visible_logs(user):
     """Log user được phép xem: mình làm, mình là đối tượng (bị admin/người khác tác động,
     bị đăng nhập sai...), hoặc xảy ra trên thiết bị của mình. Dùng chung cho web + API."""
     return AuditLog.objects.filter(Q(actor_user=user) | Q(target_user=user) | Q(device__owner=user))
+
+
+def revoke_mobile_sessions(user) -> int:
+    """Thu hồi mọi phiên app còn hiệu lực của user (và xoá fcm_token để ngừng push). Trả về số phiên.
+    Dùng chung cho web (đổi/đặt lại mật khẩu), manage_sys và API."""
+    from .models import MobileSession
+    return MobileSession.objects.filter(user=user, revoked_at__isnull=True).update(
+        revoked_at=timezone.now(), fcm_token='')

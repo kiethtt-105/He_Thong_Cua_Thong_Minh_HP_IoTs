@@ -69,20 +69,21 @@ Lịch sử ra vào
             {% for card in access_cards %}
             <tr>
                 <td style="min-width:230px">
-                    <form method="post" class="d-flex gap-2">
-                        {% csrf_token %}<input type="hidden" name="action" value="rename"><input type="hidden" name="card_id" value="{{ card.id }}">
+                    {% if card.is_mine %}
+                    <form class="d-flex gap-2" data-api-url="{% url 'smartlock_api:card-detail' card.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã đổi tên thẻ.">
                         <input type="text" name="name" value="{{ card.name|default:'' }}" class="form-control form-control-sm" placeholder="Chưa đặt tên" maxlength="100">
                         <button class="btn btn-sm btn-outline-secondary" title="Đổi tên"><i class="fa-solid fa-check"></i></button>
                     </form>
+                    {% else %}<span class="fw-semibold">{{ card.name|default:"—" }}</span> <small class="text-muted">@{{ card.user.username }}</small>{% endif %}
                 </td>
                 <td><code>{{ card.card_uid_hash|slice:":8" }}…</code></td>
                 <td>{% for a in card.carddeviceaccess_set.all %}<span class="chip plain me-1">{{ a.device.name }}</span>{% empty %}<span class="text-muted">—</span>{% endfor %}</td>
                 <td>{% if card.is_active %}<span class="status ok">Đang hoạt động</span>{% else %}<span class="status">Vô hiệu hóa</span>{% endif %}</td>
                 <td class="text-end text-nowrap">
-                    <form method="post" class="d-inline">{% csrf_token %}<input type="hidden" name="action" value="toggle"><input type="hidden" name="card_id" value="{{ card.id }}">
-                        <button class="btn btn-sm {% if card.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}">{% if card.is_active %}Vô hiệu hóa{% else %}Kích hoạt{% endif %}</button></form>
-                    <form method="post" class="d-inline" onsubmit="return confirm('Xóa thẻ này?')">{% csrf_token %}<input type="hidden" name="action" value="delete"><input type="hidden" name="card_id" value="{{ card.id }}">
-                        <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash"></i></button></form>
+                    {% if card.is_mine %}
+                    <button type="button" class="btn btn-sm {% if card.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}" data-api-url="{% url 'smartlock_api:card-detail' card.id %}" data-api-method="PATCH" data-api-body='{"is_active": {% if card.is_active %}false{% else %}true{% endif %}}' data-after="reload" data-success="{% if card.is_active %}Đã vô hiệu hóa thẻ.{% else %}Đã kích hoạt thẻ.{% endif %}">{% if card.is_active %}Vô hiệu hóa{% else %}Kích hoạt{% endif %}</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:card-detail' card.id %}" data-api-method="DELETE" data-confirm="Xóa thẻ này?" data-after="reload" data-success="Đã xóa thẻ."><i class="fa-solid fa-trash"></i></button>
+                    {% endif %}
                 </td>
             </tr>
             {% empty %}
@@ -106,17 +107,16 @@ Lịch sử ra vào
                     <tr>
                         <td>{{ r.name|default:"Đầu đọc" }}<div class="small text-muted">{{ r.last_seen_at|date:"d/m H:i"|default:"Chưa kết nối" }}</div></td>
                         <td><span class="chip plain">{{ r.get_reader_mode_display }}</span></td>
-                        <td><form method="post">{% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="toggle_reader"><input type="hidden" name="reader_id" value="{{ r.id }}">
-                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" {% if r.is_active %}checked{% endif %} onchange="this.form.submit()"></div></form></td>
-                        <td><form method="post">{% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="toggle_auto"><input type="hidden" name="reader_id" value="{{ r.id }}">
-                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" {% if r.config.auto_register %}checked{% endif %} onchange="this.form.submit()"></div></form></td>
+                        <td><form data-api-url="{% url 'smartlock_api:nfc-reader' r.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật đầu đọc.">
+                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="is_active" {% if r.is_active %}checked{% endif %} {% if not is_owner %}disabled{% endif %} onchange="this.form.requestSubmit()"></div></form></td>
+                        <td><form data-api-url="{% url 'smartlock_api:nfc-reader' r.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật đầu đọc.">
+                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="auto_register" {% if r.config.auto_register %}checked{% endif %} {% if not is_owner %}disabled{% endif %} onchange="this.form.requestSubmit()"></div></form></td>
                     </tr>
                     {% empty %}<tr><td colspan="4"><div class="empty-state py-4">Thiết bị chưa có đầu đọc.</div></td></tr>{% endfor %}
                 </tbody>
             </table></div>
             <div class="card-body border-top">
-                <form method="post" class="d-flex gap-2">
-                    {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="add_reader">
+                <form class="d-flex gap-2" data-api-url="{% url 'smartlock_api:nfc-readers' device.id %}" data-api-method="POST" data-after="reload" data-success="Đã thêm đầu đọc.">
                     <input type="text" name="name" class="form-control" placeholder="Tên đầu đọc mới (mô phỏng)" maxlength="100">
                     <button class="btn btn-outline-primary text-nowrap"><i class="fa-solid fa-plus me-1"></i>Thêm</button>
                 </form>
@@ -128,8 +128,7 @@ Lịch sử ra vào
             <div class="card-header">Đăng ký thẻ mới</div>
             <div class="card-body">
                 <p class="text-muted small">Nhập UID thẻ (ví dụ <code>04:A3:2B:1C</code>). UID được băm HMAC (có pepper của máy chủ) trước khi lưu.</p>
-                <form method="post">
-                    {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="register_card">
+                <form data-api-url="{% url 'smartlock_api:card-register' device.id %}" data-api-method="POST" data-after="reload" data-success="Đã đăng ký thẻ NFC.">
                     <div class="mb-3"><label class="form-label">UID thẻ</label><input type="text" name="uid" class="form-control font-mono" required placeholder="04:A3:2B:1C"></div>
                     <div class="mb-3"><label class="form-label">Tên thẻ</label><input type="text" name="name" class="form-control" maxlength="100" placeholder="Thẻ của tôi"></div>
                     <button class="btn btn-primary w-100"><i class="fa-solid fa-id-card me-2"></i>Đăng ký thẻ</button>
@@ -165,8 +164,7 @@ Lịch sử ra vào
         <div class="card mb-3">
             <div class="card-header"><i class="fa-solid fa-user-plus me-2 text-primary"></i>Chia sẻ “{{ device.name }}” cho người khác</div>
             <div class="card-body">
-                <form method="post">
-                    {% csrf_token %}<input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="grant">
+                <form data-api-url="{% url 'smartlock_api:device-shares' device.id %}" data-api-method="POST" data-after="reload" data-success="Đã chia sẻ khóa.">
                     <div class="row g-3 mb-3">
                         <div class="col-md-7"><label class="form-label">Email hoặc username người nhận</label>
                             <input type="text" name="identifier" class="form-control" required placeholder="ten@email.com"></div>
@@ -202,14 +200,11 @@ Lịch sử ra vào
                         </div>
                         <div class="d-flex gap-1 flex-shrink-0">
                             <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#edit-{{ a.id }}"><i class="fa-solid fa-pen"></i></button>
-                            <form method="post" onsubmit="return confirm('Thu hồi quyền của {{ a.user.username|escapejs }}?')">{% csrf_token %}
-                                <input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="access_id" value="{{ a.id }}">
-                                <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-ban"></i></button></form>
+                            <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:share-detail' a.id %}" data-api-method="DELETE" data-confirm="Thu hồi quyền của {{ a.user.username|escapejs }}?" data-after="reload" data-success="Đã thu hồi quyền."><i class="fa-solid fa-ban"></i></button>
                         </div>
                     </div>
                     <div class="collapse w-100 mt-3" id="edit-{{ a.id }}">
-                        <form method="post" class="border rounded p-3 bg-light">{% csrf_token %}
-                            <input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="update"><input type="hidden" name="access_id" value="{{ a.id }}">
+                        <form class="border rounded p-3 bg-light" data-api-url="{% url 'smartlock_api:share-detail' a.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật quyền.">
                             <div class="row g-2 mb-3">
                                 {% for p in permissions %}
                                 <div class="col-sm-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="u-{{ a.id }}-{{ p.code }}" {% if p.code in a.perm_codes %}checked{% endif %}>
@@ -240,8 +235,7 @@ Lịch sử ra vào
                         <div class="my-1 d-flex flex-wrap gap-1">{% for p in a.permissions.all %}<span class="chip">{{ p.name }}</span>{% endfor %}</div>
                         <small class="text-muted">{% if a.expires_at %}Hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn{% endif %}</small>
                     </div>
-                    <form method="post" onsubmit="return confirm('Rời khỏi khóa này?')">{% csrf_token %}<input type="hidden" name="action" value="leave"><input type="hidden" name="access_id" value="{{ a.id }}">
-                        <button class="btn btn-sm btn-outline-secondary text-nowrap">Rời</button></form>
+                    <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-api-url="{% url 'smartlock_api:share-leave' a.id %}" data-api-method="POST" data-confirm="Rời khỏi khóa này?" data-after="reload" data-success="Bạn đã rời khỏi khóa này.">Rời</button>
                 </div>
                 {% empty %}<div class="empty-state py-5"><div class="ei"><i class="fa-solid fa-user-lock"></i></div><div>Chưa ai chia sẻ khóa cho bạn.</div></div>{% endfor %}
             </div>
@@ -267,9 +261,7 @@ Lịch sử ra vào
                 <td>{% if p.is_revoked %}<span class="status bad">Đã thu hồi</span>{% elif p.is_valid_now %}<span class="status ok">Còn hiệu lực</span>{% else %}<span class="status">Hết hạn</span>{% endif %}</td>
                 <td class="text-end">
                     {% if not p.is_revoked %}
-                    <form method="post" class="d-inline" onsubmit="return confirm('Thu hồi mã PIN này?')">{% csrf_token %}
-                        <input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="pin_id" value="{{ p.id }}">
-                        <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-ban me-1"></i>Thu hồi</button></form>
+                    <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:pin-revoke' p.id %}" data-api-method="DELETE" data-confirm="Thu hồi mã PIN này?" data-after="reload" data-success="Đã thu hồi mã PIN."><i class="fa-solid fa-ban me-1"></i>Thu hồi</button>
                     {% endif %}
                 </td>
             </tr>
@@ -281,9 +273,7 @@ Lịch sử ra vào
 </div></div>
 
 {% if device %}
-<div class="modal fade" id="issuePin" tabindex="-1"><div class="modal-dialog"><form method="post" class="modal-content">
-    {% csrf_token %}
-    <input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="issue">
+<div class="modal fade" id="issuePin" tabindex="-1"><div class="modal-dialog"><form class="modal-content" id="issuePinForm">
     <div class="modal-header"><h5 class="modal-title">Cấp PIN cho {{ device.name }}</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
         <label class="form-label fw-semibold">Nhãn</label>
@@ -327,21 +317,11 @@ Lịch sử ra vào
 </div></div>
 
 {% if device %}
-<div class="modal fade" id="registerFace" tabindex="-1"><div class="modal-dialog"><form method="post" class="modal-content">
-    {% csrf_token %}
-    <input type="hidden" name="device" value="{{ device.id }}"><input type="hidden" name="action" value="register">
+<div class="modal fade" id="registerFace" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
     <div class="modal-header"><h5 class="modal-title">Đăng ký khuôn mặt cho {{ device.name }}</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-    <div class="modal-body">
-        <label class="form-label fw-semibold">Tên hiển thị</label>
-        <input type="text" name="name" maxlength="100" class="form-control mb-3" value="{{ user.full_name|default:user.username }}">
-        <label class="form-label fw-semibold">Embedding khuôn mặt (JSON, ≥ 32 số)</label>
-        <textarea name="embedding_json" rows="4" class="form-control font-mono mb-1" placeholder="[0.012, -0.093, ...]" required></textarea>
-        <div class="form-text mb-3">Vector được tính bởi dịch vụ nhận diện (ví dụ InsightFace); trang này chỉ lưu mã hóa, không chạy mô hình.</div>
-        <div class="form-check"><input class="form-check-input" type="checkbox" name="consent_confirmed" id="faceConsent" required>
-            <label class="form-check-label" for="faceConsent">Người được đăng ký đã đồng ý cho thu thập dữ liệu khuôn mặt.</label></div>
-    </div>
-    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Hủy</button><button class="btn btn-primary">Đăng ký</button></div>
-</form></div></div>
+    <div class="modal-body">{% include "account/_face_enroll.html" %}</div>
+    <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Đóng</button></div>
+</div></div></div>
 {% endif %}
 {% elif page == 'access_history' %}
 <form method="get" class="filter-bar">
@@ -387,4 +367,35 @@ Lịch sử ra vào
 </ul></nav>
 {% endif %}
 {% else %}{{ block.super }}{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if page == 'door_pins' and device %}
+<script>
+(function () {
+    const form = document.getElementById('issuePinForm');
+    if (!form) return;
+    let issued = false;
+    document.getElementById('issuePin').addEventListener('hidden.bs.modal', () => { if (issued) location.reload(); });
+    form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const btn = form.querySelector('.modal-footer .btn-primary');
+        btn.disabled = true;
+        const res = await SL.api('POST', "{% url 'smartlock_api:device-pins' device.id %}", SL.formBody(form));
+        if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); btn.disabled = false; return; }
+        issued = true;
+        // PIN chỉ trả về đúng 1 lần: hiển thị trong hộp thoại cho tới khi người dùng đóng lại.
+        form.querySelector('.modal-body').innerHTML =
+            '<div class="text-center"><div class="text-muted mb-2">Mã PIN mới (chỉ hiển thị một lần)</div>' +
+            '<div class="display-5 fw-bold font-mono" id="newPin"></div>' +
+            '<div class="small text-muted mt-2" id="newPinMsg"></div></div>';
+        document.getElementById('newPin').textContent = res.data.plain_pin;
+        document.getElementById('newPinMsg').textContent = res.data.message || '';
+        form.querySelector('.modal-footer').innerHTML =
+            '<button type="button" class="btn btn-outline-secondary js-copy" data-text="' + res.data.plain_pin + '">Sao chép</button>' +
+            '<button type="button" class="btn btn-primary" data-bs-dismiss="modal">Xong</button>';
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

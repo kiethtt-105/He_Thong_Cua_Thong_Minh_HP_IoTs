@@ -1,32 +1,34 @@
 # smartlock/views.py
 import base64
+import hashlib
 import hmac
 import io
 import json
 import logging
+import math
+import re
 import secrets
 from datetime import timedelta
+from functools import wraps
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from .models import DoorPinCode, FaceProfile, AccessEvent
 from . import services
-from .constants import EVENTS_BATCH, EVENTS_MAX_BACKLOG_SECONDS
+from .constants import EVENTS_BATCH, EVENTS_MAX_BACKLOG_SECONDS, RESET_NEUTRAL_MSG
 from .twofa import (
-    EMAIL_CODE_COOLDOWN,
-    EMAIL_CODE_TTL_MIN,
-    digits as _digits,
-    get_cfg as _get_cfg,
-    send_email_code as _send_email_code,
-    verify_email_code as _verify_email_code,
-    verify_totp as _verify_totp,
+    EMAIL_CODE_COOLDOWN, EMAIL_CODE_MAX_ATTEMPTS, EMAIL_CODE_TTL_MIN,
+    digits as _digits, get_cfg as _get_cfg, lock_minutes as _lock_minutes, pepper_hash as _pepper_hash,
+    send_email_code as _send_email_code, verify_email_code as _verify_email_code, verify_totp as _verify_totp,
 )
 import pyotp
 import qrcode
 import qrcode.image.svg
 from django.conf import settings as dj_settings
 from django.contrib import messages
-from django.contrib.auth import update_session_auth_hash
+from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
@@ -37,7 +39,10 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import (
+    url_has_allowed_host_and_scheme, urlsafe_base64_decode, urlsafe_base64_encode,
+)
 from django.views.decorators.http import require_http_methods, require_POST
 from django.views.decorators.csrf import csrf_exempt
 from webauthn import (
@@ -56,41 +61,22 @@ from webauthn.helpers.structs import (
 )
 
 from .services import (
-    accessible_devices as _accessible_devices,
-    audit as _audit,
-    client_ip as _client_ip,
-    find_user as _find_user,
-    has_permission as _has_permission,
-    hash_card_uid as _hash_card_uid,
-    hash_token as _hash_token,
-    is_admin as _is_admin,
-    notify as _notify,
-    parse_dt as _parse_dt,
-    parse_uuid as _parse_uuid,
-    pick_device as _pick_device,
-    register_failure as _register_failure,
-    system_settings as _settings,
-    user_agent as _user_agent,
-    mask_email as _mask_email,
+    accessible_devices as _accessible_devices, admins as _admins, audit as _audit,
+    client_ip as _client_ip, find_user as _find_user, has_permission as _has_permission,
+    hash_card_uid as _hash_card_uid, hash_token as _hash_token, is_admin as _is_admin,
+    notify as _notify, parse_dt as _parse_dt, parse_uuid as _parse_uuid, pick_device as _pick_device,
+    register_failure as _register_failure, render_email, reset_lockout as _reset_lockout,
+    send_mail as _send_mail, send_verification as _send_verification,
+    system_settings as _settings, user_agent as _user_agent, valid_ip as _valid_ip,
+    issue_ble_ticket, notify_login as _notify_login,
+    send_password_reset as _send_password_reset, mask_email as _mask_email,
 )
 from .models import (
-    AccessCard,
-    Announcement,
-    AuditLog,
-    CardDeviceAccess,
-    Device,
-    DeviceAccess,
-    DeviceCommand,
-    DeviceStatusLog,
-    Fido2Credential,
-    NfcLog,
-    NfcReader,
-    Notification,
-    Permission,
+    AccessCard, Announcement, AuditLog, CardDeviceAccess,
+    Device, DeviceAccess, DeviceCommand, DeviceStatusLog, OneTimeCode, Fido2Credential,
+    NfcLog, NfcReader, Notification, Permission,
     TwoFactorConfig,
-    User,
-    fernet,
-    sync_two_fa_flag,
+    User, fernet, sync_two_fa_flag,
 )
 
 logger = logging.getLogger('smartlock.views')
@@ -99,7 +85,23 @@ logger = logging.getLogger('smartlock.views')
 PAGE_SIZE = 20
 
 # ====================== AUTH REQUIRED DECORATOR (đưa lên đầu) ======================
-auth_required = login_required(login_url='smartlock:login')
+_login_required = login_required(login_url='smartlock:login')
+
+
+def auth_required(view_func):
+    """Đăng nhập + KHÔNG phải tài khoản quản trị. Admin chỉ dùng cổng manage_sys; nếu một phiên user
+    được nâng quyền admin sau khi đăng nhập thì phiên đó bị huỷ ở request kế tiếp."""
+    @_login_required
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        if _is_admin(request.user):
+            _audit(request, 'USER_SITE_ADMIN_REJECTED', success=False, severity='warning',
+                   target_user=request.user)
+            logout(request)
+            messages.error(request, 'Tài khoản quản trị chỉ đăng nhập ở cổng quản trị.')
+            return redirect('smartlock:login')
+        return view_func(request, *args, **kwargs)
+    return wrapper
 
 # ====================== RENDER: mỗi nhóm trang gộp 1 template, chọn trang bằng biến `page` ======================
 PAGE_TEMPLATE = {
@@ -110,7 +112,6 @@ PAGE_TEMPLATE = {
     "verify_2fa": "auth",
     "devices_list": "devices",
     "device_detail": "devices",
-    "device_add": "devices",
     "device_claim": "devices",
     "nfc_tags": "access",
     "nfc_reader": "access",
@@ -141,6 +142,12 @@ _visible_logs = services.visible_logs
 
 
 
+def _parse_int(value):
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+
 def _redirect_with(url_name, **params):
     url = reverse(url_name)
     if params:
@@ -158,106 +165,310 @@ def _page(request, queryset):
     return Paginator(queryset, PAGE_SIZE).get_page(request.GET.get('page'))
 
 # ====================== AUTH ======================
-# ====================== TRANG XÁC THỰC: chỉ render khung, mọi thao tác gọi /api/app/auth/... bằng JS ======================
-def _safe_next(request):
-    nxt = request.GET.get('next') or ''
-    ok = nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}, require_https=request.is_secure())
-    return nxt if ok else ''
-
-
 def login_view(request):
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
-    return _render(request, 'login', {'next': _safe_next(request)})
+
+    next_url = request.POST.get('next') or request.GET.get('next') or ''
+    ctx = {'next': next_url}
+
+    if request.method != 'POST':
+        return _render(request, 'login', ctx)
+
+    identifier = (request.POST.get('identifier') or '').strip()
+    password = request.POST.get('password') or ''
+
+    if not identifier or not password:
+        messages.error(request, 'Vui lòng điền đầy đủ thông tin.')
+        return _render(request, 'login', ctx)
+
+    ip = _client_ip(request)   # chỉ để ghi nhận IP lượt sai (không còn chặn/giới hạn theo IP)
+    user = _find_user(identifier)
+    now = timezone.now()
+
+    if user:
+        if user.login_locked_until and user.login_locked_until > now:
+            remaining = math.ceil((user.login_locked_until - now).total_seconds() / 60)
+            messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {remaining} phút.')
+            _audit(request, 'LOGIN_LOCKED', success=False, severity='warning',
+                   actor=None, target_user=user, username_attempt=identifier[:150])
+            return _render(request, 'login', ctx)
+
+    auth_user = authenticate(request, username=user.email, password=password) if user else None
+
+    # Tài khoản quản trị chỉ được đăng nhập ở cổng quản trị riêng (app manage_sys).
+    if auth_user and _is_admin(auth_user):
+        _audit(request, 'LOGIN_ADMIN_REJECTED', success=False, severity='warning',
+               actor=None, target_user=user, username_attempt=identifier[:150])
+        messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
+        return _render(request, 'login', ctx)
+
+    if auth_user:
+        # ---- 2FA: mật khẩu đúng nhưng chưa đăng nhập, chuyển sang bước xác thực 2 lớp ----
+        # Chưa reset lockout ở đây (chỉ reset sau khi qua bước 2) để không thể
+        # "đăng nhập lại bằng mật khẩu" nhằm xóa bộ đếm rồi dò tiếp mã 2FA.
+        if auth_user.two_fa_enabled:
+            request.session.cycle_key()
+            _start_pending(request, auth_user, 'login',
+                           backend=getattr(auth_user, 'backend', ''), next_url=next_url)
+            _audit(request, 'LOGIN_2FA_REQUIRED', actor=None, target_user=auth_user)
+            return redirect('smartlock:tf-verify')
+
+        _reset_lockout(auth_user)
+        login(request, auth_user)
+        _ensure_sync_key(request)
+        request.session.set_expiry(_settings().session_timeout_hours * 3600)
+        _notify_login(request, auth_user)      # trước audit LOGIN: so với lịch sử IP cũ
+        _audit(request, 'LOGIN', actor=auth_user)
+        messages.success(request, 'Đăng nhập thành công!')
+
+        if next_url and url_has_allowed_host_and_scheme(next_url, {request.get_host()}, require_https=request.is_secure()):
+            return redirect(next_url)
+
+        return redirect('smartlock:dashboard')
+
+    if user and not user.is_active and user.check_password(password):
+        messages.warning(request, 'Tài khoản chưa được kích hoạt. Vui lòng xác thực email.')
+    else:
+        if user:
+            locked = _register_failure(user, ip)
+            if locked:
+                _audit(request, 'ACCOUNT_LOCKED', success=False, severity='critical', actor=None,
+                       target_user=user, username_attempt=identifier[:150],
+                       metadata={'locked_minutes': locked})
+        messages.error(request, 'Email/Username hoặc mật khẩu không đúng.')
+    _audit(request, 'LOGIN_FAILED', success=False, severity='warning', actor=None,
+           target_user=user, username_attempt=identifier[:150])
+    return _render(request, 'login', ctx)
+
+
+def logout_view(request):
+    if request.user.is_authenticated:
+        _audit(request, 'LOGOUT')
+    logout(request)
+    messages.success(request, 'Đã đăng xuất.')
+    return redirect('smartlock:login')
 
 
 def register(request):
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
-    return _render(request, 'register', {'disabled': not _settings().registration_enabled})
+
+    if not _settings().registration_enabled:
+        return _render(request, 'register', {'disabled': True})
+
+    if request.method != 'POST':
+        return _render(request, 'register')
+
+    email = (request.POST.get('email') or '').strip()
+    username = (request.POST.get('username') or '').strip()
+    full_name = (request.POST.get('full_name') or '').strip()
+    password1 = request.POST.get('password1') or ''
+    password2 = request.POST.get('password2') or ''
+    ctx = {'form': {'email': email, 'username': username, 'full_name': full_name}}
+
+    if '@' in username:
+        messages.error(request, 'Tên đăng nhập không được chứa ký tự @.')
+        return _render(request, 'register', ctx)
+    if password1 != password2:
+        messages.error(request, 'Mật khẩu không khớp.')
+        return _render(request, 'register', ctx)
+    try:
+        validate_password(password1)
+    except ValidationError as e:
+        messages.error(request, ' '.join(e.messages))
+        return _render(request, 'register', ctx)
+
+    # Kiểm tra trùng TRƯỚC khi tạo, để xử lý rõ ràng từng trường hợp thay vì chỉ báo lỗi
+    # chung chung "đã được sử dụng" rồi dừng lại (khiến người đăng ký thật sự bị bế tắc
+    # nếu lần gửi email xác thực trước đó thất bại - họ không có cách nào "đăng ký lại").
+    existing_email_user = User.objects.filter(email__iexact=email).first()
+    username_taken = User.objects.filter(username__iexact=username).exclude(
+        pk=existing_email_user.pk if existing_email_user else None).exists()
+
+    if username_taken:
+        messages.error(request, 'Tên đăng nhập đã được sử dụng.')
+        return _render(request, 'register', ctx)
+
+    if existing_email_user:
+        if existing_email_user.is_active or existing_email_user.email_verified:
+            # Email đã có tài khoản đang hoạt động -> KHÔNG tạo trùng, báo rõ hướng xử lý
+            # (khác với trước đây chỉ ném lỗi "đã được sử dụng" chung chung).
+            _audit(request, 'REGISTER_DUPLICATE_ACTIVE', actor=None, target_user=existing_email_user,
+                   success=False, severity='warning', username_attempt=email[:150])
+            messages.error(request, 'Email này đã có tài khoản đang hoạt động. Vui lòng đăng nhập, '
+                                    'hoặc dùng "Quên mật khẩu" nếu bạn không nhớ mật khẩu.')
+        else:
+            # Email đã đăng ký nhưng CHƯA xác thực (có thể do lần trước gửi mail xác thực bị lỗi,
+            # hoặc người dùng bỏ dở) -> đừng để họ kẹt vĩnh viễn (không tạo được tài khoản mới,
+            # cũng không biết cách kích hoạt tài khoản cũ) -> tự động gửi lại email xác thực.
+            recent = OneTimeCode.objects.filter(
+                user=existing_email_user, purpose='EMAIL_VERIFY',
+                created_at__gt=timezone.now() - timedelta(seconds=60)).exists()
+            if not recent:
+                sent = _send_verification(request, existing_email_user)
+                _audit(request, 'VERIFY_MAIL_RESENT', actor=None, target_user=existing_email_user,
+                       success=sent, metadata={'reason': 'duplicate_register_unverified'})
+            messages.info(request, 'Email này đã được đăng ký nhưng chưa xác thực. Mình vừa gửi lại '
+                                   'email xác thực, vui lòng kiểm tra hộp thư (kể cả mục Spam).')
+        return _render(request, 'verify_email', {'email': email})
+
+    try:
+        with transaction.atomic():
+            user = User.objects.create_user(
+                email=email, username=username, password=password1,
+                full_name=full_name or None,
+            )
+    except ValidationError as e:
+        _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
+               metadata={'reason': 'validation'})
+        messages.error(request, 'Không thể tạo tài khoản: ' + ' '.join(e.messages))
+        return _render(request, 'register', ctx)
+    except IntegrityError:
+        _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
+               metadata={'reason': 'duplicate'})
+        messages.error(request, 'Email hoặc tên đăng nhập đã được sử dụng.')
+        return _render(request, 'register', ctx)
+    except ValueError as e:
+        _audit(request, 'REGISTER_FAILED', actor=None, success=False, username_attempt=email[:150],
+               metadata={'reason': 'invalid'})
+        messages.error(request, f'Không thể tạo tài khoản: {e}')
+        return _render(request, 'register', ctx)
+
+    logger.info("register: tạo user %s", email)
+    _audit(request, 'REGISTER', actor=user, target_user=user)
+    if not _send_verification(request, user):
+        _audit(request, 'VERIFY_MAIL_FAILED', actor=user, target_user=user, success=False,
+               severity='warning')
+        messages.warning(request, 'Chưa gửi được email xác thực. Vui lòng bấm "Gửi lại" sau ít phút.')
+    return _render(request, 'verify_email', {'email': email})
 
 
 def verify_email(request, token):
-    """Link trong email: trang tự POST token tới /api/app/auth/verify-email/."""
-    return _render(request, 'verify_email', {'token': str(token)})
+    try:
+        vt = OneTimeCode.objects.select_related('user').get(
+            token_hash=_hash_token(token), purpose='EMAIL_VERIFY',
+            is_used=False, expires_at__gt=timezone.now(),
+        )
+    except OneTimeCode.DoesNotExist:
+        _audit(request, 'EMAIL_VERIFY_FAILED', actor=None, success=False, severity='warning')
+        messages.error(request, 'Link xác thực không hợp lệ hoặc đã hết hạn.')
+        return redirect('smartlock:login')
+
+    user = vt.user
+    user.email_verified = True
+    user.is_active = True
+    user.save()
+    vt.is_used = True
+    vt.used_at = timezone.now()
+    vt.save()
+
+    _audit(request, 'EMAIL_VERIFIED', actor=user, target_user=user)
+    _notify(user, 'Chào mừng đến Smart Lock', 'Tài khoản của bạn đã được kích hoạt.', type_='WELCOME')
+    messages.success(request, 'Tài khoản đã được kích hoạt thành công!')
+    return redirect('smartlock:login')
+
+
+@require_POST
+def resend_verification(request):
+    email = (request.POST.get('email') or '').strip()
+    user = User.objects.filter(email__iexact=email, is_active=False, email_verified=False).first()
+    if user:
+        recent = OneTimeCode.objects.filter(
+            user=user, purpose='EMAIL_VERIFY',
+            created_at__gt=timezone.now() - timedelta(seconds=60),
+        ).exists()
+        if recent:
+            messages.warning(request, 'Vui lòng đợi 60 giây trước khi gửi lại.')
+        else:
+            sent = _send_verification(request, user)
+            _audit(request, 'VERIFY_MAIL_RESENT', actor=None, target_user=user, success=sent)
+            if sent:
+                messages.success(request, 'Đã gửi lại email xác thực.')
+            else:
+                messages.error(request, 'Không gửi được email. Vui lòng thử lại sau.')
+    else:
+        messages.success(request, 'Nếu tài khoản cần xác thực, email đã được gửi lại.')
+    return _render(request, 'verify_email', {'email': email})
+
+
 
 
 def password_reset_request(request):
-    return _render(request, 'reset_password', {'mode': 'request'})
+    if request.method != 'POST':
+        return _render(request, 'reset_password', {'mode': 'request'})
+
+    email = (request.POST.get('email') or '').strip()
+    ctx = {'mode': 'request', 'email': email}
+    user = User.objects.filter(email__iexact=email).first()
+
+    def _neutral():
+        # Mọi nhánh đều trả CÙNG một thông báo -> không lộ email nào đã đăng ký (chống user enumeration).
+        messages.success(request, RESET_NEUTRAL_MSG)
+        return _render(request, 'reset_password', ctx)
+
+    if not user:
+        _audit(request, 'PASSWORD_RESET_UNKNOWN_EMAIL', actor=None, success=False,
+               severity='warning', username_attempt=email[:150])
+        return _neutral()
+
+    if not user.is_active or not user.email_verified:
+        _audit(request, 'PASSWORD_RESET_UNVERIFIED', actor=None, success=False,
+               severity='warning', target_user=user)
+        return _neutral()
+
+    if AuditLog.objects.filter(action='PASSWORD_RESET_REQUEST', target_user=user,
+                               created_at__gte=timezone.now() - timedelta(seconds=60)).exists():
+        _audit(request, 'PASSWORD_RESET_THROTTLED', actor=None, success=False, target_user=user)
+        return _neutral()
+
+    sent = _send_password_reset(request, user)
+    _audit(request, 'PASSWORD_RESET_REQUEST', actor=None, target_user=user, success=sent,
+           severity='info' if sent else 'warning',
+           metadata=None if sent else {'error': 'send_mail_failed'})
+    return _neutral()   # gửi lỗi cũng không báo ra ngoài; đã có audit log
 
 
 def reset_password(request, uidb64, token):
-    return _render(request, 'reset_password', {'mode': 'confirm', 'uid': uidb64, 'token': token})
+    try:
+        user = User.objects.get(pk=force_str(urlsafe_base64_decode(uidb64)))
+    except Exception:
+        user = None
+
+    if user is None or not user.is_active or not default_token_generator.check_token(user, token):
+        _audit(request, 'PASSWORD_RESET_INVALID', actor=None, success=False, severity='warning',
+               target_user=user)
+        messages.error(request, 'Yêu cầu không hợp lệ')
+        return _render(request, 'reset_password', {'mode': 'expired'})
+
+    ctx = {'mode': 'confirm'}
+    if request.method == 'POST':
+        p1 = request.POST.get('new_password1') or ''
+        p2 = request.POST.get('new_password2') or ''
+        if not p1 or p1 != p2:
+            messages.error(request, 'Mật khẩu không khớp.')
+            return _render(request, 'reset_password', ctx)
+        try:
+            validate_password(p1, user)
+        except ValidationError as e:
+            messages.error(request, ' '.join(e.messages))
+            return _render(request, 'reset_password', ctx)
+        user.set_password(p1)
+        user.save()
+        services.revoke_mobile_sessions(user)   # thu hồi mọi phiên app (không phụ thuộc module api)
+        _reset_lockout(user)
+        _audit(request, 'PASSWORD_RESET_DONE', actor=user, target_user=user)
+        _notify(user, 'Mật khẩu đã thay đổi', 'Mật khẩu tài khoản vừa được đặt lại.',
+                severity='warning', type_='SECURITY')
+        messages.success(request, 'Mật khẩu đã được thay đổi thành công!')
+        return redirect('smartlock:login')
+    return _render(request, 'reset_password', ctx)
+
+
 
 
 # ====================== SYNC: bootstrap toàn bộ dữ liệu dashboard cho client cache ======================
-@auth_required
-def sync_bootstrap(request):
-    """Trả JSON gộp mọi thứ user thấy trên dashboard - client mã hoá (AES-GCM, khoá suy ra từ
-    session hiện tại, xem _ensure_sync_key) rồi lưu vào IndexedDB để tải nhanh + auto refresh
-    nền. KHÔNG cấp thêm quyền xem dữ liệu nào ngoài những gì các view khác đã cho phép."""
-    user = request.user
-    _latest_lock = (DeviceStatusLog.objects.filter(device=OuterRef('pk'))
-                    .order_by('-recorded_at').values('lock_state')[:1])
-    devices = list(_accessible_devices(user).annotate(last_lock_state=Subquery(_latest_lock))
-                   .order_by('name'))
-    perms = services.permission_map(user, devices)        # 1 truy vấn cho mọi khoá (trước: 1 truy vấn/khoá)
-
-    devices_json = [{
-        'id': str(d.id), 'name': d.name, 'device_code': d.device_code,
-        'status': d.status, 'status_display': d.get_status_display(),
-        'battery_level': d.battery_level,
-        'lock_state': d.last_lock_state or 'unknown',
-        'location': d.location or '', 'is_owner': d.owner_id == user.id,
-        'permissions': sorted(perms[d.id]),
-        'updated_at': d.updated_at.isoformat(),
-    } for d in devices]
-
-    notifications_json = [{
-        'id': str(n.id), 'title': n.title, 'message': n.message, 'severity': n.severity,
-        'is_read': n.is_read, 'created_at': n.created_at.isoformat(),
-        'device_id': str(n.device_id) if n.device_id else None,
-    } for n in Notification.objects.filter(user=user).order_by('-created_at')[:20]]
-
-    logs_json = [{
-        'id': str(l.id), 'action': l.action, 'device': l.device.name if l.device_id else None,
-        'success': l.success, 'severity': l.severity, 'created_at': l.created_at.isoformat(),
-    } for l in _visible_logs(user).select_related('device').order_by('-created_at')[:20]]
-
-    owned_ids = {d.id for d in devices if d.owner_id == user.id}
-    accesses_json = [{
-        'id': str(a.id), 'device_id': str(a.device_id), 'user': a.user.username,
-        'permissions': [p.code for p in a.permissions.all()],
-        'expires_at': a.expires_at.isoformat() if a.expires_at else None,
-    } for a in (DeviceAccess.objects.filter(device_id__in=owned_ids, is_active=True)
-                .select_related('user').prefetch_related('permissions'))] if owned_ids else []
-
-    data = {
-        'generated_at': timezone.now().isoformat(),
-        'unread_count': Notification.objects.filter(user=user, is_read=False).count(),
-        'devices': devices_json,
-        'notifications': notifications_json,
-        'recent_logs': logs_json,
-        'accesses': accesses_json,
-    }
-    response = JsonResponse(data)
-    response['Cache-Control'] = 'no-store'  # dữ liệu nhạy cảm, không cho trình duyệt/proxy cache thô ngoài IndexedDB đã mã hoá
-    return response
-
-
 # ====================== DEVICES ======================
-@auth_required
-def device_add(request):
-    """Đã đóng: CHỈ quản trị viên được tạo khoá mới (/manage-sys/devices/new/ hoặc Django admin).
-    Quản trị đăng ký khoá vào hệ thống rồi (a) gán thẳng cho chủ, hoặc (b) chủ tự thêm bằng mã thiết bị + secret
-    ở trang \"Thêm khoá\" (device_claim). Giữ route này để link/nút cũ không gây lỗi."""
-    _audit(request, 'DEVICE_ADD_BLOCKED', success=False, severity='warning',
-           metadata={'method': request.method})
-    messages.info(request, 'Khoá mới do quản trị viên đăng ký. Nếu quản trị đã đăng ký khoá cho bạn, '
-                           'hãy nhập mã thiết bị + secret để thêm vào tài khoản.')
-    return redirect('smartlock:device-claim')
-
-
 @auth_required
 def devices_list(request):
     devices = _accessible_devices(request.user).order_by('name')
@@ -270,27 +481,119 @@ def devices_list(request):
 
 
 
-# ====================== MQTT webhook đã chuyển sang smartlock/api/webhooks/mqtt.py ======================
-# (route cũ /api/mqtt/auth|acl/ vẫn còn trong urls.py trỏ tới module mới; route chính thức: /api/webhooks/mqtt/...)
+def _mqtt_webhook_authorized(request) -> bool:
+    """Broker phải gửi header X-Webhook-Secret khớp settings.MQTT_WEBHOOK_SECRET.
+    Chưa cấu hình secret: chỉ bỏ qua kiểm tra khi DEBUG, còn lại từ chối (fail-closed)."""
+    secret = getattr(dj_settings, 'MQTT_WEBHOOK_SECRET', None)
+    if not secret:
+        # Fail-closed: chỉ cho qua khi DEBUG (dev/test). Production thiếu secret -> từ chối.
+        if dj_settings.DEBUG:
+            logger.warning('MQTT_WEBHOOK_SECRET chưa được đặt: webhook MQTT không được bảo vệ (DEBUG).')
+            return True
+        logger.error('MQTT_WEBHOOK_SECRET chưa được đặt: từ chối mọi webhook MQTT.')
+        return False
+    return hmac.compare_digest(str(request.META.get('HTTP_X_WEBHOOK_SECRET', '')), str(secret))
+
+
+# ====================== MQTT: WEBHOOK XÁC THỰC THIẾT BỊ (gọi bởi plugin auth của broker) ======================
+@csrf_exempt
+@require_POST
+def mqtt_auth_webhook(request):
+    """
+    Endpoint cho plugin HTTP-auth của broker (vd. mosquitto-go-auth) gọi vào để kiểm
+    tra 1 thiết bị có được phép kết nối/publish/subscribe hay không.
+
+    Thiết bị connect vào broker với username=device_code, password=provisioning_secret
+    (secret gốc thiết bị đã lưu lúc provisioning - KHÔNG lưu thêm secret riêng cho MQTT,
+    tái dùng đúng Device.provisioning_secret_hash đã có).
+
+    Trả 200 = cho phép, 401/403 = từ chối. KHÔNG dùng @auth_required (đây không phải
+    người dùng đăng nhập) và bỏ qua CSRF (broker gọi server-to-server, không có session).
+    Cần chặn endpoint này ở tầng mạng/tường lửa chỉ cho phép broker gọi vào, không public.
+    """
+    if not _mqtt_webhook_authorized(request):
+        return JsonResponse({'ok': False}, status=403)
+    username = (request.POST.get('username') or '').strip()
+    password = request.POST.get('password') or ''
+    if not username or not password:
+        return JsonResponse({'ok': False}, status=401)
+
+    # Tài khoản server (publisher/subscriber của Django): so với MQTT_PUBLISHER_PASSWORD.
+    if username in getattr(dj_settings, 'MQTT_TRUSTED_USERNAMES', []):
+        expected = services.MQTT_PUBLISHER_PASSWORD
+        if expected and hmac.compare_digest(password, expected):
+            return JsonResponse({'ok': True})
+        _audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
+               username_attempt=username[:150])
+        return JsonResponse({'ok': False}, status=401)
+
+    device = Device.objects.filter(device_code=username).first()
+    if not device or not hmac.compare_digest(device.provisioning_secret_hash, _hash_token(password)):
+        _audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
+               username_attempt=username[:150])
+        return JsonResponse({'ok': False}, status=401)
+
+    return JsonResponse({'ok': True})
+
+
+@csrf_exempt
+@require_POST
+def mqtt_acl_webhook(request):
+    """ACL cho broker (mosquitto-go-auth: acc 1=read, 2=write, 3=readwrite, 4=subscribe).
+    Thiết bị chỉ được: đọc/subscribe smartlock/<device_code>/cmd và ghi vào
+    smartlock/<device_code>/{status,ack,event}. Không được đụng topic của thiết bị khác.
+    Các tài khoản tin cậy (publisher/subscriber của server) khai báo trong MQTT_TRUSTED_USERNAMES."""
+    if not _mqtt_webhook_authorized(request):
+        return JsonResponse({'ok': False}, status=403)
+    username = (request.POST.get('username') or '').strip()
+    topic = (request.POST.get('topic') or '').strip()
+    try:
+        acc = int(request.POST.get('acc') or 0)
+    except ValueError:
+        acc = 0
+    if not username or not topic:
+        return JsonResponse({'ok': False}, status=403)
+
+    if username in getattr(dj_settings, 'MQTT_TRUSTED_USERNAMES', []):
+        return JsonResponse({'ok': True})
+
+    if not Device.objects.filter(device_code=username).exists():
+        return JsonResponse({'ok': False}, status=403)
+
+    parts = topic.split('/')
+    if len(parts) != 3 or parts[0] != 'smartlock' or parts[1] != username:
+        return JsonResponse({'ok': False}, status=403)
+    channel = parts[2]
+    can_read = acc in (1, 3, 4) and channel == 'cmd'
+    can_write = acc in (2, 3) and channel in ('status', 'ack', 'event')
+    if (acc in (1, 4) and can_read) or (acc == 2 and can_write):
+        return JsonResponse({'ok': True})
+    return JsonResponse({'ok': False}, status=403)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 @auth_required
 def notifications_list(request):
     user = request.user
-    if request.method == 'POST':
-        action = request.POST.get('action')
-        now = timezone.now()
-        if action == 'mark_all':
-            Notification.objects.filter(user=user, is_read=False).update(is_read=True, read_at=now)
-        elif action == 'mark_read':
-            Notification.objects.filter(user=user, id=_parse_uuid(request.POST.get('id'))).update(is_read=True, read_at=now)
-        elif action == 'delete_all_read':
-            Notification.objects.filter(user=user, is_read=True).delete()
-        nxt = request.META.get('HTTP_REFERER')
-        if nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}, require_https=request.is_secure()):
-            return redirect(nxt)
-        return redirect('smartlock:notifications')
-
     only_unread = request.GET.get('filter') == 'unread'
     qs = Notification.objects.filter(user=user).select_related('device').order_by('-created_at')
     if only_unread:
@@ -307,48 +610,6 @@ def notifications_list(request):
 @auth_required
 def profile(request):
     user = request.user
-    if request.method == 'POST':
-        action = request.POST.get('action')
-        if action == 'update_info':
-            before = {'full_name': user.full_name, 'phone': user.phone}
-            user.full_name = (request.POST.get('full_name') or '').strip()[:100] or None
-            user.phone = (request.POST.get('phone') or '').strip()[:20] or None
-            user.save(update_fields=['full_name', 'phone', 'updated_at'])
-            after = {'full_name': user.full_name, 'phone': user.phone}
-            changes = {k: [before[k], after[k]] for k in after if before[k] != after[k]}
-            _audit(request, 'PROFILE_UPDATED', target_user=user,
-                   metadata={'changes': changes} if changes else None)
-            messages.success(request, 'Đã cập nhật thông tin cá nhân.')
-        elif action == 'change_password':
-            old = request.POST.get('old_password') or ''
-            p1 = request.POST.get('new_password1') or ''
-            p2 = request.POST.get('new_password2') or ''
-            recent_fails = AuditLog.objects.filter(
-                action='PASSWORD_CHANGE_FAILED', actor_user=user,
-                created_at__gte=timezone.now() - timedelta(minutes=15)).count()
-            if recent_fails >= 5:
-                messages.error(request, 'Nhập sai mật khẩu hiện tại quá nhiều lần. Thử lại sau 15 phút.')
-            elif not user.check_password(old):
-                _audit(request, 'PASSWORD_CHANGE_FAILED', success=False, severity='warning',
-                       target_user=user)
-                messages.error(request, 'Mật khẩu hiện tại không đúng.')
-            elif not p1 or p1 != p2:
-                messages.error(request, 'Mật khẩu mới không khớp.')
-            else:
-                try:
-                    validate_password(p1, user)
-                except ValidationError as e:
-                    messages.error(request, ' '.join(e.messages))
-                else:
-                    user.set_password(p1)
-                    user.save()
-                    update_session_auth_hash(request, user)
-                    _audit(request, 'PASSWORD_CHANGED', severity='warning', target_user=user)
-                    _notify(user, 'Mật khẩu đã thay đổi', 'Bạn vừa đổi mật khẩu tài khoản.',
-                            severity='warning', type_='SECURITY')
-                    messages.success(request, 'Đã đổi mật khẩu.')
-        return redirect('smartlock:profile')
-
     context = {
         'device_count': Device.objects.filter(owner=user).count(),
         'card_count': AccessCard.objects.filter(user=user).count(),
@@ -740,6 +1001,19 @@ def _complete(request, p, user, method):
     purpose = p.get('purpose')
     _clear_pending(request)
 
+    if purpose == 'login':
+        _reset_lockout(user)
+        login(request, user, backend=p.get('backend') or DEFAULT_BACKEND)
+        _ensure_sync_key(request)
+        request.session.set_expiry(_settings().session_timeout_hours * 3600)
+        _notify_login(request, user)
+        _audit(request, 'LOGIN', actor=user, metadata={'two_factor': method})
+        messages.success(request, 'Đăng nhập thành công!')
+        nxt = p.get('next') or ''
+        if nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}, require_https=request.is_secure()):
+            return nxt
+        return reverse('smartlock:dashboard')
+
     cfg = _get_cfg(user)
     if purpose == 'disable':
         # 2FA giờ luôn = "còn phương thức nào đang hoạt động không", không set tay được nữa.
@@ -757,6 +1031,13 @@ def verify_2fa(request):
     if not p:
         messages.error(request, 'Phiên xác thực 2FA đã hết hạn. Vui lòng thử lại.')
         return redirect('smartlock:login' if not request.user.is_authenticated else 'smartlock:profile')
+
+    if p.get('purpose') == 'login':
+        mins = _lock_minutes(user)
+        if mins:
+            _clear_pending(request)
+            messages.error(request, f'Tài khoản đang bị khóa tạm thời. Thử lại sau {mins} phút.')
+            return redirect('smartlock:login')
 
     cfg = _get_cfg(user)
     methods = cfg.available_methods()          # danh sách 'totp' / 'fido2' / 'email'
@@ -1213,7 +1494,7 @@ def two_factor_context(request, user):
 # Mọi nhánh (kể cả từ chối/lỗi) đều ghi AuditLog.
 @auth_required
 def device_claim(request):
-    """Trang nhập mã thiết bị + secret. Việc thêm khoá do form gọi API: POST /api/app/devices/claim/."""
+    """Trang nhập mã thiết bị + secret. Việc thêm khoá do form gọi API: POST /api/v1/devices/claim/."""
     return _render(request, 'device_claim')
 
 
@@ -1303,35 +1584,6 @@ def device_detail(request, device_id):
 
 
 # ====================== ĐIỆN THOẠI: VÉ BLUETOOTH / NFC GIẢ LẬP THẺ ======================
-def _phone_ticket(request, device_id, kind):
-    """App (đang có mạng) xin vé; đến gần cửa thì đưa vé cho khoá qua BLE hoặc qua NFC (HCE).
-    Khoá tự kiểm tra chữ ký + hạn, không cần mạng (xem services.issue_phone_ticket)."""
-    cfg = services.PHONE_CHANNELS[kind]
-    device = get_object_or_404(_accessible_devices(request.user), id=device_id)
-    if not getattr(device, cfg['flag']) or device.status not in ('online', 'offline'):
-        return JsonResponse({'ok': False, 'message': f"Thiết bị không dùng được {cfg['name']} lúc này."},
-                            status=409)
-    if not _has_permission(request.user, device, cfg['permission']):
-        _audit(request, f"{cfg['prefix']}_TICKET_DENIED", device=device, success=False, severity='warning')
-        return JsonResponse({'ok': False, 'message': f"Bạn không có quyền mở khóa bằng {cfg['name']}."},
-                            status=403)
-    ticket, exp = services.issue_phone_ticket(device, request.user, kind)
-    _audit(request, f"{cfg['prefix']}_TICKET_ISSUED", device=device, metadata={'expires_at': exp})
-    return JsonResponse({'ok': True, 'ticket': ticket, 'expires_at': exp, 'device_code': device.device_code})
-
-
-@auth_required
-@require_POST
-def device_ble_ticket(request, device_id):
-    return _phone_ticket(request, device_id, 'ble')
-
-
-@auth_required
-@require_POST
-def device_nfc_ticket(request, device_id):
-    return _phone_ticket(request, device_id, 'nfc')
-
-
 # ====================== THẺ NFC ======================
 @auth_required
 def nfc_tags(request):
@@ -1341,55 +1593,6 @@ def nfc_tags(request):
     managed = list(services.devices_with_permission(user, 'manage_nfc').values_list('id', 'owner_id'))
     managed_ids = {i for i, _ in managed}                       # khoá mình được dùng tính năng thẻ
     owned_ids = {i for i, o in managed if o == user.id}         # khoá mình là CHỦ (mới thấy thẻ của người khác)
-
-    if request.method == 'POST':
-        action = request.POST.get('action')
-        card = AccessCard.objects.filter(id=_parse_uuid(request.POST.get('card_id'))).first()
-        mine = bool(card and card.user_id == user.id)
-        if not card:
-            _audit(request, 'CARD_NOT_FOUND', success=False, severity='warning',
-                   metadata={'card_id': str(request.POST.get('card_id'))[:64], 'action': str(action)[:30]})
-            messages.error(request, 'Không tìm thấy thẻ.')
-        elif action in ('toggle', 'rename', 'delete') and not mine:
-            _audit(request, 'CARD_ACTION_DENIED', success=False, severity='warning',
-                   metadata={'card_id': str(card.id), 'action': action})
-            messages.error(request, 'Đây không phải thẻ của bạn.')
-        elif action == 'toggle':
-            card.is_active = not card.is_active
-            card.save()
-            _audit(request, 'CARD_ENABLED' if card.is_active else 'CARD_DISABLED',
-                   metadata={'card_id': str(card.id), 'name': card.name})
-            messages.success(request, 'Đã kích hoạt thẻ.' if card.is_active else 'Đã vô hiệu hóa thẻ.')
-        elif action == 'rename':
-            old_name = card.name
-            card.name = (request.POST.get('name') or '').strip()[:100] or None
-            card.save()
-            _audit(request, 'CARD_RENAMED', metadata={'card_id': str(card.id), 'from': old_name, 'to': card.name})
-            messages.success(request, 'Đã đổi tên thẻ.')
-        elif action == 'delete':
-            info = {'card_id': str(card.id), 'name': card.name,
-                    'devices': [str(d) for d in card.carddeviceaccess_set.values_list('device_id', flat=True)]}
-            card.delete()
-            _audit(request, 'CARD_DELETED', metadata=info)
-            messages.success(request, 'Đã xóa thẻ.')
-        elif action == 'toggle_link':
-            # Bật/tắt thẻ trên MỘT khoá cụ thể - dành cho người quản lý khoá đó.
-            device_id = _parse_uuid(request.POST.get('device_id'))
-            link = (CardDeviceAccess.objects.select_related('device')
-                    .filter(access_card=card, device_id=device_id).first())
-            # Chủ khoá bật/tắt được thẻ của mọi người trên khoá của mình; người khác chỉ thẻ CỦA MÌNH.
-            if not link or not (link.device_id in owned_ids or (mine and link.device_id in managed_ids)):
-                _audit(request, 'CARD_LINK_DENIED', success=False, severity='warning',
-                       metadata={'card_id': str(card.id), 'device_id': str(device_id)})
-                messages.error(request, 'Bạn không có quyền quản lý thẻ trên khoá này.')
-            else:
-                link.is_active = not link.is_active
-                link.save(update_fields=['is_active'])
-                _audit(request, 'CARD_LINK_ENABLED' if link.is_active else 'CARD_LINK_DISABLED',
-                       device=link.device, target_user=card.user, metadata={'card_id': str(card.id)})
-                messages.success(request, 'Đã bật thẻ trên khoá này.' if link.is_active
-                                 else 'Đã tắt thẻ trên khoá này.')
-        return redirect('smartlock:nfc-tags')
 
     cards = list(AccessCard.objects
                  .filter(Q(user=user) | Q(carddeviceaccess__device_id__in=owned_ids)).distinct()
@@ -1407,95 +1610,9 @@ def nfc_reader(request):
     """Đăng ký thẻ NFC cho khoá. Chủ khoá còn quản lý đầu đọc + bật chế độ đăng ký bằng quẹt thẻ
     (chế độ này gắn thẻ cho CHỦ khoá nên người được chia sẻ không được bật)."""
     user = request.user
-    is_post = request.method == 'POST'
     devices = services.devices_with_permission(user, 'manage_nfc').order_by('name')
-    device = _pick_device(devices, request.POST.get('device') or request.GET.get('device'), strict=is_post)
+    device = _pick_device(devices, request.GET.get('device'), strict=False)
     is_owner = bool(device and device.owner_id == user.id)
-
-    if is_post:
-        if not device:
-            _audit(request, 'NFC_DEVICE_NOT_FOUND', success=False, severity='warning',
-                   metadata={'device': str(request.POST.get('device') or request.GET.get('device'))[:64]})
-            messages.error(request, 'Không tìm thấy thiết bị hoặc bạn không có quyền quản lý thẻ NFC.')
-            return redirect('smartlock:devices-list')
-
-        action = request.POST.get('action')
-        back = lambda: _redirect_with('smartlock:nfc-reader', device=device.id)
-
-        if not device.nfc_enabled:
-            messages.error(request, 'NFC của khoá đang tắt.')
-            return back()
-
-        if action in ('add_reader', 'toggle_reader', 'toggle_auto') and not is_owner:
-            _audit(request, 'NFC_READER_DENIED', device=device, success=False, severity='warning',
-                   metadata={'action': action})
-            messages.error(request, 'Chỉ chủ khoá mới được cấu hình đầu đọc.')
-            return back()
-
-        if action == 'add_reader':
-            name = (request.POST.get('name') or '').strip()[:100] or 'Đầu đọc mô phỏng'
-            with transaction.atomic():
-                reader = NfcReader.objects.create(device=device, reader_mode='simulated',
-                                                  name=name, is_active=True)
-                NfcLog.objects.create(reader=reader, device=device, user=user,
-                                      event_type='READER_CONNECTED', ip_address=_client_ip(request),
-                                      user_agent=_user_agent(request))
-            _audit(request, 'NFC_READER_ADDED', device=device, metadata={'reader_id': str(reader.id), 'name': name})
-            messages.success(request, 'Đã thêm đầu đọc.')
-            return back()
-
-        if action in ('toggle_reader', 'toggle_auto'):
-            reader = NfcReader.objects.filter(id=_parse_uuid(request.POST.get('reader_id')), device=device).first()
-            if not reader:
-                _audit(request, 'NFC_READER_NOT_FOUND', device=device, success=False, severity='warning')
-                messages.error(request, 'Không tìm thấy đầu đọc.')
-                return back()
-            if action == 'toggle_reader':
-                reader.is_active = not reader.is_active
-                reader.save()
-                event = 'READER_CONNECTED' if reader.is_active else 'READER_DISCONNECTED'
-                audit_action = 'NFC_READER_ENABLED' if reader.is_active else 'NFC_READER_DISABLED'
-            else:
-                reader.auto_register = not reader.auto_register
-                reader.save()
-                event = 'CONFIG_UPDATED'
-                audit_action = 'NFC_AUTO_REGISTER_ON' if reader.auto_register else 'NFC_AUTO_REGISTER_OFF'
-            NfcLog.objects.create(reader=reader, device=device, user=user, event_type=event,
-                                  ip_address=_client_ip(request), user_agent=_user_agent(request))
-            _audit(request, audit_action, device=device, metadata={'reader_id': str(reader.id)})
-            messages.success(request, 'Đã cập nhật đầu đọc.')
-            return back()
-
-        if action == 'register_card':
-            uid = services.normalize_uid(request.POST.get('uid'))
-            name = (request.POST.get('name') or '').strip()[:100] or None
-            if len(uid) < 4:
-                messages.error(request, 'UID thẻ không hợp lệ.')
-                return back()
-            try:
-                with transaction.atomic():
-                    if AccessCard.objects.filter(card_uid_hash=_hash_token(uid)).exists():
-                        raise IntegrityError('card uid already registered (legacy hash)')
-                    card = AccessCard.objects.create(
-                        card_uid_hash=_hash_card_uid(uid), user=user, name=name, is_active=True)
-                    CardDeviceAccess.objects.create(access_card=card, device=device)
-            except IntegrityError:
-                _audit(request, 'CARD_REGISTER_FAILED', device=device, success=False,
-                       severity='warning', metadata={'reason': 'duplicate'})
-                messages.error(request, 'Thẻ này đã được đăng ký.')
-                return back()
-            reader = NfcReader.objects.filter(device=device, is_active=True).first()
-            NfcLog.objects.create(reader=reader, nfc_tag=card, device=device, user=user,
-                                  event_type='CARD_REGISTER', ip_address=_client_ip(request),
-                                  user_agent=_user_agent(request))
-            _audit(request, 'CARD_REGISTERED', device=device, metadata={'card_id': str(card.id), 'name': name})
-            if not is_owner:      # người được chia sẻ thêm thẻ -> báo chủ khoá (popup + push)
-                _notify(device.owner, 'Có thẻ NFC mới trên khoá của bạn',
-                        f'{user.username} vừa đăng ký thẻ "{name or "không tên"}" cho "{device.name}".',
-                        device=device, type_='CARD')
-            messages.success(request, 'Đã đăng ký thẻ NFC.')
-            return back()
-        return back()
 
     context = {
         'device_list': devices,
@@ -1517,106 +1634,8 @@ def nfc_reader(request):
 def shares_manage(request):
     user = request.user
     services.ensure_default_permissions()
-    is_post = request.method == 'POST'
     owned = Device.objects.filter(owner=user).order_by('name')
-    device = _pick_device(owned, request.POST.get('device') or request.GET.get('device'), strict=is_post)
-
-    if is_post:
-        action = request.POST.get('action')
-
-        # Người được chia sẻ tự rời khỏi 1 khoá (không cần là chủ).
-        if action == 'leave':
-            access = (DeviceAccess.objects.select_related('device', 'device__owner')
-                      .filter(id=_parse_uuid(request.POST.get('access_id')), user=user, is_active=True).first())
-            if not access:
-                messages.error(request, 'Không tìm thấy quyền truy cập.')
-            else:
-                access.is_active = False
-                access.revoked_at = timezone.now()
-                access.save(update_fields=['is_active', 'revoked_at'])
-                _audit(request, 'ACCESS_LEFT', device=access.device, target_user=access.device.owner,
-                       metadata={'access_id': str(access.id)})
-                if access.device.owner_id:
-                    _notify(access.device.owner, 'Người dùng đã rời khỏi khoá được chia sẻ',
-                            f'{user.username} không còn dùng khoá "{access.device.name}" nữa.',
-                            device=access.device, type_='SHARE')
-                messages.success(request, 'Bạn đã rời khỏi khoá này.')
-            return redirect('smartlock:shares')
-
-        if not device:
-            _audit(request, 'ACCESS_DEVICE_NOT_FOUND', success=False, severity='warning',
-                   metadata={'device': str(request.POST.get('device') or request.GET.get('device'))[:64]})
-            messages.error(request, 'Không tìm thấy thiết bị của bạn.')
-            return redirect('smartlock:shares')
-
-        back = lambda: _redirect_with('smartlock:shares', device=device.id)
-        # Chọn vai trò mẫu (preset) thì dùng bộ quyền của vai trò đó; không chọn thì dùng các ô tích tay.
-        preset = (request.POST.get('preset') or '').strip()
-        if preset and services.preset_codes(preset) is None:
-            messages.error(request, 'Vai trò mẫu không hợp lệ.')
-            return back()
-        wanted_codes = services.preset_codes(preset) if preset else request.POST.getlist('permissions')
-        perms = list(Permission.objects.filter(code__in=wanted_codes))
-        perm_codes = sorted(p.code for p in perms)
-
-        if action == 'grant':
-            identifier = request.POST.get('identifier')
-            target = _find_user(identifier)
-            raw_exp = (request.POST.get('expires_at') or '').strip()
-            expires = _parse_dt(raw_exp)
-            now = timezone.now()
-            if raw_exp and expires is None:
-                messages.error(request, 'Định dạng thời điểm hết hạn không hợp lệ.')
-            elif not target or not target.is_active:
-                _audit(request, 'ACCESS_GRANT_FAILED', device=device, success=False,
-                       username_attempt=(identifier or '')[:150], metadata={'reason': 'user_not_found'})
-                messages.error(request, 'Không tìm thấy người dùng (email hoặc username).')
-            elif target.id == user.id:
-                messages.error(request, 'Bạn đã là chủ thiết bị này.')
-            elif expires and expires <= now:
-                messages.error(request, 'Thời điểm hết hạn phải ở tương lai.')
-            elif not perms:
-                messages.error(request, 'Hãy chọn ít nhất một quyền để chia sẻ.')
-            else:
-                access, created = services.grant_access(device, user, target, perms, expires)
-                _audit(request, 'ACCESS_GRANTED' if created else 'ACCESS_UPDATED', device=device,
-                       target_user=target,
-                       metadata={'access_id': str(access.id), 'permissions': perm_codes,
-                                 'expires_at': expires.isoformat() if expires else None})
-                emailed = services.notify_access_shared(request, access, created)
-                msg = f'Đã chia sẻ khoá "{device.name}" cho {target.username}'
-                messages.success(request, msg + (' và gửi email thông báo.' if emailed else '.'))
-                if not emailed:
-                    messages.warning(request, 'Không gửi được email cho người nhận (họ vẫn thấy thông báo trong app).')
-
-        elif action in ('update', 'revoke'):
-            access = (DeviceAccess.objects.select_related('user')
-                      .filter(id=_parse_uuid(request.POST.get('access_id')), device=device, is_active=True).first())
-            if not access:
-                _audit(request, 'ACCESS_NOT_FOUND', device=device, success=False, severity='warning',
-                       metadata={'action': str(action)})
-                messages.error(request, 'Không tìm thấy quyền truy cập.')
-            elif action == 'update':
-                old_codes = sorted(p.code for p in access.permissions.all())
-                access.permissions.set(perms)
-                _audit(request, 'ACCESS_UPDATED', device=device, target_user=access.user,
-                       metadata={'access_id': str(access.id), 'from': old_codes, 'to': perm_codes})
-                services.notify_access_shared(request, access, created=False)
-                messages.success(request, 'Đã cập nhật quyền.')
-            else:
-                access.is_active = False
-                access.revoked_at = timezone.now()
-                access.save(update_fields=['is_active', 'revoked_at'])
-                # Lệnh đang chờ do người bị thu hồi gửi không được phép chạy tiếp.
-                cancelled = DeviceCommand.objects.filter(
-                    device=device, issued_by=access.user, status='pending').update(status='failed')
-                _audit(request, 'ACCESS_REVOKED', device=device, target_user=access.user, severity='warning',
-                       metadata={'access_id': str(access.id), 'cancelled_commands': cancelled})
-                _notify(access.user, 'Quyền truy cập bị thu hồi',
-                        f'Quyền của bạn trên "{device.name}" đã bị thu hồi.',
-                        severity='warning', device=device, type_='SHARE')
-                messages.success(request, 'Đã thu hồi quyền.')
-        return back()
+    device = _pick_device(owned, request.GET.get('device'), strict=False)
 
     accesses = []
     if device:
@@ -1647,49 +1666,6 @@ def door_pins(request):
     ma trận của khoá để mở cửa. PIN KHÔNG phải thứ để nhập vào web/app."""
     devices = services.devices_with_permission(request.user, 'manage_pins').order_by('name')
     device = _pick_device(devices, request.GET.get('device'), strict=False)
-
-    if request.method == 'POST':
-        if not device:
-            _audit(request, 'DOOR_PIN_CREATE_DENIED', success=False, severity='warning')
-            messages.error(request, 'Không tìm thấy thiết bị hoặc bạn không có quyền quản lý mã PIN.')
-            return redirect('smartlock:door-pins')
-
-        action = request.POST.get('action')
-        if action == 'issue':
-            try:
-                ttl_minutes = max(1, min(int(request.POST.get('ttl_minutes') or 1440), 43200))  # tối đa 30 ngày
-                max_uses = max(0, int(request.POST.get('max_uses') or 1))
-            except (TypeError, ValueError):
-                messages.error(request, 'Thời hạn hoặc số lần dùng không hợp lệ.')
-                return _redirect_with('smartlock:door-pins', device=device.id)
-
-            label = (request.POST.get('label') or '').strip()[:100]
-            try:
-                pin, plain_pin = services.issue_unique_door_pin(
-                    device=device, created_by=request.user,
-                    ttl_minutes=ttl_minutes, label=label, max_uses=max_uses)
-            except RuntimeError as exc:
-                messages.error(request, str(exc))
-                return _redirect_with('smartlock:door-pins', device=device.id)
-            _audit(request, 'DOOR_PIN_CREATED', device=device, metadata={'pin_id': str(pin.id), 'label': label})
-            # plain_pin CHỈ hiện 1 lần ở đây - không lưu, không log dạng thô.
-            messages.success(request, f'Mã PIN mới: {plain_pin} — khách bấm trên bàn phím của khoá '
-                                      f'(hết hạn sau {ttl_minutes} phút).')
-            return _redirect_with('smartlock:door-pins', device=device.id)
-
-        if action == 'revoke':
-            pin_qs = DoorPinCode.objects.filter(id=_parse_uuid(request.POST.get('pin_id')), device=device)
-            if device.owner_id != request.user.id:
-                pin_qs = pin_qs.filter(created_by=request.user)     # không phải chủ: chỉ thu hồi mã mình tạo
-            pin = pin_qs.first()
-            if not pin:
-                messages.error(request, 'Không tìm thấy mã PIN.')
-            else:
-                pin.revoke()
-                _audit(request, 'DOOR_PIN_REVOKED', device=device, metadata={'pin_id': str(pin.id)})
-                messages.success(request, 'Đã thu hồi mã PIN.')
-            return _redirect_with('smartlock:door-pins', device=device.id)
-        return _redirect_with('smartlock:door-pins', device=device.id)
 
     pins = DoorPinCode.objects.none()
     if device:
@@ -1746,34 +1722,6 @@ def access_events_history(request):
 # ====================== POPUP TRÊN MÀN HÌNH (poll) ======================
 
 
-@auth_required
-def events_poll(request):
-    """JS (static/smartlock/js/popup.js) gọi mỗi vài giây. Trả các Notification MỚI của user kể từ
-    `cursor` để hiện popup trong trang. Lần đầu (chưa có cursor) chỉ trả cursor, không trả popup cũ."""
-    now = timezone.now()
-    raw = (request.GET.get('cursor') or '').strip()
-    since = parse_datetime(raw) if raw else None
-    if since is not None and timezone.is_naive(since):
-        since = timezone.make_aware(since)
-    unread = Notification.objects.filter(user=request.user, is_read=False).count()
-    if since is None:
-        resp = JsonResponse({'events': [], 'cursor': now.isoformat(), 'unread_count': unread})
-        resp['Cache-Control'] = 'no-store'
-        return resp
-    since = max(since, now - timedelta(seconds=EVENTS_MAX_BACKLOG_SECONDS))
-
-    rows = list(Notification.objects.filter(user=request.user, created_at__gt=since)
-                .order_by('created_at')[:EVENTS_BATCH])
-    cursor = rows[-1].created_at if rows else since
-    events = [{
-        'id': str(n.id), 'type': n.type, 'title': n.title, 'message': n.message, 'severity': n.severity,
-        'device_id': str(n.device_id) if n.device_id else None, 'created_at': n.created_at.isoformat(),
-    } for n in rows]
-    resp = JsonResponse({'events': events, 'cursor': cursor.isoformat(), 'unread_count': unread})
-    resp['Cache-Control'] = 'no-store'
-    return resp
-
-
 # ====================== LIVE: XEM TRỰC TIẾP TÌNH TRẠNG KHOÁ (poll JSON 2s/lần) ======================
 # (trước đây là smartlock/live.py)
 def _device_or_404(request, device_id):
@@ -1786,4 +1734,3 @@ def _device_or_404(request, device_id):
 @auth_required
 def live_page(request, device_id):
     return render(request, 'account/live.html', {'device': _device_or_404(request, device_id)})
-

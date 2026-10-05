@@ -1,6 +1,5 @@
 from django.urls import path
 from . import views
-from .api.webhooks import mqtt as mqtt_webhooks
 
 app_name = 'smartlock'
 
@@ -8,27 +7,25 @@ urlpatterns = [
     # ====================== USER ROUTES (User thường) ======================
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_view, name='login'),                    # User thường
+    path('logout/', views.logout_view, name='logout'),
     path('register/', views.register, name='register'),
+    path('verify-email/resend/', views.resend_verification, name='resend_verification'),
     path('verify-email/<uuid:token>/', views.verify_email, name='verify_email'),
     path('password-reset/', views.password_reset_request, name='password_reset'),
     path('reset-password/<uidb64>/<token>/', views.reset_password, name='reset_password_confirm'),
 
     path('devices/', views.devices_list, name='devices-list'),
     path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
-    path('devices/add/', views.device_add, name='device-add'),         # ĐÃ ĐÓNG: chuyển sang device-claim (chỉ admin tạo khoá)
     path('devices/claim/', views.device_claim, name='device-claim'),   # user tự thêm khoá bằng code + secret
-    path('devices/<uuid:device_id>/ble-ticket/', views.device_ble_ticket, name='device-ble-ticket'),   # app: vé Bluetooth
-    path('devices/<uuid:device_id>/nfc-ticket/', views.device_nfc_ticket, name='device-nfc-ticket'),   # app: vé NFC giả lập thẻ
 
     path('devices/<uuid:device_id>/live/', views.live_page, name='device-live'),
 
-    # ====================== SYNC: cache mã hoá về máy sau login ======================
-    path('api/sync/', views.sync_bootstrap, name='sync-bootstrap'),
+    # Thao tác dữ liệu (thẻ, đầu đọc, PIN, chia sẻ, thông báo, hồ sơ, bootstrap/cache, poll sự kiện) đã chuyển sang
+    # API dùng chung web/app: /api/v1/... (xem smartlock/api/app/urls.py). Các view ở đây chỉ render trang.
 
-    # ====================== MQTT (server-to-server) - ROUTE CŨ, giữ để cấu hình broker hiện tại không vỡ ======================
-    # Route chính thức: /api/webhooks/mqtt/auth|acl/  (smartlock/api/webhooks). Đổi URL ở broker xong thì xoá 2 dòng dưới.
-    path('api/mqtt/auth/', mqtt_webhooks.mqtt_auth, name='mqtt-auth'),
-    path('api/mqtt/acl/', mqtt_webhooks.mqtt_acl, name='mqtt-acl'),
+    # ====================== MQTT (server-to-server, không phải route cho người dùng) ======================
+    path('api/mqtt/auth/', views.mqtt_auth_webhook, name='mqtt-auth'),
+    path('api/mqtt/acl/', views.mqtt_acl_webhook, name='mqtt-acl'),
 
     path('nfc/tags/', views.nfc_tags, name='nfc-tags'),
     path('nfc/reader/', views.nfc_reader, name='nfc-reader'),
@@ -40,7 +37,6 @@ urlpatterns = [
     path('shares/', views.shares_manage, name='shares'),
 
     path('notifications/', views.notifications_list, name='notifications'),
-    path('api/events/', views.events_poll, name='events'),          # popup trong trang (poll)
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
 

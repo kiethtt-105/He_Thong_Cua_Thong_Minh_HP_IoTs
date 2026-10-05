@@ -50,10 +50,8 @@ Thông báo
         <a href="?" class="btn btn-sm {% if not only_unread %}btn-primary{% else %}btn-outline-primary{% endif %}">Tất cả</a>
         <a href="?filter=unread" class="btn btn-sm {% if only_unread %}btn-primary{% else %}btn-outline-primary{% endif %}">Chưa đọc ({{ unread_count }})</a>
     </div>
-    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="mark_all">
-        <button class="btn btn-sm btn-outline-success" {% if not unread_count %}disabled{% endif %}><i class="fa-solid fa-check-double me-1"></i>Đọc tất cả</button></form>
-    <form method="post" onsubmit="return confirm('Xóa tất cả thông báo đã đọc?')">{% csrf_token %}<input type="hidden" name="action" value="delete_all_read">
-        <button class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-trash me-1"></i>Xóa đã đọc</button></form>
+    <button type="button" class="btn btn-sm btn-outline-success" data-api-url="{% url 'smartlock_api:notifications-read' %}" data-api-body='{"all": true}' data-after="reload" data-success="Đã đánh dấu đã đọc." {% if not unread_count %}disabled{% endif %}><i class="fa-solid fa-check-double me-1"></i>Đọc tất cả</button>
+    <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:notifications' %}" data-api-method="DELETE" data-confirm="Xóa tất cả thông báo đã đọc?" data-after="reload" data-success="Đã xóa thông báo đã đọc."><i class="fa-solid fa-trash me-1"></i>Xóa đã đọc</button>
 </div>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
@@ -197,8 +195,7 @@ Thông báo
         <div class="card mb-3">
             <div class="card-header"><i class="fa-solid fa-id-card me-2 text-primary"></i>Thông tin tài khoản</div>
             <div class="card-body">
-                <form method="post">
-                    {% csrf_token %}<input type="hidden" name="action" value="update_info">
+                <form data-api-url="{% url 'smartlock_api:me' %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật thông tin cá nhân.">
                     <div class="row g-3">
                         <div class="col-md-6"><label class="form-label">Email</label>
                             <input class="form-control" value="{{ user.email }}" disabled>
@@ -215,8 +212,7 @@ Thông báo
         <div class="card">
             <div class="card-header"><i class="fa-solid fa-key me-2 text-primary"></i>Đổi mật khẩu</div>
             <div class="card-body">
-                <form method="post">
-                    {% csrf_token %}<input type="hidden" name="action" value="change_password">
+                <form data-api-url="{% url 'smartlock_api:change-password' %}" data-api-method="POST" data-after="reload" data-success="Đã đổi mật khẩu.">
                     <div class="row g-3">
                         <div class="col-12"><label class="form-label">Mật khẩu hiện tại</label><input type="password" name="old_password" class="form-control" required autocomplete="current-password"></div>
                         <div class="col-md-6"><label class="form-label">Mật khẩu mới</label><input type="password" name="new_password1" class="form-control" required autocomplete="new-password"></div>
@@ -447,8 +443,7 @@ document.addEventListener('DOMContentLoaded', function () {
             </div>
         </div>
         {% if not n.is_read %}
-        <form method="post">{% csrf_token %}<input type="hidden" name="action" value="mark_read"><input type="hidden" name="id" value="{{ n.id }}">
-            <button class="btn btn-sm btn-outline-secondary text-nowrap">Đã đọc</button></form>
+        <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-api-url="{% url 'smartlock_api:notifications-read' %}" data-api-body='{"ids": ["{{ n.id }}"]}' data-after="reload" data-success="Đã đánh dấu đã đọc.">Đã đọc</button>
         {% endif %}
     </div>
     {% empty %}

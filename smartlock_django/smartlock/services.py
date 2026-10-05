@@ -1217,6 +1217,10 @@ def issue_ble_ticket(device, user, ttl: int = TICKET_TTL_SECONDS):
     return issue_phone_ticket(device, user, 'ble', ttl)
 
 
+def parse_ble_ticket(device, ticket: str):
+    return parse_phone_ticket(device, ticket, 'ble')
+
+
 def _record_phone_unlock(device, kind, ticket='', ok=True, reason=None, at=None) -> AccessEvent:
     """Thiết bị báo 1 lượt mở/từ chối qua điện thoại (cửa đã xử lý tại chỗ, server chỉ ghi log).
     `at` = unix giây lúc xảy ra (sự kiện offline đến trễ)."""
@@ -1258,6 +1262,11 @@ def record_nfc_phone_unlock(device, ticket: str = '', ok: bool = True, reason=No
 # 5. ONLINE / OFFLINE CỦA THIẾT BỊ   (đã BỎ rule engine tự động hoá)
 # ============================================================================
 OFFLINE_AFTER_SECONDS = 180      # không nhận status > 3 phút -> coi là offline
+
+
+def evaluate_device_status(device, status_log) -> int:
+    """Đã bỏ tự động hoá. Hàm rỗng chỉ để subscriber cũ chưa sửa không bị lỗi - hãy XOÁ lời gọi này."""
+    return 0
 
 
 def mark_offline_devices() -> int:
@@ -1522,3 +1531,11 @@ def visible_logs(user):
     """Log user được phép xem: mình làm, mình là đối tượng (bị admin/người khác tác động,
     bị đăng nhập sai...), hoặc xảy ra trên thiết bị của mình. Dùng chung cho web + API."""
     return AuditLog.objects.filter(Q(actor_user=user) | Q(target_user=user) | Q(device__owner=user))
+
+
+def revoke_mobile_sessions(user) -> int:
+    """Thu hồi mọi phiên app còn hiệu lực của user (và xoá fcm_token để ngừng push). Trả về số phiên.
+    Dùng chung cho web (đổi/đặt lại mật khẩu), manage_sys và API."""
+    from .models import MobileSession
+    return MobileSession.objects.filter(user=user, revoked_at__isnull=True).update(
+        revoked_at=timezone.now(), fcm_token='')

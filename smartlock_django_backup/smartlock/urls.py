@@ -16,15 +16,12 @@ urlpatterns = [
 
     path('devices/', views.devices_list, name='devices-list'),
     path('devices/<uuid:device_id>/', views.device_detail, name='device-detail'),
-    path('devices/add/', views.device_add, name='device-add'),         # ĐÃ ĐÓNG: chuyển sang device-claim (chỉ admin tạo khoá)
     path('devices/claim/', views.device_claim, name='device-claim'),   # user tự thêm khoá bằng code + secret
-    path('devices/<uuid:device_id>/ble-ticket/', views.device_ble_ticket, name='device-ble-ticket'),   # app: vé Bluetooth
-    path('devices/<uuid:device_id>/nfc-ticket/', views.device_nfc_ticket, name='device-nfc-ticket'),   # app: vé NFC giả lập thẻ
 
     path('devices/<uuid:device_id>/live/', views.live_page, name='device-live'),
 
-    # ====================== SYNC: cache mã hoá về máy sau login ======================
-    path('api/sync/', views.sync_bootstrap, name='sync-bootstrap'),
+    # Thao tác dữ liệu (thẻ, đầu đọc, PIN, chia sẻ, thông báo, hồ sơ, bootstrap/cache, poll sự kiện) đã chuyển sang
+    # API dùng chung web/app: /api/v1/... (xem smartlock/api/app/urls.py). Các view ở đây chỉ render trang.
 
     # ====================== MQTT (server-to-server, không phải route cho người dùng) ======================
     path('api/mqtt/auth/', views.mqtt_auth_webhook, name='mqtt-auth'),
@@ -40,7 +37,6 @@ urlpatterns = [
     path('shares/', views.shares_manage, name='shares'),
 
     path('notifications/', views.notifications_list, name='notifications'),
-    path('api/events/', views.events_poll, name='events'),          # popup trong trang (poll)
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
 

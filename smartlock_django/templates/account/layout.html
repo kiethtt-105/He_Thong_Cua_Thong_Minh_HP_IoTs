@@ -448,7 +448,8 @@
                     <small class="text-truncate d-block">{{ user.email }}</small>
                 </div>
             </div>
-            <form class="mb-0" data-api-url="{% url 'smartlock_api:logout' %}" data-api-method="POST" data-after="{% url 'smartlock:login' %}" data-success="Đã đăng xuất.">
+            <form method="post" action="{% url 'smartlock:logout' %}" class="mb-0">
+                {% csrf_token %}
                 <button class="sb-logout"><i class="fa-solid fa-right-from-bracket me-2"></i>Đăng xuất</button>
             </form>
         </div>
@@ -498,7 +499,7 @@
         el.addEventListener('hidden.bs.toast', () => el.remove());
         new bootstrap.Toast(el, { delay: 4000 }).show();
     }
-    /* ====================== SL: gọi API dùng chung (/api/app/...) bằng cookie + CSRF ======================
+    /* ====================== SL: gọi API dùng chung (/api/v1/...) bằng cookie + CSRF ======================
        SL.api(method, url, body)  -> {ok, status, data}   (data.ok / data.error.message theo chuẩn API)
        Nút/form khai báo bằng thuộc tính, không cần viết JS riêng:
          data-api-url, data-api-method (mặc định POST), data-api-body (JSON, chỉ cho nút), data-confirm,
@@ -522,7 +523,11 @@
             const out = {};
             Array.from(form.elements).forEach(el => {
                 if (!el.name || el.disabled) return;
-                if (el.type === 'checkbox') out[el.name] = el.checked;
+                if (el.type === 'checkbox') {
+                    // nhóm checkbox có thuộc tính value (vd. danh sách quyền) -> mảng giá trị đã tích; còn lại -> true/false
+                    if (el.hasAttribute('value')) { out[el.name] = out[el.name] || []; if (el.checked) out[el.name].push(el.value); }
+                    else out[el.name] = el.checked;
+                }
                 else if (el.type === 'radio') { if (el.checked) out[el.name] = el.value; }
                 else if (el.type !== 'submit' && el.type !== 'button') out[el.name] = el.value;
             });
@@ -560,7 +565,7 @@
     async function sendCommand(url, command, label) {
         if (!confirm('Xác nhận ' + label + '?')) return;
         try {
-            // API dùng chung với app: /api/app/devices/<id>/commands/ (web xác thực bằng cookie + X-CSRFToken)
+            // API dùng chung với app: /api/v1/devices/<id>/commands/ (web xác thực bằng cookie + X-CSRFToken)
             const r = await fetch(url, {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -659,7 +664,7 @@
 
         async function refresh() {
             try {
-                const r = await fetch("{% url 'smartlock:sync-bootstrap' %}", { credentials: 'same-origin' });
+                const r = await fetch("{% url 'smartlock_api:bootstrap' %}", { credentials: 'same-origin' });
                 if (!r.ok) return;
                 const bundle = await r.json();
                 await store('bootstrap', bundle);
@@ -676,7 +681,7 @@
             getBootstrap: () => load('bootstrap'),
             clear: () => { try { indexedDB.deleteDatabase(DB_NAME); } catch (e) {} },
         };
-        document.querySelectorAll('form[data-api-url*="auth/logout"]').forEach(f => {
+        document.querySelectorAll('form[action*="logout"]').forEach(f => {
             f.addEventListener('submit', () => window.SmartlockCache.clear());
         });
     })();

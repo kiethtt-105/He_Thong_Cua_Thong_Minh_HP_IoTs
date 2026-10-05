@@ -61,7 +61,6 @@
 {% if page == 'devices_list' %}
 <div class="d-flex gap-2">
     <a href="{% url 'smartlock:device-claim' %}" class="btn btn-outline-primary"><i class="fa-solid fa-link me-2"></i>Thêm bằng mã</a>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addDevice"><i class="fa-solid fa-plus me-2"></i>Thiết bị mới</button>
 </div>
 {% elif page == 'device_detail' %}
 <a href="{% url 'smartlock:devices-list' %}" class="btn btn-outline-secondary"><i class="fa-solid fa-arrow-left me-2"></i>Danh sách</a>
@@ -129,26 +128,12 @@
     <div class="col-12"><div class="card"><div class="empty-state">
         <div class="ei"><i class="fa-solid fa-plug-circle-plus"></i></div>
         <h6>Bạn chưa có thiết bị nào</h6>
-        <div class="mb-3">Tạo thiết bị mô phỏng, hoặc thêm khóa thật bằng device code.</div>
-        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addDevice"><i class="fa-solid fa-plus me-1"></i>Thiết bị mới</button>
+        <div class="mb-3">Thêm khóa bằng device code + secret do quản trị viên cấp.</div>
         <a href="{% url 'smartlock:device-claim' %}" class="btn btn-outline-primary btn-sm ms-1"><i class="fa-solid fa-link me-1"></i>Thêm bằng mã</a>
     </div></div></div>
     {% endfor %}
     <div class="col-12 d-none" id="devNone"><div class="card"><div class="empty-state py-4"><div>Không có thiết bị nào khớp bộ lọc.</div></div></div></div>
 </div>
-
-<div class="modal fade" id="addDevice" tabindex="-1"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">
-    <form method="post" action="{% url 'smartlock:device-add' %}">
-        {% csrf_token %}
-        <div class="modal-header"><h5 class="modal-title">Thiết bị mới</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-        <div class="modal-body">
-            <div class="alert alert-info small mb-3"><i class="fa-solid fa-circle-info me-1"></i>Mã thiết bị và <strong>provisioning secret</strong> được sinh tự động. Secret chỉ hiển thị <strong>một lần</strong> sau khi tạo — hãy lưu lại.</div>
-            <label class="form-label">Tên hiển thị</label>
-            <input type="text" name="name" class="form-control" required maxlength="100" placeholder="VD: Cửa chính">
-        </div>
-        <div class="modal-footer"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Hủy</button><button class="btn btn-primary">Tạo thiết bị</button></div>
-    </form>
-</div></div></div>
 
 {# ===================== CHI TIẾT ===================== #}
 {% elif page == 'device_detail' %}
@@ -275,20 +260,6 @@
         {% endif %}
     </div>
 </div>
-
-{# ===================== THÊM THIẾT BỊ ===================== #}
-{% elif page == 'device_add' %}
-<div class="row"><div class="col-lg-6">
-    <div class="card"><div class="card-body">
-        <form method="post" action="{% url 'smartlock:device-add' %}">
-            {% csrf_token %}
-            <label class="form-label">Tên thiết bị</label>
-            <input type="text" name="name" maxlength="100" class="form-control mb-3" placeholder="VD: Cửa chính" required autofocus>
-            <div class="alert alert-info small"><i class="fa-solid fa-circle-info me-1"></i>Provisioning secret chỉ hiển thị <strong>một lần</strong> sau khi tạo, hãy lưu lại để cấu hình khóa.</div>
-            <button class="btn btn-primary"><i class="fa-solid fa-plus me-2"></i>Tạo thiết bị</button>
-        </form>
-    </div></div>
-</div></div>
 
 {# ===================== THÊM BẰNG MÃ ===================== #}
 {% elif page == 'device_claim' %}
