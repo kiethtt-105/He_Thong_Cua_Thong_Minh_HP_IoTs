@@ -1,1 +1,1 @@
-"""REST API v1: common/ (dùng chung) · app/ (cho app di động) · lock/ (cho khoá)."""
+"""REST API: common/ (lõi) · app/ (app + web) · device/ (thiết bị) · webhooks/ (broker) · system/ (công khai)."""

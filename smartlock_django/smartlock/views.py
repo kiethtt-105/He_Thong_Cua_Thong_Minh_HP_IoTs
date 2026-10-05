@@ -158,7 +158,7 @@ def _page(request, queryset):
     return Paginator(queryset, PAGE_SIZE).get_page(request.GET.get('page'))
 
 # ====================== AUTH ======================
-# ====================== TRANG XÁC THỰC: chỉ render khung, mọi thao tác gọi /api/v1/auth/... bằng JS ======================
+# ====================== TRANG XÁC THỰC: chỉ render khung, mọi thao tác gọi /api/app/auth/... bằng JS ======================
 def _safe_next(request):
     nxt = request.GET.get('next') or ''
     ok = nxt and url_has_allowed_host_and_scheme(nxt, {request.get_host()}, require_https=request.is_secure())
@@ -178,7 +178,7 @@ def register(request):
 
 
 def verify_email(request, token):
-    """Link trong email: trang tự POST token tới /api/v1/auth/verify-email/."""
+    """Link trong email: trang tự POST token tới /api/app/auth/verify-email/."""
     return _render(request, 'verify_email', {'token': str(token)})
 
 
@@ -270,114 +270,8 @@ def devices_list(request):
 
 
 
-def _mqtt_webhook_authorized(request) -> bool:
-    """Broker phải gửi header X-Webhook-Secret khớp settings.MQTT_WEBHOOK_SECRET.
-    Chưa cấu hình secret: chỉ bỏ qua kiểm tra khi DEBUG, còn lại từ chối (fail-closed)."""
-    secret = getattr(dj_settings, 'MQTT_WEBHOOK_SECRET', None)
-    if not secret:
-        # Fail-closed: chỉ cho qua khi DEBUG (dev/test). Production thiếu secret -> từ chối.
-        if dj_settings.DEBUG:
-            logger.warning('MQTT_WEBHOOK_SECRET chưa được đặt: webhook MQTT không được bảo vệ (DEBUG).')
-            return True
-        logger.error('MQTT_WEBHOOK_SECRET chưa được đặt: từ chối mọi webhook MQTT.')
-        return False
-    return hmac.compare_digest(str(request.META.get('HTTP_X_WEBHOOK_SECRET', '')), str(secret))
-
-
-# ====================== MQTT: WEBHOOK XÁC THỰC THIẾT BỊ (gọi bởi plugin auth của broker) ======================
-@csrf_exempt
-@require_POST
-def mqtt_auth_webhook(request):
-    """
-    Endpoint cho plugin HTTP-auth của broker (vd. mosquitto-go-auth) gọi vào để kiểm
-    tra 1 thiết bị có được phép kết nối/publish/subscribe hay không.
-
-    Thiết bị connect vào broker với username=device_code, password=provisioning_secret
-    (secret gốc thiết bị đã lưu lúc provisioning - KHÔNG lưu thêm secret riêng cho MQTT,
-    tái dùng đúng Device.provisioning_secret_hash đã có).
-
-    Trả 200 = cho phép, 401/403 = từ chối. KHÔNG dùng @auth_required (đây không phải
-    người dùng đăng nhập) và bỏ qua CSRF (broker gọi server-to-server, không có session).
-    Cần chặn endpoint này ở tầng mạng/tường lửa chỉ cho phép broker gọi vào, không public.
-    """
-    if not _mqtt_webhook_authorized(request):
-        return JsonResponse({'ok': False}, status=403)
-    username = (request.POST.get('username') or '').strip()
-    password = request.POST.get('password') or ''
-    if not username or not password:
-        return JsonResponse({'ok': False}, status=401)
-
-    # Tài khoản server (publisher/subscriber của Django): so với MQTT_PUBLISHER_PASSWORD.
-    if username in getattr(dj_settings, 'MQTT_TRUSTED_USERNAMES', []):
-        expected = services.MQTT_PUBLISHER_PASSWORD
-        if expected and hmac.compare_digest(password, expected):
-            return JsonResponse({'ok': True})
-        _audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
-               username_attempt=username[:150])
-        return JsonResponse({'ok': False}, status=401)
-
-    device = Device.objects.filter(device_code=username).first()
-    if not device or not hmac.compare_digest(device.provisioning_secret_hash, _hash_token(password)):
-        _audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
-               username_attempt=username[:150])
-        return JsonResponse({'ok': False}, status=401)
-
-    return JsonResponse({'ok': True})
-
-
-@csrf_exempt
-@require_POST
-def mqtt_acl_webhook(request):
-    """ACL cho broker (mosquitto-go-auth: acc 1=read, 2=write, 3=readwrite, 4=subscribe).
-    Thiết bị chỉ được: đọc/subscribe smartlock/<device_code>/cmd và ghi vào
-    smartlock/<device_code>/{status,ack,event}. Không được đụng topic của thiết bị khác.
-    Các tài khoản tin cậy (publisher/subscriber của server) khai báo trong MQTT_TRUSTED_USERNAMES."""
-    if not _mqtt_webhook_authorized(request):
-        return JsonResponse({'ok': False}, status=403)
-    username = (request.POST.get('username') or '').strip()
-    topic = (request.POST.get('topic') or '').strip()
-    try:
-        acc = int(request.POST.get('acc') or 0)
-    except ValueError:
-        acc = 0
-    if not username or not topic:
-        return JsonResponse({'ok': False}, status=403)
-
-    if username in getattr(dj_settings, 'MQTT_TRUSTED_USERNAMES', []):
-        return JsonResponse({'ok': True})
-
-    if not Device.objects.filter(device_code=username).exists():
-        return JsonResponse({'ok': False}, status=403)
-
-    parts = topic.split('/')
-    if len(parts) != 3 or parts[0] != 'smartlock' or parts[1] != username:
-        return JsonResponse({'ok': False}, status=403)
-    channel = parts[2]
-    can_read = acc in (1, 3, 4) and channel == 'cmd'
-    can_write = acc in (2, 3) and channel in ('status', 'ack', 'event')
-    if (acc in (1, 4) and can_read) or (acc == 2 and can_write):
-        return JsonResponse({'ok': True})
-    return JsonResponse({'ok': False}, status=403)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# ====================== MQTT webhook đã chuyển sang smartlock/api/webhooks/mqtt.py ======================
+# (route cũ /api/mqtt/auth|acl/ vẫn còn trong urls.py trỏ tới module mới; route chính thức: /api/webhooks/mqtt/...)
 
 
 @auth_required
@@ -1319,7 +1213,7 @@ def two_factor_context(request, user):
 # Mọi nhánh (kể cả từ chối/lỗi) đều ghi AuditLog.
 @auth_required
 def device_claim(request):
-    """Trang nhập mã thiết bị + secret. Việc thêm khoá do form gọi API: POST /api/v1/devices/claim/."""
+    """Trang nhập mã thiết bị + secret. Việc thêm khoá do form gọi API: POST /api/app/devices/claim/."""
     return _render(request, 'device_claim')
 
 

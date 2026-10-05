@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from .api.webhooks import mqtt as mqtt_webhooks
 
 app_name = 'smartlock'
 
@@ -24,9 +25,10 @@ urlpatterns = [
     # ====================== SYNC: cache mã hoá về máy sau login ======================
     path('api/sync/', views.sync_bootstrap, name='sync-bootstrap'),
 
-    # ====================== MQTT (server-to-server, không phải route cho người dùng) ======================
-    path('api/mqtt/auth/', views.mqtt_auth_webhook, name='mqtt-auth'),
-    path('api/mqtt/acl/', views.mqtt_acl_webhook, name='mqtt-acl'),
+    # ====================== MQTT (server-to-server) - ROUTE CŨ, giữ để cấu hình broker hiện tại không vỡ ======================
+    # Route chính thức: /api/webhooks/mqtt/auth|acl/  (smartlock/api/webhooks). Đổi URL ở broker xong thì xoá 2 dòng dưới.
+    path('api/mqtt/auth/', mqtt_webhooks.mqtt_auth, name='mqtt-auth'),
+    path('api/mqtt/acl/', mqtt_webhooks.mqtt_acl, name='mqtt-acl'),
 
     path('nfc/tags/', views.nfc_tags, name='nfc-tags'),
     path('nfc/reader/', views.nfc_reader, name='nfc-reader'),

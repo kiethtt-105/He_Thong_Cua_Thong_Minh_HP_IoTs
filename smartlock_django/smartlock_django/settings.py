@@ -378,14 +378,14 @@ if not DEBUG and SECURE_COOKIES:
     SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 60 * 60 * 24 * 30)   # 30 ngày
     SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
     SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)   # Vercel đã tự redirect; bật nếu tự host
-    SECURE_REDIRECT_EXEMPT = [r"api/mqtt/"]   # broker gọi webhook server-to-server, không bị 301
+    SECURE_REDIRECT_EXEMPT = [r"api/mqtt/", r"api/webhooks/"]   # broker gọi webhook server-to-server, không bị 301
     SECURE_REFERRER_POLICY = "same-origin"
 
 
-# ==================== API v1 (dùng chung APP + WEB) ====================
+# ==================== API (api/app dùng chung APP + WEB) ====================
 # API viết bằng Django thuần (smartlock/api/), KHÔNG dùng Django REST Framework.
 #   * App (Android/iOS): Authorization: Bearer <access_token>
-#   * Web: session cookie + header X-CSRFToken (lấy bằng GET /api/v1/auth/csrf/)
+#   * Web: session cookie + header X-CSRFToken (lấy bằng GET /api/app/auth/csrf/)
 # Khối REST_FRAMEWORK cũ trỏ tới smartlock.api.mobile_auth, api_exception_handler, StandardPagination
 # (các module này không còn tồn tại) nên đã được gỡ.
 

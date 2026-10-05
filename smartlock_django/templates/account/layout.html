@@ -498,7 +498,7 @@
         el.addEventListener('hidden.bs.toast', () => el.remove());
         new bootstrap.Toast(el, { delay: 4000 }).show();
     }
-    /* ====================== SL: gọi API dùng chung (/api/v1/...) bằng cookie + CSRF ======================
+    /* ====================== SL: gọi API dùng chung (/api/app/...) bằng cookie + CSRF ======================
        SL.api(method, url, body)  -> {ok, status, data}   (data.ok / data.error.message theo chuẩn API)
        Nút/form khai báo bằng thuộc tính, không cần viết JS riêng:
          data-api-url, data-api-method (mặc định POST), data-api-body (JSON, chỉ cho nút), data-confirm,
@@ -560,7 +560,7 @@
     async function sendCommand(url, command, label) {
         if (!confirm('Xác nhận ' + label + '?')) return;
         try {
-            // API dùng chung với app: /api/v1/devices/<id>/commands/ (web xác thực bằng cookie + X-CSRFToken)
+            // API dùng chung với app: /api/app/devices/<id>/commands/ (web xác thực bằng cookie + X-CSRFToken)
             const r = await fetch(url, {
                 method: 'POST',
                 credentials: 'same-origin',

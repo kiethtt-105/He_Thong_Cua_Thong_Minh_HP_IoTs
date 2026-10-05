@@ -1,6 +1,6 @@
 {# Đăng ký khuôn mặt bằng QUÉT CAMERA. Thay toàn bộ form cũ có ô "embedding_json" bằng:
    {% include "account/_face_enroll.html" %}
-   Cần trong context: device, face_enroll_url (API /api/v1/devices/<id>/faces/), face_min_frames (view face_profiles đã truyền).
+   Cần trong context: device, face_enroll_url (API /api/app/devices/<id>/faces/), face_min_frames (view face_profiles đã truyền).
    Ảnh chỉ xử lý trong trình duyệt; chỉ vector 128 số (đã trung bình ở server) được lưu, mã hoá Fernet. #}
 <div id="fe-root" data-url="{{ face_enroll_url }}" data-device="{{ device.id }}" data-frames="5">
   {% csrf_token %}

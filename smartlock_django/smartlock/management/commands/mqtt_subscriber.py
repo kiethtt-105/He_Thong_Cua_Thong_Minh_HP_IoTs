@@ -3,7 +3,7 @@
 
 Chạy:  python manage.py mqtt_subscriber        (chạy 1 tiến trình duy nhất)
 
-Topic (khớp ACL trong views.mqtt_acl_webhook):
+Topic (khớp ACL trong api/webhooks/mqtt.py (mqtt_acl)):
   smartlock/<device_code>/status   thiết bị -> server   trạng thái định kỳ + LWT
   smartlock/<device_code>/ack      thiết bị -> server   kết quả lệnh
   smartlock/<device_code>/event    thiết bị -> server   quẹt thẻ / nhập PIN / mặt / BLE / NFC

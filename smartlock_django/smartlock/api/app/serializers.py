@@ -58,3 +58,7 @@ def session_json(m, current_id) -> dict:
         'expires_at': iso(m.expires_at), 'push_enabled': m.push_enabled, 'has_push_token': bool(m.fcm_token),
         'is_current': m.id == current_id,
     }
+
+
+def announcement_json(a) -> dict:
+    return {'id': str(a.id), 'title': a.title, 'body': a.body, 'level': a.level, 'created_at': iso(a.created_at)}
