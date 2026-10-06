@@ -1,22 +1,148 @@
-"""Phiên đăng nhập dùng chung cho APP và WEB.
-
-APP : access token (15 phút) + refresh token xoay vòng (MobileSession), challenge 2FA, FCM token.
-WEB : session cookie của Django + header X-CSRFToken (đăng nhập bằng web_login).
-"""
+"""Lõi dùng chung cho API app + API khoá (phản hồi JSON, decorator, token, phiên đăng nhập)."""
+import json
+import logging
 import secrets
 from datetime import timedelta
+from functools import wraps
 
 from django.contrib.auth import login as django_login
 from django.core import signing
+from django.core.paginator import EmptyPage, Paginator
 from django.db import transaction
+from django.http import JsonResponse
 from django.middleware.csrf import CsrfViewMiddleware
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 
 from smartlock import services
 from smartlock.models import MobileSession
 
-from .http import ApiError, iso, s
 
+# ======================================================================
+# http.py - Phản hồi JSON chuẩn (ok/fail/ApiError) + đọc/kiểm tra dữ liệu vào + phân trang.
+# ======================================================================
+
+MAX_BODY_BYTES = 256 * 1024
+
+
+class ApiError(Exception):
+    def __init__(self, code, message, status=400, **extra):
+        super().__init__(message)
+        self.code, self.message, self.status, self.extra = code, message, status, extra
+
+
+def ok(data=None, status=200, **extra):
+    resp = JsonResponse({'ok': True, **(data or {}), **extra}, status=status)
+    resp['Cache-Control'] = 'no-store'
+    return resp
+
+
+def fail(code, message, status=400, **extra):
+    resp = JsonResponse({'ok': False, 'error': {'code': code, 'message': message, **extra}}, status=status)
+    resp['Cache-Control'] = 'no-store'
+    return resp
+
+
+def read_json(request) -> dict:
+    if len(request.body) > MAX_BODY_BYTES:
+        raise ApiError('PAYLOAD_TOO_LARGE', 'Dữ liệu gửi lên quá lớn.', 413)
+    if not request.body:
+        return {}
+    try:
+        data = json.loads(request.body.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        raise ApiError('BAD_JSON', 'Nội dung phải là JSON hợp lệ (UTF-8).', 400)
+    if not isinstance(data, dict):
+        raise ApiError('BAD_JSON', 'Nội dung JSON phải là một object.', 400)
+    return data
+
+
+def s(data, key, max_len=255, required=False) -> str:
+    """Lấy chuỗi đã strip + cắt độ dài."""
+    val = data.get(key)
+    val = '' if val is None else str(val).strip()
+    if required and not val:
+        raise ApiError('MISSING_FIELD', f'Thiếu trường "{key}".', 400, field=key)
+    return val[:max_len]
+
+
+def uuid_or_404(value):
+    u = services.parse_uuid(value)
+    if not u:
+        raise ApiError('NOT_FOUND', 'Không tìm thấy dữ liệu.', 404)
+    return u
+
+
+def parse_iso(value, field='expires_at'):
+    """Chấp nhận ISO-8601 (có/không múi giờ; không múi giờ = giờ máy chủ). Rỗng -> None."""
+    if value in (None, ''):
+        return None
+    from django.utils.dateparse import parse_datetime
+    dt = parse_datetime(str(value))
+    if dt is None:
+        raise ApiError('BAD_DATETIME', f'"{field}" phải theo định dạng ISO-8601 (vd 2026-10-05T18:00:00+07:00).',
+                       400, field=field)
+    if timezone.is_naive(dt):
+        dt = timezone.make_aware(dt)
+    return dt
+
+
+def paginate(request, queryset, serializer, default_size=20, max_size=100) -> dict:
+    try:
+        page = max(1, int(request.GET.get('page') or 1))
+        size = max(1, min(max_size, int(request.GET.get('page_size') or default_size)))
+    except ValueError:
+        raise ApiError('BAD_PAGINATION', 'page / page_size phải là số nguyên.', 400)
+    paginator = Paginator(queryset, size)
+    try:
+        pg = paginator.page(page)
+    except EmptyPage:
+        return {'items': [], 'page': page, 'page_size': size, 'total': paginator.count, 'has_next': False}
+    return {'items': [serializer(o) for o in pg.object_list], 'page': page, 'page_size': size,
+            'total': paginator.count, 'has_next': pg.has_next()}
+
+
+def iso(dt):
+    return dt.isoformat() if dt else None
+
+
+# ======================================================================
+# decorators.py - Decorator @api: kiểm tra method, xác thực, bắt ApiError -> JSON chuẩn.
+# ======================================================================
+
+logger = logging.getLogger('smartlock.api')
+
+
+def api(*methods, auth=True):
+    """Bọc view API: kiểm tra method, xác thực theo `auth` (True | 'any' | False), bắt ApiError -> JSON chuẩn."""
+    allowed = tuple(m.upper() for m in methods)
+
+    def deco(fn):
+        @csrf_exempt
+        @wraps(fn)
+        def wrapper(request, *args, **kwargs):
+            if request.method not in allowed:
+                resp = fail('METHOD_NOT_ALLOWED', 'Phương thức không được hỗ trợ.', 405)
+                resp['Allow'] = ', '.join(allowed)
+                return resp
+            try:
+                if auth == 'any':
+                    authenticate_any(request)
+                elif auth:
+                    authenticate_request(request)
+                return fn(request, *args, **kwargs)
+            except ApiError as exc:
+                return fail(exc.code, exc.message, exc.status, **exc.extra)
+            except Exception:
+                logger.exception('API lỗi không mong đợi: %s %s', request.method, request.path)
+                return fail('SERVER_ERROR', 'Lỗi máy chủ. Vui lòng thử lại sau.', 500)
+        return wrapper
+    return deco
+
+
+# ======================================================================
+# sessions.py - Phiên đăng nhập dùng chung cho APP và WEB.
+# ======================================================================
 
 ACCESS_TTL_SECONDS = 15 * 60
 

@@ -496,7 +496,7 @@
         el.addEventListener('hidden.bs.toast', () => el.remove());
         new bootstrap.Toast(el, { delay: 4000 }).show();
     }
-    /* ====================== SL: gọi API dùng chung (/api/v1/...) bằng cookie + CSRF ======================
+    /* ====================== SL: gọi API dùng chung (/api/app/...) bằng cookie + CSRF ======================
        SL.api(method, url, body)  -> {ok, status, data}   (data.ok / data.error.message theo chuẩn API)
        Nút/form khai báo bằng thuộc tính, không cần viết JS riêng:
          data-api-url, data-api-method (mặc định POST), data-api-body (JSON, chỉ cho nút), data-confirm,
@@ -569,18 +569,10 @@
     });
     async function sendCommand(url, command, label) {
         if (!confirm('Xác nhận ' + label + '?')) return;
-        try {
-            // API dùng chung với app: /api/v1/devices/<id>/commands/ (web xác thực bằng cookie + X-CSRFToken)
-            const r = await fetch(url, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'X-CSRFToken': CSRF, 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                body: JSON.stringify({ command })
-            });
-            const d = await r.json();
-            if (d.ok && window.SmartlockCache) window.SmartlockCache.refresh();
-            showToast(d.ok ? d.message : ((d.error && d.error.message) || 'Không thực hiện được.'), d.ok ? 'success' : 'danger');
-        } catch (e) { showToast('Không thể kết nối máy chủ.', 'danger'); }
+        // API dùng chung với app: POST /api/app/devices/<id>/commands/ (web xác thực bằng cookie + X-CSRFToken)
+        const res = await SL.api('POST', url, { command });
+        if (res.ok && window.SmartlockCache) window.SmartlockCache.refresh();
+        showToast(res.ok ? (res.data.message || 'Đã gửi lệnh.') : SL.errorMessage(res), res.ok ? 'success' : 'danger');
     }
     document.addEventListener('click', e => {
         const b = e.target.closest('.js-cmd');

@@ -1,1 +1,0 @@
-"""Khoá + lệnh điều khiển."""

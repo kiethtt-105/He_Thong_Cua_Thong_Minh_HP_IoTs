@@ -1,12 +1,15 @@
-"""POST /device/access/* - quẹt thẻ / PIN / khuôn mặt / điện thoại: server phán quyết, khoá CHỈ mở khi granted == true."""
+"""API khoá - quẹt thẻ / PIN / khuôn mặt / điện thoại."""
 import math
 import re
 
+from .auth import device_api, need_owner
 from smartlock import services
 from smartlock.api.common import ApiError, ok, read_json, s
 
-from .auth import device_api, need_owner
 
+# ======================================================================
+# access.py - POST /device/access/* - quẹt thẻ / PIN / khuôn mặt / điện thoại: server phán quyết, khoá CHỈ mở khi granted == true.
+# ======================================================================
 
 def _verdict(event, device):
     return ok({'granted': bool(event.success), 'reason': event.reason or None,

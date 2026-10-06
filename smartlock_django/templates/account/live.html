@@ -1,5 +1,5 @@
 <!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Live · {{ device.name }}</title>
+<title>Live</title>
 <style>
 body{margin:0;font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:20px}
 .card{background:#1e293b;border-radius:14px;padding:18px;margin-bottom:14px;max-width:640px}
@@ -8,7 +8,7 @@ h1{margin:0 0 4px;font-size:20px}.big{font-size:44px;font-weight:700;margin:6px 
 .row{display:flex;gap:18px;flex-wrap:wrap}.row div{min-width:110px}
 li{margin:4px 0;font-size:14px}ul{padding-left:18px;margin:6px 0 0}
 </style></head><body>
-<div class="card"><h1>{{ device.name }}</h1><div class="mut">{{ device.device_code }}</div>
+<div class="card"><h1 id="dname">…</h1><div class="mut" id="dcode"></div>
 <div class="big" id="state">…</div>
 <div class="row"><div>Kết nối<br><b id="conn">…</b></div><div>Pin<br><b id="bat">…</b></div>
 <div>Phá khoá<br><b id="tam">…</b></div><div>Khoá tạm<br><b id="lo">…</b></div></div>
@@ -20,8 +20,9 @@ const $=id=>document.getElementById(id), T=s=>new Date(s).toLocaleTimeString('vi
 const S={locked:['🔒 ĐÃ KHOÁ','ok'],unlocked:['🔓 ĐANG MỞ','warn'],jammed:['⚠ KẸT','bad'],unknown:['❔ CHƯA RÕ','mut']};
 async function tick(){
   try{
-    const d=await (await fetch("{% url 'smartlock_api:device-live' device.id %}",{credentials:'same-origin'})).json();
+    const d=await (await fetch("{% url 'smartlock_api:device-live' device_id %}",{credentials:'same-origin'})).json();
     if(!d.ok){$('upd').textContent=(d.error&&d.error.message)||'Lỗi tải dữ liệu';return}
+    $('dname').textContent=d.name||'';$('dcode').textContent=d.code||'';document.title='Live · '+(d.name||'');
     const s=S[d.lock_state]||S.unknown;
     $('state').textContent=s[0];$('state').className='big '+s[1];
     $('conn').textContent=d.connected?'Online':'Mất kết nối';$('conn').className=d.connected?'ok':'bad';

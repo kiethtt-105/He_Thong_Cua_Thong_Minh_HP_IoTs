@@ -1,10 +1,10 @@
-{# manage_sys/_ui.html - MỘT file chứa mọi mảnh giao diện dùng lại (trước đây 6 file _*.html).
-   Gọi: {% include 'manage_sys/_ui.html' with part="..." ... %}
+{% comment %} manage_sys/_ui.html - MỘT file chứa mọi mảnh giao diện dùng lại (trước đây 6 file _*.html).
+   Gọi: include 'manage_sys/_ui.html' with part="..." ...
      part="empty_row"   cols text
      part="empty_state" cols icon title [hint]
      part="pager"       (dùng page_obj, qs của trang)
      part="stat"        col href [q] tone icon num [of] label [active] [sm]
-   (Dấu ✔/✘ và nút Lọc/Xóa lọc được viết thẳng vào trang, không cần include.) #}
+   (Dấu ✔/✘ và nút Lọc/Xóa lọc được viết thẳng vào trang, không cần include.) {% endcomment %}
 {% if part == 'empty_row' %}<tr><td colspan="{{ cols }}" class="text-center text-muted py-3">{{ text }}</td></tr>
 {% elif part == 'empty_state' %}<tr><td colspan="{{ cols }}"><div class="empty-state"><div class="ei"><i class="fa-solid fa-{{ icon }}"></i></div><h6>{{ title }}</h6>{% if hint %}<div class="small">{{ hint }}</div>{% endif %}</div></td></tr>
 {% elif part == 'pager' %}{% if page_obj.paginator.num_pages > 1 %}

@@ -14,20 +14,17 @@ from django.conf import settings as dj_settings
 from django.contrib import messages
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.tokens import default_token_generator
 from django.db.models import Avg, Count, OuterRef, Q, Subquery
 from django.db.models.functions import TruncMinute
 from django.http import Http404, JsonResponse
 from django.shortcuts import redirect, render
 from django.utils import timezone
-from django.utils.encoding import force_str
-from django.utils.http import urlsafe_base64_decode
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
 from . import services
 from .models import (
-    AccessEvent, AuditLog, Device, DeviceCommand, DeviceStatusLog, NfcLog, Notification, User,
+    AuditLog, Device, DeviceCommand, DeviceStatusLog, NfcLog, Notification, User,
 )
 from .services import (
     audit as _audit, is_admin as _is_admin, system_settings as _settings,
@@ -110,14 +107,7 @@ def password_reset_request(request):
 
 
 def reset_password(request, uidb64, token):
-    """Kiểm tra sơ bộ link; việc đặt mật khẩu mới do JS gọi POST /api/app/auth/password-reset/confirm/."""
-    try:
-        user = User.objects.get(pk=force_str(urlsafe_base64_decode(uidb64)))
-    except Exception:
-        user = None
-    if user is None or not user.is_active or not default_token_generator.check_token(user, token):
-        _audit(request, 'PASSWORD_RESET_INVALID', actor=None, success=False, severity='warning', target_user=user)
-        return _render(request, 'reset_password', {'mode': 'expired'})
+    """Link trong email: chỉ hiển thị khung; JS gọi POST /api/app/auth/password-reset/check/ rồi /confirm/."""
     return _render(request, 'reset_password', {'mode': 'confirm', 'uid': uidb64, 'token': token})
 
 
@@ -173,12 +163,12 @@ def door_pins(request):
 
 @auth_required
 def face_profiles(request):
-    return _render(request, 'face_profiles', {'face_min_frames': services.FACE_MIN_FRAMES})
+    return _render(request, 'face_profiles')
 
 
 @auth_required
 def access_events_history(request):
-    return _render(request, 'access_history', {'method_choices': AccessEvent.METHOD_CHOICES})
+    return _render(request, 'access_history')
 
 
 @auth_required
@@ -198,12 +188,8 @@ def audit_logs(request):
 
 @auth_required
 def live_page(request, device_id):
-    """Trang xem trực tiếp (poll API device-live 2s/lần). Quyền truy cập khoá do API kiểm tra."""
-    from django.http import Http404 as _404
-    device = services.accessible_devices(request.user).filter(pk=device_id).first()
-    if not device:
-        raise _404
-    return render(request, 'account/live.html', {'device': device})
+    """Trang xem trực tiếp: chỉ render khung; JS poll API device-live (tên, mã, trạng thái, quyền truy cập do API kiểm tra)."""
+    return render(request, 'account/live.html', {'device_id': str(device_id)})
 
 
 # ====================== MQTT (server-to-server, không phải route cho người dùng) ======================

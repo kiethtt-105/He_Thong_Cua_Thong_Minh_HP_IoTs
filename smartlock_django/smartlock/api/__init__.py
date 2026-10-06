@@ -1,1 +1,6 @@
-"""REST API: common/ (lõi) · app/ (app + web) · device/ (thiết bị) · webhooks/ (broker) · system/ (công khai)."""
+"""API của Smart Lock - 2 nhóm chính:
+
+    app/      APP di động + WEB (Bearer | cookie + CSRF)  -> /api/app/...
+    device/   KHOÁ (firmware) + webhook MQTT + system     -> /api/device/..., /api/webhooks/..., /api/system/...
+    common.py lõi dùng chung (JSON, decorator, token, phiên)
+"""

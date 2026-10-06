@@ -1,12 +1,4 @@
-"""Quản lý 2FA của tôi - /api/app/me/two-factor/...  (thay cho các view tf-* cũ trong views.py)
-
-Dùng chung WEB (session cookie + X-CSRFToken) và APP (Bearer). Riêng passkey chỉ có ý nghĩa trên web
-(cần RP/origin của trình duyệt). 2FA tự bật/tắt theo số phương thức đang có (models.sync_two_fa_flag):
-thêm phương thức đầu tiên -> tự bật; gỡ hết phương thức -> tự tắt. Không còn nút bật/tắt thủ công.
-
-Trạng thái thiết lập TOTP KHÔNG lưu trong session: `setup_token` là token đã ký (django.core.signing), nên app và
-web dùng chung được và không phụ thuộc cookie.
-"""
+"""Cài đặt 2FA (TOTP, email, passkey) - /api/app/me/two-factor/..."""
 import base64
 import io
 import json
@@ -21,13 +13,20 @@ from django.utils import timezone
 from webauthn import generate_registration_options, options_to_json, verify_registration_response
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.structs import (
-    AuthenticatorSelectionCriteria, PublicKeyCredentialDescriptor, ResidentKeyRequirement,
+    AuthenticatorSelectionCriteria,
+    PublicKeyCredentialDescriptor,
+    ResidentKeyRequirement,
     UserVerificationRequirement,
 )
 
 from smartlock import services, twofa
 from smartlock.api.common import api, ApiError, iso, ok, read_json, s
-from smartlock.models import AuditLog, Fido2Credential, TwoFactorConfig, sync_two_fa_flag
+from smartlock.models import AuditLog, Fido2Credential, sync_two_fa_flag, TwoFactorConfig
+
+
+# ======================================================================
+# two_factor.py - Quản lý 2FA của tôi - /api/app/me/two-factor/...  (thay cho các view tf-* cũ trong views.py)
+# ======================================================================
 
 _SETUP_SALT = 'smartlock.api.totp-setup.v1'
 SETUP_TTL_SECONDS = 10 * 60

@@ -1,10 +1,14 @@
-"""GET /system/health/ và GET /system/config/ - công khai, chỉ đọc."""
+"""Route hệ thống công khai - /api/system/health/, /config/"""
 from django.db import connection
 from django.utils import timezone
 
 from smartlock import services
 from smartlock.api.common import api, fail, iso, ok
 
+
+# ======================================================================
+# views.py - GET /system/health/ và GET /system/config/ - công khai, chỉ đọc.
+# ======================================================================
 
 @api('GET', auth=False)
 def health(request):

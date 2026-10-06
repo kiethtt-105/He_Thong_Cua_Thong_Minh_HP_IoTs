@@ -1,9 +1,4 @@
-"""Đăng ký, đăng nhập, 2FA, làm mới token, đăng xuất, quên mật khẩu, xác thực email.
-
-Dùng chung APP và WEB. Đăng nhập gửi thêm `"client": "web"` => server tạo session cookie (kèm csrf_token)
-thay vì access/refresh token; mọi request ghi dữ liệu sau đó của web gửi header X-CSRFToken.
-Lấy CSRF cookie lần đầu bằng GET /api/app/auth/csrf/.
-"""
+"""Xác thực (app + web) - /api/app/auth/..."""
 import json
 import math
 from datetime import timedelta
@@ -17,21 +12,35 @@ from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
-
 from webauthn import generate_authentication_options, options_to_json, verify_authentication_response
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
 
+from .serializers import user_json
 from smartlock import services, twofa
-from smartlock.constants import RESET_NEUTRAL_MSG
 from smartlock.api.common import (
-    api, ApiError, CHALLENGE_TTL_SECONDS, check_csrf, create_session, device_info, make_challenge, ok,
-    read_challenge, read_json, revoke_all_sessions, rotate_refresh, s, web_login,
+    api,
+    ApiError,
+    CHALLENGE_TTL_SECONDS,
+    check_csrf,
+    create_session,
+    device_info,
+    make_challenge,
+    ok,
+    read_challenge,
+    read_json,
+    revoke_all_sessions,
+    rotate_refresh,
+    s,
+    web_login,
 )
+from smartlock.constants import RESET_NEUTRAL_MSG
 from smartlock.models import AuditLog, Fido2Credential, OneTimeCode, User
 
-from ..serializers import user_json
 
+# ======================================================================
+# views.py - Đăng ký, đăng nhập, 2FA, làm mới token, đăng xuất, quên mật khẩu, xác thực email.
+# ======================================================================
 
 def _2fa_methods(user, web=False) -> list:
     """App: chỉ totp + email (passkey cần RP/origin của trình duyệt). Web: thêm passkey (fido2)."""
@@ -394,12 +403,9 @@ def verify_email(request):
     return ok({'verified': True, 'message': 'Tài khoản đã được kích hoạt thành công!'})
 
 
-@api('POST', auth=False)
-def password_reset_confirm(request):
-    """Đặt mật khẩu mới từ link trong email: {uid, token, new_password}. Dùng cho cả web lẫn app."""
-    data = read_json(request)
+def _reset_user(request, data):
+    """Kiểm tra {uid, token} của link đặt lại mật khẩu; sai/hết hạn -> audit + ApiError RESET_INVALID."""
     uid, token = s(data, 'uid', 200, required=True), s(data, 'token', 200, required=True)
-    new = str(data.get('new_password') or '')
     try:
         user = User.objects.get(pk=force_str(urlsafe_base64_decode(uid)))
     except Exception:
@@ -408,6 +414,22 @@ def password_reset_confirm(request):
         services.audit(request, 'PASSWORD_RESET_INVALID', actor=None, success=False, severity='warning',
                        target_user=user)
         raise ApiError('RESET_INVALID', 'Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.', 400)
+    return user
+
+
+@api('POST', auth=False)
+def password_reset_check(request):
+    """Kiểm tra link đặt lại mật khẩu còn hiệu lực không: {uid, token}. Trang web gọi khi mở link."""
+    _reset_user(request, read_json(request))
+    return ok({'valid': True})
+
+
+@api('POST', auth=False)
+def password_reset_confirm(request):
+    """Đặt mật khẩu mới từ link trong email: {uid, token, new_password}. Dùng cho cả web lẫn app."""
+    data = read_json(request)
+    user = _reset_user(request, data)
+    new = str(data.get('new_password') or '')
     try:
         validate_password(new, user)
     except ValidationError as e:

@@ -1,7 +1,4 @@
-"""Tài khoản: hồ sơ, đổi mật khẩu, phiên đăng nhập, push token, trạng thái 2FA, bootstrap (tải 1 lần khi mở app/web).
-
-Dùng chung APP (Bearer) và WEB (session cookie + X-CSRFToken) - auth='any'. Riêng push token chỉ có ý nghĩa với app.
-"""
+"""Tài khoản của tôi - /api/app/me/..., /api/app/bootstrap/, /api/app/snapshot/"""
 import hashlib
 import json
 from datetime import timedelta
@@ -14,22 +11,43 @@ from django.db.models.functions import TruncDate
 from django.http import HttpResponse
 from django.utils import timezone
 
+from .access import _card_json, _face_json, _pin_json, _reader_json, _share_json
+from .serializers import command_json, device_json, event_json, notification_json, session_json, user_json
 from smartlock import services
 from smartlock.api.common import (
-    api, ApiError, claim_fcm_token, iso, ok, read_json, revoke_all_sessions, s, uuid_or_404,
+    api,
+    ApiError,
+    claim_fcm_token,
+    iso,
+    ok,
+    read_json,
+    revoke_all_sessions,
+    s,
+    uuid_or_404,
 )
 from smartlock.models import (
-    AccessCard, AccessEvent, Announcement, AuditLog, Device, DeviceAccess, DeviceCommand, DeviceStatusLog,
-    DoorPinCode, FaceProfile, Fido2Credential, MobileSession, NfcLog, NfcReader, Notification, TwoFactorConfig,
+    AccessCard,
+    AccessEvent,
+    Announcement,
+    AuditLog,
+    Device,
+    DeviceAccess,
+    DeviceCommand,
+    DeviceStatusLog,
+    DoorPinCode,
+    FaceProfile,
+    Fido2Credential,
+    MobileSession,
+    NfcLog,
+    NfcReader,
+    Notification,
+    TwoFactorConfig,
 )
 
-from ..access.cards import _card_json
-from ..access.faces import _face_json
-from ..access.pins import _pin_json
-from ..access.readers import _reader_json
-from ..access.shares import _share_json
-from ..serializers import command_json, device_json, event_json, notification_json, session_json, user_json
 
+# ======================================================================
+# views.py - Tài khoản: hồ sơ, đổi mật khẩu, phiên đăng nhập, push token, trạng thái 2FA, bootstrap (tải 1 lần khi mở app/web).
+# ======================================================================
 
 @api('GET', 'PATCH', auth='any')
 def me(request):
@@ -213,6 +231,7 @@ def _snapshot_payload(request) -> dict:
               .annotate(d=TruncDate('created_at')).values('d').annotate(c=Count('id'))}
 
     return {
+        'meta': {'face_min_frames': services.FACE_MIN_FRAMES, 'face_max_frames': services.FACE_MAX_FRAMES},
         'user': user_json(user),
         'unread_count': Notification.objects.filter(user=user, is_read=False).count(),
         'devices': [device_json(d, user, perms[d.id], d.last_lock_state) for d in devices],

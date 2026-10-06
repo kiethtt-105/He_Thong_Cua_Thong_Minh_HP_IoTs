@@ -40,6 +40,7 @@ Xác thực tài khoản
         pkFinish: "{% url 'smartlock_api:2fa-passkey-finish' %}",
         resend: "{% url 'smartlock_api:resend-verification' %}",
         pwReset: "{% url 'smartlock_api:password-reset' %}",
+        pwCheck: "{% url 'smartlock_api:password-reset-check' %}",
         pwConfirm: "{% url 'smartlock_api:password-reset-confirm' %}",
         verifyEmail: "{% url 'smartlock_api:verify-email' %}"
     };
@@ -187,6 +188,13 @@ Xác thực tài khoản
     }
     {% elif page == 'reset_password' %}
     var rq = el('reset-request-form'), rc = el('reset-confirm-form');
+    if (rc) (async function () {          // link còn hiệu lực không? (API kiểm tra token, ghi audit nếu sai)
+        var chk = await SL.api('POST', API.pwCheck, { uid: rc.dataset.uid, token: rc.dataset.token });
+        if (chk.ok) return;
+        rc.classList.add('d-none'); rq.classList.remove('d-none');
+        el('auth-sub').textContent = 'Nhập email để nhận link đặt lại mật khẩu.';
+        alertBox(err(chk));
+    })();
     if (rq) rq.addEventListener('submit', async function (e) {
         e.preventDefault(); var f = e.target; busy(f, true);
         var res = await SL.api('POST', API.pwReset, { email: f.email.value.trim() });
@@ -259,7 +267,7 @@ Xác thực tài khoản
 {% elif page == 'register' %}
 Đăng ký Smart Lock chỉ mất vài giây
 {% elif page == 'reset_password' %}
-{% if mode == 'confirm' %}Nhập mật khẩu mới cho tài khoản của bạn.{% else %}Nhập email để nhận link đặt lại mật khẩu.{% endif %}
+{% if uid %}Nhập mật khẩu mới cho tài khoản của bạn.{% else %}Nhập email để nhận link đặt lại mật khẩu.{% endif %}
 {% elif page == 'verify_email' %}
 Vui lòng đợi trong giây lát…
 {% else %}{% endif %}</p>
@@ -352,7 +360,7 @@ Vui lòng đợi trong giây lát…
 <p class="text-center text-muted small mt-4 mb-0">Đã có tài khoản? <a href="{% url 'smartlock:login' %}">Đăng nhập</a></p>
 {% elif page == 'reset_password' %}
 <div id="auth-alert"></div>
-{% if mode == 'confirm' %}
+{% if uid %}
     <form id="reset-confirm-form" novalidate data-uid="{{ uid }}" data-token="{{ token }}">
         <div class="mb-3"><label class="form-label">Mật khẩu mới</label>
             <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-key"></i></span>
@@ -362,14 +370,13 @@ Vui lòng đợi trong giây lát…
                 <input type="password" name="new_password2" class="form-control" placeholder="Xác nhận mật khẩu" required autocomplete="new-password"></div></div>
         <button type="submit" class="btn btn-primary w-100 py-2">Cập nhật mật khẩu</button>
     </form>
-{% else %}
-    <form id="reset-request-form" novalidate>
+{% endif %}
+    <form id="reset-request-form" novalidate{% if uid %} class="d-none"{% endif %}>
         <div class="mb-4"><label class="form-label">Email</label>
             <div class="input-group"><span class="input-group-text"><i class="fa-solid fa-envelope"></i></span>
                 <input type="email" name="email" class="form-control" placeholder="ten@email.com" required></div></div>
         <button type="submit" class="btn btn-primary w-100 py-2">Gửi link đặt lại</button>
     </form>
-{% endif %}
 <p class="text-center small mt-4 mb-0"><a href="{% url 'smartlock:login' %}"><i class="fa-solid fa-arrow-left me-1"></i>Quay lại đăng nhập</a></p>
 {% elif page == 'verify_email' %}
 <div id="auth-alert"></div>
