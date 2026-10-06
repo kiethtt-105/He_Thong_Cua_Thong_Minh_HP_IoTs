@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import protocol as P
+from . import lab, protocol as P
 
 STATIC = Path(__file__).parent / "static"
 
@@ -45,6 +45,9 @@ def make_server(app):
             if path == "/api/state": return self._json(core.snapshot())
             if path == "/api/log": return self._json(bus.history(200))
             if path == "/api/config": return self._json(app.public_config(sim_ok))
+            if path.startswith("/api/lab/") and not cfg.admin_ok: return self._json({"ok": False, "error": "[ui] allow_admin đang tắt"}, 403)
+            if path == "/api/lab/locks": return self._json(lab.list_locks(cfg.base))
+            if path == "/api/lab/info": return self._json({"code": cfg.code, "mac": cfg.mac, "name": cfg.s("device", "name"), "location": cfg.s("device", "location"), "firmware": cfg.s("device", "firmware"), "unlock_seconds": cfg.i("lock", "unlock_seconds"), "port": cfg.i("ui", "port"), "conf": str(cfg.path)})
             if path == "/api/stream": return self._stream()
             self._json({"ok": False, "error": "not found"}, 404)
 
@@ -76,6 +79,13 @@ def make_server(app):
             if path == "/api/unlock": return {"ok": core.grant("núm xoay trong nhà")}
             if path == "/api/reboot": threading.Timer(0.2, core.reboot).start(); return {"ok": True}
             if path == "/api/radio": core.set_radio(b["name"], b["on"]); return {"ok": True}
+            if path.startswith("/api/lab/") and not cfg.admin_ok: return {"ok": False, "error": "[ui] allow_admin đang tắt"}
+            if path == "/api/lab/update":
+                try: return {"ok": True, "changed": lab.update_lock(app, b)}
+                except (ValueError, KeyError) as e: return {"ok": False, "error": str(e)}
+            if path == "/api/lab/create":
+                try: return {"ok": True, **lab.create_lock(cfg.base, str(b.get("name", "")).strip(), str(b.get("location", "")).strip(), b.get("code"))}
+                except ValueError as e: return {"ok": False, "error": str(e)}
             # --- mô phỏng đầu vào
             if not sim_ok: return {"ok": False, "error": "[ui] allow_sim_input = false"}
             if path == "/api/sim/rfid": threading.Thread(target=core.on_rfid, args=(b["uid"],), daemon=True).start(); return {"ok": True}

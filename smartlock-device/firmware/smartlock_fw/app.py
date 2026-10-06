@@ -32,7 +32,7 @@ class App:
 
     def public_config(self, sim_ok):
         c, cam = self.cfg, self.core.cam
-        return {"sim_input": sim_ok, "standalone": c.standalone, "device_mode": c.s("device", "mode"),
+        return {"sim_input": sim_ok, "admin": c.admin_ok, "standalone": c.standalone, "device_mode": c.s("device", "mode"),
                 "cards": {k: v for k, v in c.section("standalone.cards").items()},
                 "faces": sorted(cam.profiles().keys()) if cam else [],
                 "unlock_seconds": c.i("lock", "unlock_seconds"), "adv_name": c.s("bluetooth", "adv_name") or "SmartLock-" + "".join(ch for ch in c.code if ch.isalnum())[-6:],

@@ -213,7 +213,7 @@ class LockCore:
 
     # ------------------------------------------------------------------ BLE / NFC điện thoại (vé, kiểm tra OFFLINE)
     def _phone(self, kind, ticket):
-        ch = {"ble": ("ble_unlock", "BLE", "bluetooth", "ble"), "nfc": ("nfc_phone_unlock", "NFC_PHONE", "nfc", "nfc")}[kind]
+        ch = {"ble": ("ble", "BLE", "bluetooth", "ble"), "nfc": ("nfc_phone", "NFC_PHONE", "nfc", "nfc")}[kind]
         ev, prefix, radio, logk = ch
         if not self.st[radio]["enabled"]:
             return self.bus.log("warn", logk, f"{'Bluetooth' if kind == 'ble' else 'NFC'} đang tắt, bỏ qua vé")

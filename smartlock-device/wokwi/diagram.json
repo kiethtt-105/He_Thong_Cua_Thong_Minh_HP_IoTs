@@ -1,0 +1,279 @@
+{
+  "version": 1,
+  "author": "SmartLock Lab",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-membrane-keypad",
+      "id": "kp",
+      "top": -290,
+      "left": -20,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "servo",
+      "top": 20,
+      "left": 260,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledG",
+      "top": 140,
+      "left": 260,
+      "attrs": {
+        "color": "limegreen"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledR",
+      "top": 140,
+      "left": 310,
+      "attrs": {
+        "color": "red"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rG",
+      "top": 200,
+      "left": 250,
+      "attrs": {
+        "value": "330"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "rR",
+      "top": 200,
+      "left": 300,
+      "attrs": {
+        "value": "330"
+      }
+    },
+    {
+      "type": "wokwi-buzzer",
+      "id": "bz",
+      "top": 230,
+      "left": 120,
+      "attrs": {
+        "volume": "0.1"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btnKnob",
+      "top": 270,
+      "left": 220,
+      "attrs": {
+        "color": "blue",
+        "label": "Nút trong nhà"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btnTamper",
+      "top": 270,
+      "left": 320,
+      "attrs": {
+        "color": "red",
+        "label": "Cạy phá"
+      }
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": -330,
+      "left": 260,
+      "attrs": {
+        "pins": "i2c"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "esp:TX0",
+      "$serialMonitor:RX",
+      "",
+      []
+    ],
+    [
+      "esp:RX0",
+      "$serialMonitor:TX",
+      "",
+      []
+    ],
+    [
+      "kp:R1",
+      "esp:D13",
+      "green",
+      []
+    ],
+    [
+      "kp:R2",
+      "esp:D12",
+      "green",
+      []
+    ],
+    [
+      "kp:R3",
+      "esp:D14",
+      "green",
+      []
+    ],
+    [
+      "kp:R4",
+      "esp:D27",
+      "green",
+      []
+    ],
+    [
+      "kp:C1",
+      "esp:D26",
+      "blue",
+      []
+    ],
+    [
+      "kp:C2",
+      "esp:D25",
+      "blue",
+      []
+    ],
+    [
+      "kp:C3",
+      "esp:D33",
+      "blue",
+      []
+    ],
+    [
+      "kp:C4",
+      "esp:D32",
+      "blue",
+      []
+    ],
+    [
+      "servo:PWM",
+      "esp:D15",
+      "orange",
+      []
+    ],
+    [
+      "servo:V+",
+      "esp:VIN",
+      "red",
+      []
+    ],
+    [
+      "servo:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "esp:D4",
+      "rG:1",
+      "green",
+      []
+    ],
+    [
+      "rG:2",
+      "ledG:A",
+      "green",
+      []
+    ],
+    [
+      "ledG:C",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "esp:D16",
+      "rR:1",
+      "red",
+      []
+    ],
+    [
+      "rR:2",
+      "ledR:A",
+      "red",
+      []
+    ],
+    [
+      "ledR:C",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "esp:D23",
+      "bz:2",
+      "purple",
+      []
+    ],
+    [
+      "bz:1",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "btnKnob:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "btnTamper:2.l",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "lcd:GND",
+      "esp:GND.1",
+      "black",
+      []
+    ],
+    [
+      "lcd:VCC",
+      "esp:VIN",
+      "red",
+      []
+    ],
+    [
+      "lcd:SDA",
+      "esp:D21",
+      "green",
+      []
+    ],
+    [
+      "lcd:SCL",
+      "esp:D22",
+      "purple",
+      []
+    ],
+    [
+      "esp:D18",
+      "btnKnob:1.l",
+      "blue",
+      []
+    ],
+    [
+      "esp:D19",
+      "btnTamper:1.l",
+      "red",
+      []
+    ]
+  ],
+  "dependencies": {}
+}

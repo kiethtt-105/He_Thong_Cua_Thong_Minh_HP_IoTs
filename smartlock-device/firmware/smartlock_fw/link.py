@@ -49,6 +49,7 @@ class MqttLink:
         except AttributeError: c = m.Client(client_id=cid, clean_session=False)                  # paho 1.x
         c.username_pw_set(self.code, self.cfg.secret)
         if self.cfg.b("server", "mqtt_tls"): c.tls_set(ca_certs=self.cfg.s("server", "mqtt_ca") or None)
+        c.will_set(P.topic_status(self.code), P.dumps({"state": "offline", "online": False}), qos=1, retain=False)   # LWT: mất điện/mất mạng -> server đánh dấu offline ngay
         c.reconnect_delay_set(1, 30)
         c.on_connect, c.on_disconnect, c.on_message = self._on_connect, self._on_disconnect, self._on_message
         return c
@@ -66,9 +67,11 @@ class MqttLink:
         with self.lk: self._drop_locked()
 
     def _drop_locked(self):
-        c, self.client, self.connected = self.client, None, False
+        c, was, self.client, self.connected = self.client, self.connected, None, False
         if c:
-            try: c.disconnect(); c.loop_stop()
+            try:
+                if was: c.publish(P.topic_status(self.code), P.dumps({"state": "offline", "online": False}), qos=1).wait_for_publish(1)
+                c.disconnect(); c.loop_stop()
             except Exception: pass
 
     def _on_connect(self, c, ud, flags, rc):
@@ -80,7 +83,7 @@ class MqttLink:
         c.subscribe(P.topic_cmd(self.code), qos=1)
         self.bus.log("ok", "mqtt", f"Đã kết nối broker, nghe {P.topic_cmd(self.code)}")
         self.core.st["mqtt"]["connected"] = True
-        self.send_status()
+        self.send_status(); self.send_event("boot", firmware=self.cfg.s("device", "firmware"))
         threading.Thread(target=self.core.flush_queue, daemon=True).start()
         self.core.changed()
 

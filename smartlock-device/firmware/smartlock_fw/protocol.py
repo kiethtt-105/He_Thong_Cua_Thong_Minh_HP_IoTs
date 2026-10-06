@@ -86,11 +86,11 @@ def build_status(s: dict) -> dict:
 
 
 def build_event(kind: str, **data) -> dict:
-    """Gói sự kiện. kind: rfid | pin | face | ble_unlock | nfc_phone_unlock | tamper | door | boot
+    """Gói sự kiện. kind: rfid | pin | face | ble | nfc_phone | tamper | boot
     - rfid: {uid}            -> services.verify_rfid_tap(device, uid)
     - pin:  {pin}            -> services.verify_door_pin(device, pin)
     - face: {embedding, snapshot_url} -> services.verify_face(...)
-    - ble_unlock / nfc_phone_unlock: {ticket, ok, reason, at} -> record_ble_unlock / record_nfc_phone_unlock
+    - ble / nfc_phone (tên PHẢI khớp mqtt_subscriber.on_event): {ticket, ok, reason, at} -> record_ble_unlock / record_nfc_phone_unlock
     """
     return {"type": kind, "event": kind, **data, "ts": int(time.time())}
 

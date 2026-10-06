@@ -153,7 +153,7 @@ class OnlineTests(Base):
         t, _ = P.mint_ticket(CODE, SECRET, "ble", uuid.uuid4()); self.core.on_ble_ticket(t)
         self.assertEqual(self.state(), "unlocked"); self.assertEqual(len(self.core.persist["queue"]), 1)
         self.link.up = True; self.core.flush_queue()
-        k, d = self.link.events[-1]; self.assertEqual(k, "ble_unlock"); self.assertTrue(d["ok"]); self.assertEqual(d["ticket"], t)
+        k, d = self.link.events[-1]; self.assertEqual(k, "ble"); self.assertTrue(d["ok"]); self.assertEqual(d["ticket"], t)
         self.assertEqual(self.core.persist["queue"], [])
 
     def test_bad_ticket_reported_with_reason(self):
@@ -182,6 +182,7 @@ class MqttLinkTests(unittest.TestCase):
         class FakeClient:
             def __init__(self, *a, **k): calls["init"] = k
             def username_pw_set(self, u, p): calls["auth"] = (u, p)
+            def will_set(self, t, p, qos=0, retain=False): calls["will"] = (t, json.loads(p))
             def reconnect_delay_set(self, *a): pass
             def connect_async(self, h, p, k): calls["host"] = (h, p)
             def loop_start(self):
@@ -189,13 +190,15 @@ class MqttLinkTests(unittest.TestCase):
             def loop_stop(self): pass
             def disconnect(self): pass
             def subscribe(self, t, qos=0): calls["sub"].append((t, qos))
-            def publish(self, t, p, qos=0): calls["pub"].append((t, json.loads(p), qos)); return types.SimpleNamespace(rc=0)
+            def publish(self, t, p, qos=0): calls["pub"].append((t, json.loads(p), qos)); return types.SimpleNamespace(rc=0, wait_for_publish=lambda *a: None)
         fake = types.ModuleType("paho.mqtt.client"); fake.Client = FakeClient
         sys.modules.update({"paho": types.ModuleType("paho"), "paho.mqtt": types.ModuleType("paho.mqtt"), "paho.mqtt.client": fake})
         tmp = tempfile.mkdtemp(); cfg = Config(make_conf(tmp)); cfg.cp["server"]["mode"] = "online"
         app = App(cfg); app.link.start(True); time.sleep(0.4)
         self.assertEqual(calls["auth"], (CODE, SECRET))                # đúng quy ước mqtt_auth_webhook
         self.assertIn((f"smartlock/{CODE}/cmd", 1), calls["sub"])
+        self.assertEqual(calls["will"], (f"smartlock/{CODE}/status", {"state": "offline", "online": False}))   # LWT khớp on_status
+        self.assertIn("boot", [p["type"] for t, p, _ in calls["pub"] if t.endswith("/event")])
         topics = [t for t, _, _ in calls["pub"]]; self.assertIn(f"smartlock/{CODE}/status", topics)
         app.core.on_rfid("04A1B2C3"); time.sleep(0.2)
         ev = [p for t, p, _ in calls["pub"] if t == f"smartlock/{CODE}/event"][-1]; self.assertEqual(ev["type"], "rfid")
@@ -203,6 +206,20 @@ class MqttLinkTests(unittest.TestCase):
             {"command_id": "z", "command": "UNLOCK", "token": "tt", "source": "web"}).encode())); time.sleep(0.3)
         self.assertEqual(app.core.st["lock_state"], "unlocked")
         ack = [p for t, p, _ in calls["pub"] if t == f"smartlock/{CODE}/ack"][-1]; self.assertEqual((ack["command_id"], ack["token"]), ("z", "tt"))
+
+
+class AdminGateTests(unittest.TestCase):
+    def _cfg(self, mode, **ui):
+        c = Config(make_conf(tempfile.mkdtemp())); c.cp["device"]["mode"] = mode
+        for k, v in ui.items(): c.cp["ui"][k] = v
+        return c
+    def test_admin_auto(self):
+        self.assertTrue(self._cfg("simulated").admin_ok)
+        self.assertFalse(self._cfg("physical").admin_ok)
+        self.assertTrue(self._cfg("physical", allow_admin="true").admin_ok)
+    def test_open_host_needs_token(self):
+        self.assertTrue(any("token" in e for e in self._cfg("simulated", host="0.0.0.0").validate()))
+        self.assertFalse(any("token" in e for e in self._cfg("simulated", host="0.0.0.0", token="x").validate()))
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ DEFAULTS = {
     "power": {"source": "sim", "initial_battery": "100", "drain_minutes_per_percent": "20"},
     "security": {"local_lockout": "true", "fail_threshold": "3", "fail_window_seconds": "60",
                  "lockout_seconds": "60", "verify_timeout_seconds": "6"},
-    "ui": {"host": "127.0.0.1", "port": "8765", "token": "", "allow_sim_input": "true"},
+    "ui": {"host": "127.0.0.1", "port": "8765", "token": "", "allow_sim_input": "true", "allow_admin": "auto"},
     "standalone": {"default_user_id": "00000000-0000-0000-0000-000000000001", "face_threshold": "0.5"},
     "standalone.cards": {}, "standalone.pins": {},
 }
@@ -75,8 +75,16 @@ class Config:
         n = uuid.getnode()
         return ":".join(f"{(n >> s) & 0xFF:02X}" for s in range(40, -8, -8))
 
+    @property
+    def admin_ok(self):
+        """Tạo/sửa khoá qua web. auto = bật khi giả lập, TẮT khi mode=physical (thiết bị thật)."""
+        v = self.s("ui", "allow_admin").lower()
+        return (self.s("device", "mode").lower() != "physical") if v == "auto" else _b(v)
+
     def validate(self):
         errs = []
+        if self.s("ui", "host") not in ("127.0.0.1", "localhost", "::1") and not self.s("ui", "token"):
+            errs.append("[ui] host mở ra ngoài máy (không phải 127.0.0.1) thì BẮT BUỘC đặt [ui] token.")
         if not self.secret: errs.append("[device] secret trống - chạy `python -m smartlock_fw init` để sinh secret.")
         if not self.code: errs.append("[device] code trống.")
         return errs
