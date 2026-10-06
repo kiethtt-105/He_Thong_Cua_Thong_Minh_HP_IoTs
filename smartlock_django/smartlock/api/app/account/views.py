@@ -2,12 +2,16 @@
 
 Dùng chung APP (Bearer) và WEB (session cookie + X-CSRFToken) - auth='any'. Riêng push token chỉ có ý nghĩa với app.
 """
+import hashlib
+import json
 from datetime import timedelta
 
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.db.models import OuterRef, Subquery
+from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models.functions import TruncDate
+from django.http import HttpResponse
 from django.utils import timezone
 
 from smartlock import services
@@ -15,11 +19,16 @@ from smartlock.api.common import (
     api, ApiError, claim_fcm_token, iso, ok, read_json, revoke_all_sessions, s, uuid_or_404,
 )
 from smartlock.models import (
-    AccessCard, Announcement, AuditLog, Device, DeviceStatusLog, MobileSession, Notification,
-    TwoFactorConfig,
+    AccessCard, AccessEvent, Announcement, AuditLog, Device, DeviceAccess, DeviceCommand, DeviceStatusLog,
+    DoorPinCode, FaceProfile, Fido2Credential, MobileSession, NfcLog, NfcReader, Notification, TwoFactorConfig,
 )
 
-from ..serializers import device_json, notification_json, session_json, user_json
+from ..access.cards import _card_json
+from ..access.faces import _face_json
+from ..access.pins import _pin_json
+from ..access.readers import _reader_json
+from ..access.shares import _share_json
+from ..serializers import command_json, device_json, event_json, notification_json, session_json, user_json
 
 
 @api('GET', 'PATCH', auth='any')
@@ -135,3 +144,124 @@ def bootstrap(request):
                            'created_at': iso(a.created_at)}
                           for a in Announcement.objects.filter(is_active=True).order_by('-created_at')[:5]],
     })
+
+
+# ====================== SNAPSHOT: TOÀN BỘ dữ liệu của CHÍNH user này (client cache + làm mới 2-5s) ======================
+# Mỗi section lọc theo quyền của user giống hệt endpoint riêng của nó (chủ khoá thấy hết, người được chia sẻ chỉ thấy
+# phần được phép). Trả kèm ETag: client gửi If-None-Match, không đổi gì -> 304 rỗng (nhẹ băng thông, không vẽ lại UI).
+SNAPSHOT_LIMITS = {'notifications': 50, 'history': 50, 'audit': 50, 'pins': 200, 'commands': 50, 'nfc_logs': 30}
+
+
+def _snapshot_payload(request) -> dict:
+    user = request.user
+    now = timezone.now()
+    latest = (DeviceStatusLog.objects.filter(device=OuterRef('pk')).order_by('-recorded_at').values('lock_state')[:1])
+    devices = list(services.accessible_devices(user).select_related('owner')
+                   .annotate(last_lock_state=Subquery(latest)).order_by('name'))
+    perms = services.permission_map(user, devices)
+
+    # ---- thẻ NFC (cùng logic cards_list) ----
+    nfc_managed = list(services.devices_with_permission(user, 'manage_nfc').values_list('id', 'owner_id'))
+    owned_ids = {i for i, o in nfc_managed if o == user.id}
+    cards = (AccessCard.objects.filter(Q(user=user) | Q(carddeviceaccess__device_id__in=owned_ids)).distinct()
+             .select_related('user').prefetch_related('carddeviceaccess_set__device').order_by('-created_at'))
+
+    # ---- đầu đọc / PIN / khuôn mặt: gộp theo thiết bị, client nhóm lại bằng device_id ----
+    readers = NfcReader.objects.filter(device__in=services.devices_with_permission(user, 'manage_nfc')) \
+        .order_by('-created_at')
+    pins = (DoorPinCode.objects.filter(device__in=services.devices_with_permission(user, 'manage_pins'))
+            .filter(Q(device__owner=user) | Q(created_by=user))          # không phải chủ: chỉ thấy mã mình tạo
+            .select_related('created_by').order_by('-created_at')[:SNAPSHOT_LIMITS['pins']])
+    faces = (FaceProfile.objects.filter(device__in=services.devices_with_permission(user, 'manage_face_profiles'))
+             .filter(Q(device__owner=user) | Q(user=user))                # không phải chủ: chỉ hồ sơ của mình
+             .select_related('user').order_by('-created_at'))
+
+    # ---- chia sẻ: mình chia sẻ cho người khác (chủ khoá) + được chia sẻ cho mình ----
+    share_qs = DeviceAccess.objects.select_related('device', 'user', 'created_by').prefetch_related('permissions')
+    shares_out = share_qs.filter(device__owner=user, is_active=True).order_by('-created_at')
+    shares_in = (share_qs.filter(user=user, is_active=True)
+                 .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)).order_by('-created_at'))
+
+    # ---- lịch sử ra vào + nhật ký + thông báo ----
+    history = (AccessEvent.objects.filter(device__in=services.devices_with_permission(user, 'view_history'))
+               .select_related('device', 'user').order_by('-created_at')[:SNAPSHOT_LIMITS['history']])
+    audit = services.visible_logs(user).select_related('device').order_by('-created_at')[:SNAPSHOT_LIMITS['audit']]
+    notes = Notification.objects.filter(user=user).order_by('-created_at')[:SNAPSHOT_LIMITS['notifications']]
+
+    # ---- bảo mật tài khoản (không có bí mật TOTP, không có khoá công khai) ----
+    cfg = TwoFactorConfig.objects.filter(user=user).first()
+    passkeys = Fido2Credential.objects.filter(user=user).order_by('created_at')
+    sessions = MobileSession.objects.filter(user=user, revoked_at__isnull=True,
+                                            expires_at__gt=now).order_by('-created_at')
+    current = request.api_session.id if request.api_session else None
+
+    # ---- nhật ký NFC (chủ khoá thấy hết, người khác chỉ thấy của mình) ----
+    nfc_logs = (NfcLog.objects.filter(device__in=services.devices_with_permission(user, 'manage_nfc'))
+                .filter(Q(device__owner=user) | Q(user=user)).select_related('nfc_tag')
+                .order_by('-created_at')[:SNAPSHOT_LIMITS['nfc_logs']])
+
+    # ---- lệnh điều khiển gần đây (chủ khoá thấy hết, người khác chỉ thấy lệnh của mình) ----
+    commands = (DeviceCommand.objects.filter(device__in=[d.id for d in devices])
+                .filter(Q(device__owner=user) | Q(issued_by=user)).select_related('issued_by')
+                .order_by('-created_at')[:SNAPSHOT_LIMITS['commands']])
+
+    # ---- biểu đồ hoạt động 7 ngày (đếm sẵn, client chỉ vẽ) ----
+    today = timezone.localdate()
+    days = [today - timedelta(days=i) for i in range(6, -1, -1)]
+    counts = {r['d']: r['c'] for r in
+              services.visible_logs(user).filter(created_at__date__gte=days[0])
+              .annotate(d=TruncDate('created_at')).values('d').annotate(c=Count('id'))}
+
+    return {
+        'user': user_json(user),
+        'unread_count': Notification.objects.filter(user=user, is_read=False).count(),
+        'devices': [device_json(d, user, perms[d.id], d.last_lock_state) for d in devices],
+        'cards': [_card_json(c, user, owned_ids) for c in cards],
+        'nfc_readers': [_reader_json(r) for r in readers],
+        'pins': [_pin_json(p) for p in pins],
+        'faces': [_face_json(f) for f in faces],
+        'shares_out': [_share_json(a) for a in shares_out],
+        'shares_in': [_share_json(a) for a in shares_in],
+        'history': [event_json(e) for e in history],
+        'audit': [{'id': str(l.id), 'action': l.action, 'success': l.success, 'severity': l.severity,
+                   'device_id': str(l.device_id) if l.device_id else None,
+                   'device': l.device.name if l.device_id else None,
+                   'ip_address': l.ip_address, 'created_at': iso(l.created_at)} for l in audit],
+        'notifications': [notification_json(n) for n in notes],
+        'nfc_logs': [{'id': str(l.id), 'device_id': str(l.device_id) if l.device_id else None,
+                      'event_type': l.event_type, 'success': l.success,
+                      'card': (l.nfc_tag.name or '') if l.nfc_tag_id else '', 'created_at': iso(l.created_at)}
+                     for l in nfc_logs],
+        'commands': [{**command_json(c), 'by': c.issued_by.username if c.issued_by_id else ''} for c in commands],
+        'activity': {'labels': [d.strftime('%d/%m') for d in days], 'values': [counts.get(d, 0) for d in days]},
+        'announcements': [{'id': str(a.id), 'title': a.title, 'body': a.body, 'level': a.level,
+                           'created_at': iso(a.created_at)}
+                          for a in Announcement.objects.filter(is_active=True).order_by('-created_at')[:5]],
+        'security': {
+            'email_masked': services.mask_email(user.email),
+            'two_fa_enabled': user.two_fa_enabled,
+            'totp': bool(cfg and cfg.totp_confirmed),
+            'email_otp': bool(cfg and cfg.email_otp_enabled),
+            'preferred_method': cfg.preferred_method if cfg else '',
+            'passkeys': [{'id': str(k.id), 'name': k.name, 'created_at': iso(k.created_at),
+                          'last_used_at': iso(k.last_used_at)} for k in passkeys],
+            'sessions': [session_json(m, current) for m in sessions],
+        },
+    }
+
+
+@api('GET', auth='any')
+def snapshot(request):
+    """GET /api/app/snapshot/ - mọi dữ liệu của user đang đăng nhập trong 1 lần gọi.
+    ETag tính trên nội dung (không gồm server_time) -> If-None-Match khớp thì trả 304."""
+    payload = _snapshot_payload(request)
+    body = json.dumps(payload, sort_keys=True, default=str, separators=(',', ':'))
+    etag = '"' + hashlib.sha1(body.encode('utf-8')).hexdigest() + '"'
+    if request.headers.get('If-None-Match') == etag:
+        resp = HttpResponse(status=304)
+        resp['ETag'] = etag
+        resp['Cache-Control'] = 'no-store'
+        return resp
+    resp = ok({'server_time': iso(timezone.now()), **payload})
+    resp['ETag'] = etag
+    return resp

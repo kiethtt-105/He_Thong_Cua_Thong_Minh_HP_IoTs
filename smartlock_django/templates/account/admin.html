@@ -1,49 +1,53 @@
 {% extends 'account/layout.html' %}
-{# Chỉ còn trang audit_logs: các trang permissions / automation / settings / announcements / support cũ không còn route trong urls.py. #}
+{# Nhật ký của tôi. Dữ liệu vẽ từ SmartlockCache (API snapshot); "Xem thêm" lấy các trang cũ hơn từ API /audit/. #}
 {% block title %}Nhật ký hệ thống{% endblock %}
 {% block page_title %}Nhật ký hệ thống{% endblock %}
-{% block page_sub %}<p class="page-sub">{% if show_all %}Toàn bộ sự kiện của hệ thống (chế độ quản trị).{% else %}Thao tác của bạn và sự kiện trên thiết bị của bạn.{% endif %}</p>{% endblock %}
-{% block page_actions %}
-{% if can_see_all %}
-<a href="?{% if not show_all %}all=1{% endif %}" class="btn btn-sm {% if show_all %}btn-primary{% else %}btn-outline-primary{% endif %}"><i class="fa-solid fa-users me-1"></i>{% if show_all %}Đang xem toàn hệ thống{% else %}Xem toàn hệ thống{% endif %}</a>
-{% endif %}
-{% endblock %}
+{% block page_sub %}<p class="page-sub">Thao tác của bạn và sự kiện trên thiết bị của bạn.</p>{% endblock %}
 {% block content %}
-<form method="get" class="filter-bar">
-    {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
-    <div class="flex-grow-1" style="min-width:220px"><div class="input-group"><span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span><input type="text" name="q" value="{{ q }}" class="form-control" placeholder="Tìm theo hành động, ví dụ DEVICE_ADDED…"></div></div>
-    <div style="min-width:180px"><select name="status" class="form-select">
-        <option value="">Tất cả trạng thái</option>
-        <option value="ok" {% if status == 'ok' %}selected{% endif %}>Thành công</option>
-        <option value="fail" {% if status == 'fail' %}selected{% endif %}>Thất bại</option>
+<div class="filter-bar">
+    <div class="flex-grow-1" style="min-width:220px"><div class="input-group"><span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span><input type="text" id="alQ" class="form-control" placeholder="Tìm theo hành động, ví dụ DEVICE_ADDED…"></div></div>
+    <div style="min-width:180px"><select id="alStatus" class="form-select">
+        <option value="">Tất cả trạng thái</option><option value="ok">Thành công</option><option value="fail">Thất bại</option>
     </select></div>
-    <button class="btn btn-primary px-4"><i class="fa-solid fa-filter me-1"></i>Lọc</button>
-    {% if q or status %}<a href="?{% if show_all %}all=1{% endif %}" class="btn btn-light">Xóa lọc</a>{% endif %}
-</form>
-
-<div class="card"><div class="table-responsive">
-    <table class="table table-hover mb-0">
-        <thead><tr><th>Thời gian</th><th>Hành động</th>{% if show_all %}<th>Người thực hiện</th>{% endif %}<th>Thiết bị</th><th>Mức độ</th><th>IP</th><th>Kết quả</th></tr></thead>
-        <tbody>
-            {% for log in audit_logs %}
-            <tr>
-                <td class="text-nowrap text-muted">{{ log.created_at|date:"d/m/Y H:i" }}</td>
-                <td><code>{{ log.action }}</code></td>
-                {% if show_all %}<td>{{ log.actor_user.username|default:log.username_attempt|default:"Hệ thống" }}</td>{% endif %}
-                <td>{{ log.device.name|default:"—" }}</td>
-                <td><span class="status {% if log.severity == 'critical' %}bad{% elif log.severity == 'warning' %}warn{% else %}info{% endif %}">{{ log.severity }}</span></td>
-                <td class="text-muted font-mono">{{ log.ip_address|default:"—" }}</td>
-                <td>{% if log.success %}<span class="status ok">Thành công</span>{% else %}<span class="status bad">Thất bại</span>{% endif %}</td>
-            </tr>
-            {% empty %}<tr><td colspan="7"><div class="empty-state"><div class="ei"><i class="fa-solid fa-clipboard-list"></i></div><h6>Chưa có nhật ký</h6><div>Không có sự kiện nào khớp bộ lọc.</div></div></td></tr>{% endfor %}
-        </tbody>
-    </table>
-</div></div>
-{% if audit_logs.has_other_pages %}
-<nav class="mt-3"><ul class="pagination justify-content-center mb-0">
-    {% if audit_logs.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ audit_logs.previous_page_number }}{{ qs }}">‹</a></li>{% endif %}
-    <li class="page-item disabled"><span class="page-link">{{ audit_logs.number }} / {{ audit_logs.paginator.num_pages }}</span></li>
-    {% if audit_logs.has_next %}<li class="page-item"><a class="page-link" href="?page={{ audit_logs.next_page_number }}{{ qs }}">›</a></li>{% endif %}
-</ul></nav>
-{% endif %}
+    <button type="button" class="btn btn-light d-none" id="alClear">Xóa lọc</button>
+</div>
+<div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead><tr><th>Thời gian</th><th>Hành động</th><th>Thiết bị</th><th>Mức độ</th><th>IP</th><th>Kết quả</th></tr></thead>
+    <tbody id="alRows"><tr><td colspan="6">{% include "account/_spin.html" %}</td></tr></tbody>
+</table></div></div>
+<div class="text-center mt-3"><button type="button" class="btn btn-sm btn-outline-secondary d-none" id="alMore">Xem thêm</button></div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+    const L = Live, esc = L.esc, $ = id => document.getElementById(id);
+    const URL_AUDIT = "{% url 'smartlock_api:audit' %}";
+    let extra = [], page = 1, hasMore = true;
+    const q = $('alQ'), st = $('alStatus');
+    const td = (label, html, cls) => '<td data-label="' + label + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + html + '</td>';
+    function onFilter() { $('alClear').classList.toggle('d-none', !q.value && !st.value); run(); }
+    q.addEventListener('input', onFilter); st.addEventListener('change', onFilter);
+    $('alClear').addEventListener('click', () => { q.value = ''; st.value = ''; onFilter(); });
+    $('alMore').addEventListener('click', async function () {
+        this.disabled = true; page++;
+        const res = await SL.api('GET', URL_AUDIT + '?page_size=50&page=' + page); this.disabled = false;
+        if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); return; }
+        extra = extra.concat(res.data.items || []); hasMore = !!res.data.has_next; run();
+    });
+    const run = L.mount({
+        regions: { alRows: b => {
+            const seen = new Set(b.audit.map(l => l.id));
+            let list = b.audit.concat(extra.filter(l => !seen.has(l.id)));
+            const needle = q.value.trim().toLowerCase();
+            if (needle) list = list.filter(l => l.action.toLowerCase().indexOf(needle) !== -1);
+            if (st.value) list = list.filter(l => st.value === 'ok' ? l.success : !l.success);
+            if (!list.length) return '<tr><td colspan="6">' + L.empty('fa-clipboard-list', 'Chưa có nhật ký', 'Không có sự kiện nào khớp bộ lọc.') + '</td></tr>';
+            return list.map(l => '<tr>' + td('Thời gian', esc(L.dt(l.created_at)), 'text-nowrap text-muted') + td('Hành động', '<code>' + esc(l.action) + '</code>') + td('Thiết bị', esc(l.device || '—')) +
+                td('Mức độ', '<span class="status ' + (l.severity === 'critical' ? 'bad' : l.severity === 'warning' ? 'warn' : 'info') + '">' + esc(l.severity) + '</span>') +
+                td('IP', esc(l.ip_address || '—'), 'text-muted font-mono') + td('Kết quả', l.success ? '<span class="status ok">Thành công</span>' : '<span class="status bad">Thất bại</span>')).join('');
+        } },
+        after: b => { $('alMore').classList.toggle('d-none', !(hasMore && b.audit.length >= 50)); }
+    });
+})();
+</script>
 {% endblock %}

@@ -1,280 +1,104 @@
 {% extends 'account/layout.html' %}
-{# Gộp: nfc_tags, nfc_reader, shares, door_pins, face_profiles, access_history. View truyền biến `page` để chọn trang. #}
-{% block title %}
-{% if page == 'nfc_tags' %}
-Thẻ NFC
-{% elif page == 'nfc_reader' %}
-Đầu đọc NFC
-{% elif page == 'shares' %}
-Chia sẻ khóa
-{% elif page == 'door_pins' %}
-Mã PIN cửa
-{% elif page == 'face_profiles' %}
-Khuôn mặt
-{% elif page == 'access_history' %}
-Lịch sử ra vào
-{% else %}{{ block.super }}{% endif %}
-{% endblock %}
-{% block page_title %}
-{% if page == 'nfc_tags' %}
-Thẻ NFC của tôi
-{% elif page == 'nfc_reader' %}
-Đầu đọc & đăng ký thẻ NFC
-{% elif page == 'shares' %}
-Chia sẻ khóa
-{% elif page == 'door_pins' %}
-Mã PIN cửa
-{% elif page == 'face_profiles' %}
-Khuôn mặt được phép mở cửa
-{% elif page == 'access_history' %}
-Lịch sử ra vào
-{% else %}{{ block.super }}{% endif %}
-{% endblock %}
+{# Thẻ NFC, đầu đọc, chia sẻ, mã PIN, khuôn mặt, lịch sử ra vào. Dữ liệu vẽ từ SmartlockCache (API snapshot); view chỉ render khung. #}
+{% block title %}{% if page == 'nfc_tags' %}Thẻ NFC{% elif page == 'nfc_reader' %}Đầu đọc NFC{% elif page == 'shares' %}Chia sẻ khóa{% elif page == 'door_pins' %}Mã PIN cửa{% elif page == 'face_profiles' %}Khuôn mặt{% elif page == 'access_history' %}Lịch sử ra vào{% else %}{{ block.super }}{% endif %}{% endblock %}
+{% block page_title %}{% if page == 'nfc_tags' %}Thẻ NFC của tôi{% elif page == 'nfc_reader' %}Đầu đọc & đăng ký thẻ NFC{% elif page == 'shares' %}Chia sẻ khóa{% elif page == 'door_pins' %}Mã PIN cửa{% elif page == 'face_profiles' %}Khuôn mặt được phép mở cửa{% elif page == 'access_history' %}Lịch sử ra vào{% else %}{{ block.super }}{% endif %}{% endblock %}
 {% block page_sub %}
-{% if page == 'nfc_tags' %}
-<p class="page-sub">Đổi tên, bật/tắt hoặc xóa các thẻ đã đăng ký.</p>
-{% elif page == 'nfc_reader' %}
-<p class="page-sub">Quản lý đầu đọc của thiết bị và đăng ký thẻ mới.</p>
-{% elif page == 'shares' %}
-<p class="page-sub">Chia sẻ theo tài khoản, có hiệu lực ngay; người nhận được báo qua email và app.</p>
-{% elif page == 'door_pins' %}
-<p class="page-sub">Cấp mã PIN có thời hạn cho khách; mã chỉ hiển thị một lần khi tạo.</p>
-{% elif page == 'face_profiles' %}
-<p class="page-sub">Đăng ký và bật/tắt hồ sơ khuôn mặt cho từng thiết bị.</p>
-{% elif page == 'access_history' %}
-<p class="page-sub">Thẻ RFID, mã PIN, khuôn mặt và Bluetooth trên cùng một danh sách.</p>
+{% if page == 'nfc_tags' %}<p class="page-sub">Đổi tên, bật/tắt hoặc xóa các thẻ đã đăng ký.</p>
+{% elif page == 'nfc_reader' %}<p class="page-sub">Quản lý đầu đọc của thiết bị và đăng ký thẻ mới.</p>
+{% elif page == 'shares' %}<p class="page-sub">Chia sẻ theo tài khoản, có hiệu lực ngay; người nhận được báo qua email và app.</p>
+{% elif page == 'door_pins' %}<p class="page-sub">Cấp mã PIN có thời hạn cho khách; mã chỉ hiển thị một lần khi tạo.</p>
+{% elif page == 'face_profiles' %}<p class="page-sub">Đăng ký và bật/tắt hồ sơ khuôn mặt cho từng thiết bị.</p>
+{% elif page == 'access_history' %}<p class="page-sub">Thẻ RFID, mã PIN, khuôn mặt và Bluetooth trên cùng một danh sách.</p>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 {% block page_actions %}
 {% if page == 'nfc_tags' %}
 <a href="{% url 'smartlock:nfc-reader' %}" class="btn btn-primary"><i class="fa-solid fa-plus me-2"></i>Đăng ký thẻ mới</a>
 {% elif page == 'nfc_reader' %}
-{% if device_list %}
-<form method="get"><select name="device" class="form-select" onchange="this.form.submit()">
-    {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
-</select></form>
-{% endif %}
+<select id="devSel" class="form-select d-none" aria-label="Chọn thiết bị"></select>
 {% elif page == 'door_pins' %}
-<button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#issuePin" {% if not device %}disabled{% endif %}><i class="fa-solid fa-plus me-2"></i>Cấp PIN mới</button>
+<button class="btn btn-primary" id="pinOpen" data-bs-toggle="modal" data-bs-target="#issuePin" disabled><i class="fa-solid fa-plus me-2"></i>Cấp PIN mới</button>
 {% elif page == 'face_profiles' %}
-<button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerFace" {% if not device %}disabled{% endif %}><i class="fa-solid fa-plus me-2"></i>Đăng ký khuôn mặt</button>
+<button class="btn btn-primary" id="faceOpen" data-bs-toggle="modal" data-bs-target="#registerFace" disabled><i class="fa-solid fa-plus me-2"></i>Đăng ký khuôn mặt</button>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
+
 {% block content %}
 {% if page == 'nfc_tags' %}
-<div class="card"><div class="table-responsive">
-    <table class="table table-hover mb-0">
-        <thead><tr><th>Tên thẻ</th><th>UID (hash)</th><th>Thiết bị</th><th>Trạng thái</th><th class="text-end">Hành động</th></tr></thead>
-        <tbody>
-            {% for card in access_cards %}
-            <tr>
-                <td style="min-width:230px">
-                    {% if card.is_mine %}
-                    <form class="d-flex gap-2" data-api-url="{% url 'smartlock_api:card-detail' card.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã đổi tên thẻ.">
-                        <input type="text" name="name" value="{{ card.name|default:'' }}" class="form-control form-control-sm" placeholder="Chưa đặt tên" maxlength="100">
-                        <button class="btn btn-sm btn-outline-secondary" title="Đổi tên"><i class="fa-solid fa-check"></i></button>
-                    </form>
-                    {% else %}<span class="fw-semibold">{{ card.name|default:"—" }}</span> <small class="text-muted">@{{ card.user.username }}</small>{% endif %}
-                </td>
-                <td><code>{{ card.card_uid_hash|slice:":8" }}…</code></td>
-                <td>{% for a in card.carddeviceaccess_set.all %}<span class="chip plain me-1">{{ a.device.name }}</span>{% empty %}<span class="text-muted">—</span>{% endfor %}</td>
-                <td>{% if card.is_active %}<span class="status ok">Đang hoạt động</span>{% else %}<span class="status">Vô hiệu hóa</span>{% endif %}</td>
-                <td class="text-end text-nowrap">
-                    {% if card.is_mine %}
-                    <button type="button" class="btn btn-sm {% if card.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}" data-api-url="{% url 'smartlock_api:card-detail' card.id %}" data-api-method="PATCH" data-api-body='{"is_active": {% if card.is_active %}false{% else %}true{% endif %}}' data-after="reload" data-success="{% if card.is_active %}Đã vô hiệu hóa thẻ.{% else %}Đã kích hoạt thẻ.{% endif %}">{% if card.is_active %}Vô hiệu hóa{% else %}Kích hoạt{% endif %}</button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:card-detail' card.id %}" data-api-method="DELETE" data-confirm="Xóa thẻ này?" data-after="reload" data-success="Đã xóa thẻ."><i class="fa-solid fa-trash"></i></button>
-                    {% endif %}
-                </td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="5"><div class="empty-state"><div class="ei"><i class="fa-solid fa-id-card"></i></div><h6>Chưa có thẻ NFC nào</h6><div>Bấm “Đăng ký thẻ mới” để thêm thẻ đầu tiên.</div></div></td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div></div>
+<div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead><tr><th>Tên thẻ</th><th>Thiết bị</th><th>Trạng thái</th><th class="text-end">Hành động</th></tr></thead>
+    <tbody id="cardRows"><tr><td colspan="4">{% include "account/_spin.html" %}</td></tr></tbody>
+</table></div></div>
+
 {% elif page == 'nfc_reader' %}
-{% if not device %}
-<div class="card"><div class="empty-state"><div class="ei"><i class="fa-solid fa-tower-broadcast"></i></div><h6>Chưa có thiết bị</h6><div>Bạn cần sở hữu ít nhất một thiết bị để quản lý đầu đọc NFC.</div></div></div>
-{% else %}
+<div id="nrNone" class="d-none"><div class="card"><div class="empty-state"><div class="ei"><i class="fa-solid fa-tower-broadcast"></i></div><h6>Chưa có thiết bị</h6><div>Bạn cần có quyền quản lý thẻ NFC trên ít nhất một thiết bị.</div></div></div></div>
+<div id="nrMain">
 <div class="row g-3 mb-3">
-    <div class="col-lg-7">
-        <div class="card h-100">
-            <div class="card-header">Đầu đọc của “{{ device.name }}”</div>
-            <div class="table-responsive"><table class="table mb-0">
-                <thead><tr><th>Tên</th><th>Chế độ</th><th>Hoạt động</th><th>Tự đăng ký</th></tr></thead>
-                <tbody>
-                    {% for r in readers %}
-                    <tr>
-                        <td>{{ r.name|default:"Đầu đọc" }}<div class="small text-muted">{{ r.last_seen_at|date:"d/m H:i"|default:"Chưa kết nối" }}</div></td>
-                        <td><span class="chip plain">{{ r.get_reader_mode_display }}</span></td>
-                        <td><form data-api-url="{% url 'smartlock_api:nfc-reader' r.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật đầu đọc.">
-                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="is_active" {% if r.is_active %}checked{% endif %} {% if not is_owner %}disabled{% endif %} onchange="this.form.requestSubmit()"></div></form></td>
-                        <td><form data-api-url="{% url 'smartlock_api:nfc-reader' r.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật đầu đọc.">
-                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="auto_register" {% if r.config.auto_register %}checked{% endif %} {% if not is_owner %}disabled{% endif %} onchange="this.form.requestSubmit()"></div></form></td>
-                    </tr>
-                    {% empty %}<tr><td colspan="4"><div class="empty-state py-4">Thiết bị chưa có đầu đọc.</div></td></tr>{% endfor %}
-                </tbody>
-            </table></div>
-            <div class="card-body border-top">
-                <form class="d-flex gap-2" data-api-url="{% url 'smartlock_api:nfc-readers' device.id %}" data-api-method="POST" data-after="reload" data-success="Đã thêm đầu đọc.">
-                    <input type="text" name="name" class="form-control" placeholder="Tên đầu đọc mới (mô phỏng)" maxlength="100">
-                    <button class="btn btn-outline-primary text-nowrap"><i class="fa-solid fa-plus me-1"></i>Thêm</button>
-                </form>
-            </div>
+    <div class="col-lg-7"><div class="card h-100">
+        <div class="card-header" id="nrTitle">Đầu đọc</div>
+        <div class="table-responsive"><table class="table mb-0">
+            <thead><tr><th>Tên</th><th>Chế độ</th><th>Hoạt động</th><th>Tự đăng ký</th></tr></thead>
+            <tbody id="nrReaders"><tr><td colspan="4">{% include "account/_spin.html" %}</td></tr></tbody>
+        </table></div>
+        <div class="card-body border-top" id="nrAddWrap">
+            <form id="nrAdd" class="d-flex gap-2" data-api-method="POST" data-reset data-success="Đã thêm đầu đọc.">
+                <input type="text" name="name" class="form-control" placeholder="Tên đầu đọc mới (mô phỏng)" maxlength="100">
+                <button class="btn btn-outline-primary text-nowrap"><i class="fa-solid fa-plus me-1"></i>Thêm</button>
+            </form>
         </div>
-    </div>
-    <div class="col-lg-5">
-        <div class="card h-100">
-            <div class="card-header">Đăng ký thẻ mới</div>
-            <div class="card-body">
-                <p class="text-muted small">Nhập UID thẻ (ví dụ <code>04:A3:2B:1C</code>). UID được băm HMAC (có pepper của máy chủ) trước khi lưu.</p>
-                <form data-api-url="{% url 'smartlock_api:card-register' device.id %}" data-api-method="POST" data-after="reload" data-success="Đã đăng ký thẻ NFC.">
-                    <div class="mb-3"><label class="form-label">UID thẻ</label><input type="text" name="uid" class="form-control font-mono" required placeholder="04:A3:2B:1C"></div>
-                    <div class="mb-3"><label class="form-label">Tên thẻ</label><input type="text" name="name" class="form-control" maxlength="100" placeholder="Thẻ của tôi"></div>
-                    <button class="btn btn-primary w-100"><i class="fa-solid fa-id-card me-2"></i>Đăng ký thẻ</button>
-                </form>
-            </div>
-        </div>
-    </div>
+    </div></div>
+    <div class="col-lg-5"><div class="card h-100"><div class="card-header">Đăng ký thẻ mới</div><div class="card-body">
+        <p class="text-muted small">Nhập UID thẻ (ví dụ <code>04:A3:2B:1C</code>). UID được băm HMAC (có pepper của máy chủ) trước khi lưu.</p>
+        <form id="nrCard" data-api-method="POST" data-reset data-success="Đã đăng ký thẻ NFC.">
+            <div class="mb-3"><label class="form-label">UID thẻ</label><input type="text" name="uid" class="form-control font-mono" required placeholder="04:A3:2B:1C"></div>
+            <div class="mb-3"><label class="form-label">Tên thẻ</label><input type="text" name="name" class="form-control" maxlength="100" placeholder="Thẻ của tôi"></div>
+            <button class="btn btn-primary w-100"><i class="fa-solid fa-id-card me-2"></i>Đăng ký thẻ</button>
+        </form>
+    </div></div></div>
+</div>
+<div class="card"><div class="card-header">Sự kiện NFC gần đây</div><div class="table-responsive"><table class="table mb-0">
+    <thead><tr><th>Thời gian</th><th>Sự kiện</th><th>Thẻ</th><th>Kết quả</th></tr></thead>
+    <tbody id="nrLogs"></tbody>
+</table></div></div>
 </div>
 
-<div class="card">
-    <div class="card-header">Sự kiện NFC gần đây</div>
-    <div class="table-responsive"><table class="table mb-0">
-        <thead><tr><th>Thời gian</th><th>Sự kiện</th><th>Thẻ</th><th>Kết quả</th></tr></thead>
-        <tbody>
-            {% for l in nfc_logs %}
-            <tr><td class="text-nowrap">{{ l.created_at|date:"d/m/Y H:i" }}</td><td>{{ l.get_event_type_display }}</td><td>{{ l.nfc_tag.name|default:"—" }}</td>
-                <td>{% if l.success %}<span class="status ok">Thành công</span>{% else %}<span class="status bad">Thất bại</span>{% endif %}</td></tr>
-            {% empty %}<tr><td colspan="4"><div class="empty-state py-4">Chưa có sự kiện.</div></td></tr>{% endfor %}
-        </tbody>
-    </table></div>
-</div>
-{% endif %}
 {% elif page == 'shares' %}
 <div class="row g-3">
     <div class="col-lg-7">
-        <form method="get" class="filter-bar">
-            <div class="flex-grow-1" style="min-width:220px"><select name="device" class="form-select" onchange="this.form.submit()">
-                {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% empty %}<option value="">Bạn chưa sở hữu khóa nào</option>{% endfor %}
-            </select></div>
-        </form>
-
-        {% if device %}
+        <div class="filter-bar"><div class="flex-grow-1" style="min-width:220px"><select id="devSel" class="form-select"></select></div></div>
+        <div id="shNoDevice" class="d-none"><div class="card"><div class="empty-state"><div class="ei"><i class="fa-solid fa-share-nodes"></i></div><h6>Chưa có khóa để chia sẻ</h6><div>Chỉ chủ khóa mới chia sẻ được. Hãy thêm khóa ở mục Thiết bị.</div></div></div></div>
+        <div id="shMain">
         <div class="card mb-3">
-            <div class="card-header"><i class="fa-solid fa-user-plus me-2 text-primary"></i>Chia sẻ “{{ device.name }}” cho người khác</div>
+            <div class="card-header"><i class="fa-solid fa-user-plus me-2 text-primary"></i><span id="shTitle">Chia sẻ khóa cho người khác</span></div>
             <div class="card-body">
-                <form data-api-url="{% url 'smartlock_api:device-shares' device.id %}" data-api-method="POST" data-after="reload" data-success="Đã chia sẻ khóa.">
+                <form id="shForm" data-api-method="POST" data-reset data-success="Đã chia sẻ khóa.">
                     <div class="row g-3 mb-3">
-                        <div class="col-md-7"><label class="form-label">Email hoặc username người nhận</label>
-                            <input type="text" name="identifier" class="form-control" required placeholder="ten@email.com"></div>
-                        <div class="col-md-5"><label class="form-label">Hết hạn <span class="text-muted fw-normal">(tùy chọn)</span></label>
-                            <input type="datetime-local" name="expires_at" class="form-control"></div>
+                        <div class="col-md-7"><label class="form-label">Email hoặc username người nhận</label><input type="text" name="identifier" class="form-control" required placeholder="ten@email.com"></div>
+                        <div class="col-md-5"><label class="form-label">Hết hạn <span class="text-muted fw-normal">(tùy chọn)</span></label><input type="datetime-local" name="expires_at" class="form-control"></div>
                     </div>
                     <label class="form-label">Quyền hạn</label>
-                    <div class="row g-2 mb-3">
-                        {% for p in permissions %}
-                        <div class="col-sm-6"><div class="form-check">
-                            <input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="g-{{ p.code }}" {% if not p.is_sensitive %}checked{% endif %}>
-                            <label class="form-check-label" for="g-{{ p.code }}">{{ p.name }}{% if p.is_sensitive %} <span class="chip danger ms-1">Nhạy cảm</span>{% endif %}</label></div></div>
-                        {% endfor %}
-                    </div>
+                    <div class="row g-2 mb-3" id="shPerms"><div class="col-12 text-muted small">Đang tải danh sách quyền…</div></div>
                     <button class="btn btn-primary"><i class="fa-solid fa-paper-plane me-2"></i>Chia sẻ</button>
                 </form>
             </div>
         </div>
-
         <div class="card">
-            <div class="card-header">Người đang được chia sẻ <span class="chip plain ms-1">{{ accesses|length }}</span></div>
-            <div>
-                {% for a in accesses %}
-                <div class="row-item flex-column">
-                    <div class="d-flex justify-content-between align-items-start gap-2 w-100">
-                        <div class="d-flex gap-3 align-items-start min-w-0">
-                            <div class="avatar-sm">{{ a.user.username|upper|slice:":1" }}</div>
-                            <div class="min-w-0">
-                                <div class="fw-semibold">{{ a.user.full_name|default:a.user.username }} <span class="text-muted fw-normal small">@{{ a.user.username }}</span></div>
-                                <div class="my-1 d-flex flex-wrap gap-1">{% for p in a.permissions.all %}<span class="chip">{{ p.name }}</span>{% empty %}<span class="text-muted small">Chưa có quyền nào</span>{% endfor %}</div>
-                                <small class="text-muted">{% if a.expires_at %}Hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn thời gian{% endif %}</small>
-                            </div>
-                        </div>
-                        <div class="d-flex gap-1 flex-shrink-0">
-                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#edit-{{ a.id }}"><i class="fa-solid fa-pen"></i></button>
-                            <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:share-detail' a.id %}" data-api-method="DELETE" data-confirm="Thu hồi quyền của {{ a.user.username|escapejs }}?" data-after="reload" data-success="Đã thu hồi quyền."><i class="fa-solid fa-ban"></i></button>
-                        </div>
-                    </div>
-                    <div class="collapse w-100 mt-3" id="edit-{{ a.id }}">
-                        <form class="border rounded p-3 bg-light" data-api-url="{% url 'smartlock_api:share-detail' a.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật quyền.">
-                            <div class="row g-2 mb-3">
-                                {% for p in permissions %}
-                                <div class="col-sm-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="permissions" value="{{ p.code }}" id="u-{{ a.id }}-{{ p.code }}" {% if p.code in a.perm_codes %}checked{% endif %}>
-                                    <label class="form-check-label" for="u-{{ a.id }}-{{ p.code }}">{{ p.name }}</label></div></div>
-                                {% endfor %}
-                            </div>
-                            <button class="btn btn-sm btn-primary">Lưu quyền</button>
-                        </form>
-                    </div>
-                </div>
-                {% empty %}<div class="empty-state py-4"><div class="ei"><i class="fa-solid fa-user-lock"></i></div><div>Khóa này chưa chia sẻ cho ai.</div></div>{% endfor %}
-            </div>
+            <div class="card-header">Người đang được chia sẻ <span class="chip plain ms-1" id="shCount">0</span></div>
+            <div id="shOut"></div>
         </div>
-        {% else %}
-        <div class="card"><div class="empty-state"><div class="ei"><i class="fa-solid fa-share-nodes"></i></div><h6>Chưa có khóa để chia sẻ</h6><div>Chỉ chủ khóa mới chia sẻ được. Hãy thêm khóa ở mục Thiết bị.</div></div></div>
-        {% endif %}
-    </div>
-
-    <div class="col-lg-5">
-        <div class="card">
-            <div class="card-header">Khóa được chia sẻ cho tôi</div>
-            <div>
-                {% for a in my_accesses %}
-                <div class="row-item">
-                    <div class="min-w-0">
-                        <a href="{% url 'smartlock:device-detail' a.device.id %}" class="fw-semibold">{{ a.device.name }}</a>
-                        <div class="small text-muted">Từ {{ a.created_by.username }}</div>
-                        <div class="my-1 d-flex flex-wrap gap-1">{% for p in a.permissions.all %}<span class="chip">{{ p.name }}</span>{% endfor %}</div>
-                        <small class="text-muted">{% if a.expires_at %}Hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn{% endif %}</small>
-                    </div>
-                    <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-api-url="{% url 'smartlock_api:share-leave' a.id %}" data-api-method="POST" data-confirm="Rời khỏi khóa này?" data-after="reload" data-success="Bạn đã rời khỏi khóa này.">Rời</button>
-                </div>
-                {% empty %}<div class="empty-state py-5"><div class="ei"><i class="fa-solid fa-user-lock"></i></div><div>Chưa ai chia sẻ khóa cho bạn.</div></div>{% endfor %}
-            </div>
         </div>
     </div>
+    <div class="col-lg-5"><div class="card"><div class="card-header">Khóa được chia sẻ cho tôi</div><div id="shIn"></div></div></div>
 </div>
+
 {% elif page == 'door_pins' %}
-<form method="get" class="filter-bar">
-    <div class="flex-grow-1" style="min-width:220px"><select name="device" class="form-select" onchange="this.form.submit()">
-        {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% empty %}<option value="">Chưa có thiết bị</option>{% endfor %}
-    </select></div>
-</form>
-
-<div class="card"><div class="table-responsive">
-    <table class="table table-hover mb-0">
-        <thead><tr><th>Nhãn</th><th>Hiệu lực đến</th><th>Đã dùng</th><th>Trạng thái</th><th class="text-end">Hành động</th></tr></thead>
-        <tbody>
-            {% for p in door_pins %}
-            <tr>
-                <td class="fw-semibold">{{ p.label|default:"—" }}</td>
-                <td class="text-nowrap">{{ p.expires_at|date:"d/m/Y H:i" }}</td>
-                <td>{{ p.use_count }} / {% if p.max_uses %}{{ p.max_uses }}{% else %}∞{% endif %}</td>
-                <td>{% if p.is_revoked %}<span class="status bad">Đã thu hồi</span>{% elif p.is_valid_now %}<span class="status ok">Còn hiệu lực</span>{% else %}<span class="status">Hết hạn</span>{% endif %}</td>
-                <td class="text-end">
-                    {% if not p.is_revoked %}
-                    <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:pin-revoke' p.id %}" data-api-method="DELETE" data-confirm="Thu hồi mã PIN này?" data-after="reload" data-success="Đã thu hồi mã PIN."><i class="fa-solid fa-ban me-1"></i>Thu hồi</button>
-                    {% endif %}
-                </td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="5"><div class="empty-state"><div class="ei"><i class="fa-solid fa-key"></i></div><h6>Chưa có mã PIN nào</h6><div>Cấp mã để khách mở cửa tạm thời.</div></div></td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div></div>
-
-{% if device %}
+<div class="filter-bar"><div class="flex-grow-1" style="min-width:220px"><select id="devSel" class="form-select"></select></div></div>
+<div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead><tr><th>Nhãn</th><th>Hiệu lực đến</th><th>Đã dùng</th><th>Trạng thái</th><th class="text-end">Hành động</th></tr></thead>
+    <tbody id="pinRows"><tr><td colspan="5">{% include "account/_spin.html" %}</td></tr></tbody>
+</table></div></div>
 <div class="modal fade" id="issuePin" tabindex="-1"><div class="modal-dialog"><form class="modal-content" id="issuePinForm">
-    <div class="modal-header"><h5 class="modal-title">Cấp PIN cho {{ device.name }}</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-header"><h5 class="modal-title" id="pinTitle">Cấp PIN</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
         <label class="form-label fw-semibold">Nhãn</label>
         <input type="text" name="label" maxlength="100" class="form-control mb-3" placeholder="VD: Khách Booking #123">
@@ -285,117 +109,250 @@ Lịch sử ra vào
     </div>
     <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Hủy</button><button class="btn btn-primary">Tạo mã PIN</button></div>
 </form></div></div>
-{% endif %}
+
 {% elif page == 'face_profiles' %}
-<form method="get" class="filter-bar">
-    <div class="flex-grow-1" style="min-width:220px"><select name="device" class="form-select" onchange="this.form.submit()">
-        {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% empty %}<option value="">Chưa có thiết bị</option>{% endfor %}
-    </select></div>
-</form>
-
-<div class="card"><div class="table-responsive">
-    <table class="table table-hover mb-0">
-        <thead><tr><th>Tên</th><th>Người dùng</th><th>Ngưỡng</th><th>Ngày tạo</th><th>Trạng thái</th><th class="text-end">Hành động</th></tr></thead>
-        <tbody>
-            {% for f in face_profiles %}
-            <tr>
-                <td class="fw-semibold">{{ f.name|default:"—" }}</td>
-                <td>{{ f.user.full_name|default:f.user.username }}</td>
-                <td>{{ f.threshold }}</td>
-                <td class="text-nowrap text-muted">{{ f.created_at|date:"d/m/Y H:i" }}</td>
-                <td>{% if f.is_active %}<span class="status ok">Đang bật</span>{% else %}<span class="status">Đã tắt</span>{% endif %}</td>
-                <td class="text-end text-nowrap">
-                    <button type="button" class="btn btn-sm btn-outline-primary" data-api-url="{% url 'smartlock_api:face-delete' f.id %}" data-api-method="PATCH" data-api-body='{"is_active": {% if f.is_active %}false{% else %}true{% endif %}}' data-after="reload">{% if f.is_active %}Tắt{% else %}Bật{% endif %}</button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:face-delete' f.id %}" data-api-method="DELETE" data-confirm="Xóa hồ sơ khuôn mặt này?" data-after="reload" data-success="Đã xoá hồ sơ khuôn mặt."><i class="fa-solid fa-trash"></i></button>
-                </td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="6"><div class="empty-state"><div class="ei"><i class="fa-solid fa-face-smile"></i></div><h6>Chưa có khuôn mặt nào</h6><div>Đăng ký để mở cửa bằng nhận diện khuôn mặt.</div></div></td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div></div>
-
-{% if device %}
+<div class="filter-bar"><div class="flex-grow-1" style="min-width:220px"><select id="devSel" class="form-select"></select></div></div>
+<div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead><tr><th>Tên</th><th>Người dùng</th><th>Ngày tạo</th><th>Trạng thái</th><th class="text-end">Hành động</th></tr></thead>
+    <tbody id="faceRows"><tr><td colspan="5">{% include "account/_spin.html" %}</td></tr></tbody>
+</table></div></div>
 <div class="modal fade" id="registerFace" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
-    <div class="modal-header"><h5 class="modal-title">Đăng ký khuôn mặt cho {{ device.name }}</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-header"><h5 class="modal-title" id="faceTitle">Đăng ký khuôn mặt</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">{% include "account/_face_enroll.html" %}</div>
     <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Đóng</button></div>
 </div></div></div>
-{% endif %}
-{% elif page == 'access_history' %}
-<form method="get" class="filter-bar">
-    <div class="flex-grow-1" style="min-width:200px"><select name="device" class="form-select">
-        <option value="">Tất cả thiết bị</option>
-        {% for d in device_list %}<option value="{{ d.id }}" {% if device and d.id == device.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
-    </select></div>
-    <div style="min-width:180px"><select name="method" class="form-select">
-        <option value="">Tất cả phương thức</option>
-        <option value="RFID" {% if method == 'RFID' %}selected{% endif %}>Thẻ RFID</option>
-        <option value="PIN" {% if method == 'PIN' %}selected{% endif %}>Mã PIN</option>
-        <option value="FACE" {% if method == 'FACE' %}selected{% endif %}>Khuôn mặt</option>
-        <option value="BLE" {% if method == 'BLE' %}selected{% endif %}>Bluetooth</option>
-    </select></div>
-    <button class="btn btn-primary px-4"><i class="fa-solid fa-filter me-1"></i>Lọc</button>
-</form>
 
-<div class="card"><div class="table-responsive">
-    <table class="table table-hover mb-0">
-        <thead><tr><th>Thời gian</th><th>Thiết bị</th><th>Phương thức</th><th>Đối tượng</th><th>Kết quả</th><th>Độ tin cậy</th><th>Ảnh</th></tr></thead>
-        <tbody>
-            {% for e in access_events %}
-            <tr>
-                <td class="text-nowrap text-muted">{{ e.created_at|date:"d/m/Y H:i:s" }}</td>
-                <td>{{ e.device.name }}</td>
-                <td><span class="chip">{{ e.get_method_display }}</span></td>
-                <td>{{ e.user.full_name|default:e.user.username|default:e.access_card.name|default:e.face_profile.name|default:e.door_pin.label|default:"—" }}</td>
-                <td>{% if e.success %}<span class="status ok">Thành công</span>{% else %}<span class="status bad">Thất bại</span>{% if e.reason %}<div class="small text-muted">{{ e.reason }}</div>{% endif %}{% endif %}</td>
-                <td>{% if e.confidence != None %}{{ e.confidence|floatformat:2 }}{% else %}—{% endif %}</td>
-                <td>{% if e.snapshot_url %}<a href="{{ e.snapshot_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary"><i class="fa-regular fa-image"></i></a>{% else %}—{% endif %}</td>
-            </tr>
-            {% empty %}
-            <tr><td colspan="7"><div class="empty-state"><div class="ei"><i class="fa-solid fa-clock-rotate-left"></i></div><h6>Chưa có lượt ra vào</h6></div></td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div></div>
-{% if access_events.has_other_pages %}
-<nav class="mt-3"><ul class="pagination justify-content-center mb-0">
-    {% if access_events.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ access_events.previous_page_number }}&device={{ device.id|default:'' }}&method={{ method }}">‹</a></li>{% endif %}
-    <li class="page-item disabled"><span class="page-link">{{ access_events.number }} / {{ access_events.paginator.num_pages }}</span></li>
-    {% if access_events.has_next %}<li class="page-item"><a class="page-link" href="?page={{ access_events.next_page_number }}&device={{ device.id|default:'' }}&method={{ method }}">›</a></li>{% endif %}
-</ul></nav>
-{% endif %}
+{% elif page == 'access_history' %}
+<div class="filter-bar">
+    <div class="flex-grow-1" style="min-width:200px"><select id="devSel" class="form-select"></select></div>
+    <div style="min-width:180px"><select id="ahMethod" class="form-select">
+        <option value="">Tất cả phương thức</option><option value="RFID">Thẻ RFID</option><option value="PIN">Mã PIN</option><option value="FACE">Khuôn mặt</option><option value="BLE">Bluetooth</option>
+    </select></div>
+</div>
+<div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead><tr><th>Thời gian</th><th>Thiết bị</th><th>Phương thức</th><th>Đối tượng</th><th>Kết quả</th><th>Độ tin cậy</th><th>Ảnh</th></tr></thead>
+    <tbody id="ahRows"><tr><td colspan="7">{% include "account/_spin.html" %}</td></tr></tbody>
+</table></div></div>
+<div class="text-center mt-3"><button type="button" class="btn btn-sm btn-outline-secondary d-none" id="ahMore">Xem thêm</button></div>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 
 {% block scripts %}
-{% if page == 'door_pins' and device %}
 <script>
 (function () {
-    const form = document.getElementById('issuePinForm');
-    if (!form) return;
-    let issued = false;
-    document.getElementById('issuePin').addEventListener('hidden.bs.modal', () => { if (issued) location.reload(); });
-    form.addEventListener('submit', async function (e) {
-        e.preventDefault();
-        const btn = form.querySelector('.modal-footer .btn-primary');
-        btn.disabled = true;
-        const res = await SL.api('POST', "{% url 'smartlock_api:device-pins' device.id %}", SL.formBody(form));
-        if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); btn.disabled = false; return; }
-        issued = true;
-        // PIN chỉ trả về đúng 1 lần: hiển thị trong hộp thoại cho tới khi người dùng đóng lại.
-        form.querySelector('.modal-body').innerHTML =
-            '<div class="text-center"><div class="text-muted mb-2">Mã PIN mới (chỉ hiển thị một lần)</div>' +
-            '<div class="display-5 fw-bold font-mono" id="newPin"></div>' +
-            '<div class="small text-muted mt-2" id="newPinMsg"></div></div>';
-        document.getElementById('newPin').textContent = res.data.plain_pin;
-        document.getElementById('newPinMsg').textContent = res.data.message || '';
-        form.querySelector('.modal-footer').innerHTML =
-            '<button type="button" class="btn btn-outline-secondary js-copy" data-text="' + res.data.plain_pin + '">Sao chép</button>' +
-            '<button type="button" class="btn btn-primary" data-bs-dismiss="modal">Xong</button>';
-    });
+    const L = Live, esc = L.esc, $ = id => document.getElementById(id), PAGE = "{{ page }}";
+    const Z = L.ZERO;
+    const U = {
+        cardDetail: "{% url 'smartlock_api:card-detail' '00000000-0000-0000-0000-000000000000' %}",
+        cardReg: "{% url 'smartlock_api:card-register' '00000000-0000-0000-0000-000000000000' %}",
+        readers: "{% url 'smartlock_api:nfc-readers' '00000000-0000-0000-0000-000000000000' %}",
+        reader: "{% url 'smartlock_api:nfc-reader' '00000000-0000-0000-0000-000000000000' %}",
+        pins: "{% url 'smartlock_api:device-pins' '00000000-0000-0000-0000-000000000000' %}",
+        pinRevoke: "{% url 'smartlock_api:pin-revoke' '00000000-0000-0000-0000-000000000000' %}",
+        faces: "{% url 'smartlock_api:device-faces' '00000000-0000-0000-0000-000000000000' %}",
+        faceDel: "{% url 'smartlock_api:face-delete' '00000000-0000-0000-0000-000000000000' %}",
+        shares: "{% url 'smartlock_api:device-shares' '00000000-0000-0000-0000-000000000000' %}",
+        shareDetail: "{% url 'smartlock_api:share-detail' '00000000-0000-0000-0000-000000000000' %}",
+        shareLeave: "{% url 'smartlock_api:share-leave' '00000000-0000-0000-0000-000000000000' %}",
+        perms: "{% url 'smartlock_api:permissions' %}", history: "{% url 'smartlock_api:history' %}",
+        detail: "{% url 'smartlock:device-detail' '00000000-0000-0000-0000-000000000000' %}"
+    };
+    const notFound = (cols, icon, t, s) => '<tr><td colspan="' + cols + '">' + L.empty(icon, t, s) + '</td></tr>';
+    const stOK = ok => ok ? '<span class="status ok">Thành công</span>' : '<span class="status bad">Thất bại</span>';
+    const sel = $('devSel');
+    // thiết bị đang chọn: ?device=… trên URL (đổi bằng ô chọn, không tải lại trang)
+    function chosen(list) { return L.pickDevice(list, L.qp('device')); }
+    function bindSelect(run) {
+        if (!sel) return;
+        sel.addEventListener('change', () => { history.replaceState(null, '', sel.value ? '?device=' + sel.value : location.pathname); run(); });
+    }
+    const td = (label, html, cls) => '<td data-label="' + label + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + html + '</td>';
+
+    /* ======================= THẺ NFC ======================= */
+    if (PAGE === 'nfc_tags') {
+        L.mount({ regions: { cardRows: b => {
+            if (!b.cards.length) return notFound(4, 'fa-id-card', 'Chưa có thẻ NFC nào', 'Bấm “Đăng ký thẻ mới” để thêm thẻ đầu tiên.');
+            return b.cards.map(c => {
+                const url = L.url(U.cardDetail, c.id);
+                const name = c.is_mine
+                    ? '<form class="d-flex gap-2" data-api-url="' + url + '" data-api-method="PATCH" data-success="Đã đổi tên thẻ."><input type="text" name="name" value="' + esc(c.name) + '" class="form-control form-control-sm" placeholder="Chưa đặt tên" maxlength="100"><button class="btn btn-sm btn-outline-secondary" title="Đổi tên"><i class="fa-solid fa-check"></i></button></form>'
+                    : '<span class="fw-semibold">' + esc(c.name || '—') + '</span> <small class="text-muted">@' + esc(c.owner) + '</small>';
+                const devs = c.devices.length ? c.devices.map(d => '<span class="chip plain me-1">' + esc(d.device_name) + '</span>').join('') : '<span class="text-muted">—</span>';
+                const act = c.is_mine ? '<button type="button" class="btn btn-sm ' + (c.is_active ? 'btn-outline-warning' : 'btn-outline-success') + '" data-api-url="' + url + '" data-api-method="PATCH" data-api-body=\'{"is_active": ' + (!c.is_active) + '}\' data-success="' + (c.is_active ? 'Đã vô hiệu hóa thẻ.' : 'Đã kích hoạt thẻ.') + '">' + (c.is_active ? 'Vô hiệu hóa' : 'Kích hoạt') + '</button> <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="' + url + '" data-api-method="DELETE" data-confirm="Xóa thẻ này?" data-success="Đã xóa thẻ."><i class="fa-solid fa-trash"></i></button>' : '';
+                return '<tr>' + td('Tên thẻ', name) + td('Thiết bị', devs) + td('Trạng thái', c.is_active ? '<span class="status ok">Đang hoạt động</span>' : '<span class="status">Vô hiệu hóa</span>') + td('', act, 'text-end text-nowrap') + '</tr>';
+            }).join('');
+        } } });
+    }
+
+    /* ======================= ĐẦU ĐỌC NFC ======================= */
+    if (PAGE === 'nfc_reader') {
+        const run = L.mount({
+            ctx: b => { const list = b.devices.filter(d => L.can(d, 'manage_nfc')); return { list, dev: chosen(list) }; },
+            regions: {
+                nrReaders: (b, x) => {
+                    if (!x.dev) return '';
+                    const rs = b.nfc_readers.filter(r => r.device_id === x.dev.id);
+                    if (!rs.length) return notFound(4, 'fa-tower-broadcast', '', 'Thiết bị chưa có đầu đọc.');
+                    const sw = (r, key, on) => '<form data-api-url="' + L.url(U.reader, r.id) + '" data-api-method="PATCH" data-success="Đã cập nhật đầu đọc."><div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="' + key + '" data-live-ignore ' + (on ? 'checked' : '') + ' ' + (x.dev.is_owner ? '' : 'disabled') + ' onchange="this.form.requestSubmit()"></div></form>';
+                    return rs.map(r => '<tr>' + td('Tên', esc(r.name || 'Đầu đọc') + '<div class="small text-muted">' + esc(L.dshort(r.last_seen_at) || 'Chưa kết nối') + '</div>') + td('Chế độ', '<span class="chip plain">' + esc(r.reader_mode === 'simulated' ? 'Mô phỏng' : r.reader_mode) + '</span>') + td('Hoạt động', sw(r, 'is_active', r.is_active)) + td('Tự đăng ký', sw(r, 'auto_register', r.auto_register)) + '</tr>').join('');
+                },
+                nrLogs: (b, x) => {
+                    if (!x.dev) return '';
+                    const logs = b.nfc_logs.filter(l => l.device_id === x.dev.id).slice(0, 10);
+                    if (!logs.length) return notFound(4, 'fa-clock', '', 'Chưa có sự kiện.');
+                    const ev = { TAP_SUCCESS: 'Quẹt thẻ thành công', TAP_FAILED: 'Quẹt thẻ thất bại', CARD_REGISTER: 'Đăng ký thẻ', READER_CONNECTED: 'Đầu đọc kết nối', READER_DISCONNECTED: 'Đầu đọc ngắt kết nối', CONFIG_UPDATED: 'Đổi cấu hình', SESSION_TIMEOUT: 'Hết phiên' };
+                    return logs.map(l => '<tr>' + td('Thời gian', esc(L.dt(l.created_at)), 'text-nowrap') + td('Sự kiện', esc(ev[l.event_type] || l.event_type)) + td('Thẻ', esc(l.card || '—')) + td('Kết quả', stOK(l.success)) + '</tr>').join('');
+                }
+            },
+            after: (b, x) => {
+                $('nrNone').classList.toggle('d-none', !!x.dev); $('nrMain').classList.toggle('d-none', !x.dev);
+                sel.classList.toggle('d-none', !x.list.length);
+                L.fillSelect(sel, x.list, x.dev && x.dev.id);
+                if (!x.dev) return;
+                $('nrTitle').textContent = 'Đầu đọc của “' + x.dev.name + '”';
+                $('nrAdd').dataset.apiUrl = L.url(U.readers, x.dev.id); $('nrCard').dataset.apiUrl = L.url(U.cardReg, x.dev.id);
+                $('nrAddWrap').classList.toggle('d-none', !x.dev.is_owner);
+            }
+        });
+        bindSelect(run);
+        $('nrCard').addEventListener('submit', () => { /* SL.run xử lý; uid gửi nguyên văn */ });
+    }
+
+    /* ======================= CHIA SẺ ======================= */
+    if (PAGE === 'shares') {
+        let catalog = null;
+        const permsHtml = (checkedFn, prefix) => catalog.map(g => g.items.map(p =>
+            '<div class="col-sm-6"><div class="form-check"><input class="form-check-input" type="checkbox" name="permissions" value="' + esc(p.code) + '" id="' + prefix + p.code + '" ' + (checkedFn(p) ? 'checked' : '') + '><label class="form-check-label" for="' + prefix + p.code + '">' + esc(p.name) + (p.sensitive ? ' <span class="chip danger ms-1">Nhạy cảm</span>' : '') + '</label></div></div>').join('')).join('');
+        const nameOf = {}; 
+        SL.api('GET', U.perms).then(r => {
+            if (!r.ok) { $('shPerms').innerHTML = '<div class="col-12 text-danger small">' + esc(SL.errorMessage(r)) + '</div>'; return; }
+            catalog = r.data.groups; catalog.forEach(g => g.items.forEach(p => nameOf[p.code] = p.name));
+            $('shPerms').innerHTML = permsHtml(p => !p.sensitive, 'g-'); run();
+        });
+        const chips = a => a.permissions.length ? a.permissions.map(p => '<span class="chip">' + esc(nameOf[p] || p) + '</span>').join('') : '<span class="text-muted small">Chưa có quyền nào</span>';
+        const exp = a => a.expires_at ? 'Hết hạn ' + esc(L.dt(a.expires_at)) : 'Không giới hạn thời gian';
+        const run = L.mount({
+            ctx: b => { const list = b.devices.filter(d => d.is_owner); return { list, dev: chosen(list) }; },
+            regions: {
+                shOut: (b, x) => {
+                    if (!x.dev || !catalog) return '';
+                    const list = b.shares_out.filter(a => a.device_id === x.dev.id);
+                    if (!list.length) return '<div class="empty-state py-4"><div class="ei"><i class="fa-solid fa-user-lock"></i></div><div>Khóa này chưa chia sẻ cho ai.</div></div>';
+                    return list.map(a => '<div class="row-item flex-column"><div class="d-flex justify-content-between align-items-start gap-2 w-100"><div class="d-flex gap-3 align-items-start min-w-0"><div class="avatar-sm">' + L.initial(a.user.username) + '</div><div class="min-w-0"><div class="fw-semibold">' + esc(a.user.full_name || a.user.username) + ' <span class="text-muted fw-normal small">@' + esc(a.user.username) + '</span></div><div class="my-1 d-flex flex-wrap gap-1">' + chips(a) + '</div><small class="text-muted">' + exp(a) + '</small></div></div>' +
+                        '<div class="d-flex gap-1 flex-shrink-0"><button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#edit-' + esc(a.id) + '"><i class="fa-solid fa-pen"></i></button><button type="button" class="btn btn-sm btn-outline-danger" data-api-url="' + L.url(U.shareDetail, a.id) + '" data-api-method="DELETE" data-confirm="Thu hồi quyền của ' + esc(a.user.username) + '?" data-success="Đã thu hồi quyền."><i class="fa-solid fa-ban"></i></button></div></div>' +
+                        '<div class="collapse w-100 mt-3" id="edit-' + esc(a.id) + '"><form class="border rounded p-3 bg-light" data-api-url="' + L.url(U.shareDetail, a.id) + '" data-api-method="PATCH" data-success="Đã cập nhật quyền."><div class="row g-2 mb-3">' + permsHtml(p => a.permissions.indexOf(p.code) !== -1, 'u-' + a.id + '-') + '</div><button class="btn btn-sm btn-primary">Lưu quyền</button></form></div></div>').join('');
+                },
+                shIn: (b, x) => {
+                    if (!catalog) return '';
+                    if (!b.shares_in.length) return '<div class="empty-state py-5"><div class="ei"><i class="fa-solid fa-user-lock"></i></div><div>Chưa ai chia sẻ khóa cho bạn.</div></div>';
+                    return b.shares_in.map(a => '<div class="row-item"><div class="min-w-0"><a href="' + L.url(U.detail, a.device_id) + '" class="fw-semibold">' + esc(a.device_name) + '</a><div class="small text-muted">Từ ' + esc(a.shared_by) + '</div><div class="my-1 d-flex flex-wrap gap-1">' + chips(a) + '</div><small class="text-muted">' + (a.expires_at ? 'Hết hạn ' + esc(L.dt(a.expires_at)) : 'Không giới hạn') + '</small></div><button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-api-url="' + L.url(U.shareLeave, a.id) + '" data-api-method="POST" data-confirm="Rời khỏi khóa này?" data-success="Bạn đã rời khỏi khóa này.">Rời</button></div>').join('');
+                }
+            },
+            after: (b, x) => {
+                $('shNoDevice').classList.toggle('d-none', !!x.dev); $('shMain').classList.toggle('d-none', !x.dev);
+                L.fillSelect(sel, x.list, x.dev && x.dev.id);
+                if (!x.dev) return;
+                $('shTitle').textContent = 'Chia sẻ “' + x.dev.name + '” cho người khác';
+                $('shForm').dataset.apiUrl = L.url(U.shares, x.dev.id);
+                $('shCount').textContent = b.shares_out.filter(a => a.device_id === x.dev.id).length;
+            }
+        });
+        bindSelect(run);
+    }
+
+    /* ======================= MÃ PIN ======================= */
+    if (PAGE === 'door_pins') {
+        let cur = null;
+        const run = L.mount({
+            ctx: b => { const list = b.devices.filter(d => L.can(d, 'manage_pins')); return { list, dev: chosen(list) }; },
+            regions: { pinRows: (b, x) => {
+                if (!x.dev) return notFound(5, 'fa-key', 'Chưa có thiết bị', '');
+                const ps = b.pins.filter(p => p.device_id === x.dev.id);
+                if (!ps.length) return notFound(5, 'fa-key', 'Chưa có mã PIN nào', 'Cấp mã để khách mở cửa tạm thời.');
+                return ps.map(p => '<tr>' + td('Nhãn', esc(p.label || '—'), 'fw-semibold') + td('Hiệu lực đến', esc(L.dt(p.expires_at)), 'text-nowrap') + td('Đã dùng', p.use_count + ' / ' + (p.max_uses ? p.max_uses : '∞')) +
+                    td('Trạng thái', p.is_revoked ? '<span class="status bad">Đã thu hồi</span>' : p.is_valid_now ? '<span class="status ok">Còn hiệu lực</span>' : '<span class="status">Hết hạn</span>') +
+                    td('', p.is_revoked ? '' : '<button type="button" class="btn btn-sm btn-outline-danger" data-api-url="' + L.url(U.pinRevoke, p.id) + '" data-api-method="DELETE" data-confirm="Thu hồi mã PIN này?" data-success="Đã thu hồi mã PIN."><i class="fa-solid fa-ban me-1"></i>Thu hồi</button>', 'text-end')).join('') + '';
+            } },
+            after: (b, x) => {
+                cur = x.dev; $('pinOpen').disabled = !x.dev; L.fillSelect(sel, x.list, x.dev && x.dev.id);
+                if (x.dev) $('pinTitle').textContent = 'Cấp PIN cho ' + x.dev.name;
+            }
+        });
+        bindSelect(run);
+        const form = $('issuePinForm'), modalEl = $('issuePin'), origBody = form.querySelector('.modal-body').innerHTML, origFoot = form.querySelector('.modal-footer').innerHTML;
+        modalEl.addEventListener('hidden.bs.modal', () => { form.querySelector('.modal-body').innerHTML = origBody; form.querySelector('.modal-footer').innerHTML = origFoot; });
+        form.addEventListener('submit', async function (e) {
+            e.preventDefault(); if (!cur) return;
+            const btn = form.querySelector('.modal-footer .btn-primary'); btn.disabled = true;
+            const res = await SL.api('POST', L.url(U.pins, cur.id), SL.formBody(form));
+            if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); btn.disabled = false; return; }
+            SmartlockCache.refresh();
+            // PIN chỉ trả về đúng 1 lần: hiển thị trong hộp thoại cho tới khi người dùng đóng lại.
+            form.querySelector('.modal-body').innerHTML = '<div class="text-center"><div class="text-muted mb-2">Mã PIN mới (chỉ hiển thị một lần)</div><div class="display-5 fw-bold font-mono" id="newPin"></div><div class="small text-muted mt-2" id="newPinMsg"></div></div>';
+            $('newPin').textContent = res.data.plain_pin; $('newPinMsg').textContent = res.data.message || '';
+            form.querySelector('.modal-footer').innerHTML = '<button type="button" class="btn btn-outline-secondary js-copy" data-text="' + esc(res.data.plain_pin) + '">Sao chép</button><button type="button" class="btn btn-primary" data-bs-dismiss="modal">Xong</button>';
+        });
+    }
+
+    /* ======================= KHUÔN MẶT ======================= */
+    if (PAGE === 'face_profiles') {
+        let cur = null;
+        const run = L.mount({
+            ctx: b => { const list = b.devices.filter(d => L.can(d, 'manage_face_profiles')); return { list, dev: chosen(list) }; },
+            regions: { faceRows: (b, x) => {
+                if (!x.dev) return notFound(5, 'fa-face-smile', 'Chưa có thiết bị', '');
+                const fs = b.faces.filter(f => f.device_id === x.dev.id);
+                if (!fs.length) return notFound(5, 'fa-face-smile', 'Chưa có khuôn mặt nào', 'Đăng ký để mở cửa bằng nhận diện khuôn mặt.');
+                return fs.map(f => '<tr>' + td('Tên', esc(f.name || '—'), 'fw-semibold') + td('Người dùng', esc(f.user)) + td('Ngày tạo', esc(L.dt(f.created_at)), 'text-nowrap text-muted') +
+                    td('Trạng thái', f.is_active ? '<span class="status ok">Đang bật</span>' : '<span class="status">Đã tắt</span>') +
+                    td('', '<button type="button" class="btn btn-sm btn-outline-primary" data-api-url="' + L.url(U.faceDel, f.id) + '" data-api-method="PATCH" data-api-body=\'{"is_active": ' + (!f.is_active) + '}\'>' + (f.is_active ? 'Tắt' : 'Bật') + '</button> <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="' + L.url(U.faceDel, f.id) + '" data-api-method="DELETE" data-confirm="Xóa hồ sơ khuôn mặt này?" data-success="Đã xoá hồ sơ khuôn mặt."><i class="fa-solid fa-trash"></i></button>', 'text-end text-nowrap')).join('');
+            } },
+            after: (b, x) => {
+                cur = x.dev; $('faceOpen').disabled = !x.dev; L.fillSelect(sel, x.list, x.dev && x.dev.id);
+                const root = $('fe-root');
+                if (x.dev && root) { root.dataset.url = L.url(U.faces, x.dev.id); root.dataset.device = x.dev.id; $('faceTitle').textContent = 'Đăng ký khuôn mặt cho ' + x.dev.name; }
+            }
+        });
+        bindSelect(run);
+    }
+
+    /* ======================= LỊCH SỬ RA VÀO ======================= */
+    if (PAGE === 'access_history') {
+        let extra = [], page = 1, hasMore = false, key = '';
+        const mName = { RFID: 'Thẻ RFID', PIN: 'Mã PIN', FACE: 'Khuôn mặt', BLE: 'Bluetooth' };
+        const method = $('ahMethod');
+        method.value = L.qp('method') || '';
+        const filterKey = () => (L.qp('device') || '') + '|' + method.value;
+        function onFilter() { extra = []; page = 1; hasMore = true; history.replaceState(null, '', '?' + new URLSearchParams({ device: L.qp('device') || '', method: method.value }).toString()); run(); }
+        method.addEventListener('change', onFilter);
+        $('ahMore').addEventListener('click', async function () {
+            this.disabled = true; page++;
+            const qs = new URLSearchParams({ page_size: 50, page });
+            if (L.qp('device')) qs.set('device', L.qp('device')); if (method.value) qs.set('method', method.value);
+            const res = await SL.api('GET', U.history + '?' + qs.toString()); this.disabled = false;
+            if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); return; }
+            extra = extra.concat(res.data.items || []); hasMore = !!res.data.has_next; run();
+        });
+        const run = L.mount({
+            ctx: b => { const list = b.devices.filter(d => L.can(d, 'view_history')); return { list, dev: list.find(d => d.id === L.qp('device')) || null }; },
+            regions: { ahRows: (b, x) => {
+                const seen = new Set(b.history.map(e => e.id));
+                let evs = b.history.concat(extra.filter(e => !seen.has(e.id)));
+                if (x.dev) evs = evs.filter(e => e.device_id === x.dev.id);
+                if (method.value) evs = evs.filter(e => e.method === method.value);
+                if (!evs.length) return notFound(7, 'fa-clock-rotate-left', 'Chưa có lượt ra vào', '');
+                return evs.map(e => '<tr>' + td('Thời gian', esc(L.dt(e.created_at, true)), 'text-nowrap text-muted') + td('Thiết bị', esc(e.device_name)) + td('Phương thức', '<span class="chip">' + esc(mName[e.method] || e.method) + '</span>') + td('Đối tượng', esc(e.who || '—')) +
+                    td('Kết quả', stOK(e.success) + (!e.success && e.reason ? '<div class="small text-muted">' + esc(e.reason) + '</div>' : '')) + td('Độ tin cậy', e.confidence != null ? Number(e.confidence).toFixed(2) : '—') +
+                    td('Ảnh', e.snapshot_url ? '<a href="' + esc(e.snapshot_url) + '" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary"><i class="fa-regular fa-image"></i></a>' : '—')).join('');
+            } },
+            after: (b, x) => {
+                L.fillSelect(sel, x.list, x.dev && x.dev.id, 'Tất cả thiết bị');
+                const k = filterKey(); if (k !== key) { key = k; extra = []; page = 1; hasMore = true; }
+                $('ahMore').classList.toggle('d-none', !(hasMore && b.history.length >= 50));
+            }
+        });
+        sel.addEventListener('change', () => { const p = new URLSearchParams({ device: sel.value, method: method.value }); history.replaceState(null, '', '?' + p.toString()); extra = []; page = 1; hasMore = true; run(); });
+    }
 })();
 </script>
-{% endif %}
 {% endblock %}

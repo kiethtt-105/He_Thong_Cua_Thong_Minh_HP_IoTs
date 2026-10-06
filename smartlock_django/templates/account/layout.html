@@ -448,10 +448,7 @@
                     <small class="text-truncate d-block">{{ user.email }}</small>
                 </div>
             </div>
-            <form method="post" action="{% url 'smartlock:logout' %}" class="mb-0">
-                {% csrf_token %}
-                <button class="sb-logout"><i class="fa-solid fa-right-from-bracket me-2"></i>Đăng xuất</button>
-            </form>
+            <button type="button" id="btn-logout" class="sb-logout"><i class="fa-solid fa-right-from-bracket me-2"></i>Đăng xuất</button>
         </div>
     </aside>
     <div class="sb-backdrop" onclick="document.body.classList.remove('sb-open')"></div>
@@ -541,9 +538,17 @@
             if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); btns.forEach(b => b.disabled = false); return; }
             const msg = res.data.message || el.dataset.success || 'Thành công.';
             const after = el.dataset.after;
-            if (after === 'reload') { SL.flash(msg); location.reload(); }
-            else if (after) { SL.flash(msg); location.href = SL.fillPath(after, res.data); }
-            else { showToast(msg, 'success'); btns.forEach(b => b.disabled = false); }
+            if (after && after !== 'reload') { SL.flash(msg); location.href = SL.fillPath(after, res.data); return; }
+            if (el.matches('form') && !el.hasAttribute('data-reset')) {      // giá trị đã lưu = giá trị gốc mới (để vùng live được vẽ lại)
+                Array.from(el.elements).forEach(f => { if (f.type === 'checkbox' || f.type === 'radio') f.defaultChecked = f.checked; else if (f.type !== 'hidden' && f.type !== 'submit' && f.type !== 'button') f.defaultValue = f.value; });
+            }
+            // ghi xong -> kéo ngay snapshot mới (không đợi chu kỳ 3s) rồi các trang tự vẽ lại, KHÔNG tải lại trang
+            if (window.SmartlockCache) await window.SmartlockCache.refresh();
+            showToast(msg, 'success');
+            btns.forEach(b => b.disabled = false);
+            if (el.matches('form') && el.hasAttribute('data-reset')) el.reset();
+            const col = el.closest('.collapse.show');
+            if (col && window.bootstrap) bootstrap.Collapse.getOrCreateInstance(col).hide();
         }
     };
     try {
@@ -573,6 +578,7 @@
                 body: JSON.stringify({ command })
             });
             const d = await r.json();
+            if (d.ok && window.SmartlockCache) window.SmartlockCache.refresh();
             showToast(d.ok ? d.message : ((d.error && d.error.message) || 'Không thực hiện được.'), d.ok ? 'success' : 'danger');
         } catch (e) { showToast('Không thể kết nối máy chủ.', 'danger'); }
     }
@@ -584,108 +590,102 @@
     });
 </script>
 <script>
-    /* ====================== CACHE MÃ HOÁ + AUTO REFRESH NỀN ======================
-       Sau login, tải toàn bộ dữ liệu dashboard 1 lần, mã hoá (AES-GCM) rồi lưu vào
-       IndexedDB của riêng user này để lần mở sau vẽ UI ngay lập tức (stale-while-
-       revalidate), sau đó âm thầm refresh định kỳ. Khoá mã hoá suy ra (HKDF) từ giá trị
-       ngẫu nhiên gắn với PHIÊN ĐĂNG NHẬP hiện tại (meta[name=sync-key]) - phiên mới
-       (đăng nhập lại) hoặc logout (session bị huỷ) khiến cache cũ vĩnh viễn không đọc
-       được nữa, dù dữ liệu mã hoá còn sót trong trình duyệt. */
+    /* ====================== CACHE PHIÊN (sessionStorage) + TỰ LÀM MỚI TỪ SERVER ======================
+       - Toàn bộ dữ liệu của CHÍNH user đang đăng nhập (API snapshot: thiết bị, thẻ, PIN, khuôn mặt, chia sẻ,
+         lịch sử, thông báo, bảo mật...) nằm trong sessionStorage: đóng tab là mất ngay, tab khác không dùng chung.
+       - Đọc: SmartlockCache.get() trả về ngay từ bộ nhớ (đồng bộ, không chờ mạng). Các trang vẽ giao diện từ đây.
+       - Làm mới: gọi API mỗi REFRESH_MS khi tab đang hiển thị; tab ẩn thì tạm dừng, quay lại thì làm mới ngay.
+         Gửi kèm ETag: dữ liệu không đổi thì server trả 304 rỗng. Lỗi mạng thì giãn dần; 401/403 thì dừng và xoá cache.
+       - Mỗi lần dữ liệu đổi bắn sự kiện 'smartlock:cache-updated' (detail = bundle).
+       - SmartlockCache.refresh() xếp hàng 1 lần tải MỚI sau lệnh gọi (dùng ngay sau khi ghi dữ liệu). */
     (function () {
-        const keyMeta = document.querySelector('meta[name="sync-key"]');
-        if (!keyMeta || !keyMeta.content || !window.crypto || !window.crypto.subtle || !window.indexedDB) return;
+        const AUTH = {{ user.is_authenticated|yesno:"true,false" }};
+        const URL_SNAPSHOT = "{% url 'smartlock_api:snapshot' %}";
+        const KEY = 'sl_bundle_{{ user.id|default:"anon" }}';
+        const REFRESH_MS = 3000;          // 2000-5000 tuỳ ý
+        const MAX_BACKOFF_MS = 30000;
 
-        const SYNC_MATERIAL = keyMeta.content;
-        const USER_ID = "{{ user.id|default:'anon' }}";
-        const DB_NAME = 'smartlock_cache_' + USER_ID;
-        const STORE = 'bundles';
-        const enc = new TextEncoder();
-        const dec = new TextDecoder();
+        let mem = null, etag = '', timer = null, failStreak = 0, stopped = false, inflight = false;
+        let chain = Promise.resolve();
 
-        let keyPromise = null;
-        function getKey() {
-            if (!keyPromise) {
-                keyPromise = crypto.subtle.importKey('raw', enc.encode(SYNC_MATERIAL), 'HKDF', false, ['deriveKey'])
-                    .then(material => crypto.subtle.deriveKey(
-                        { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('smartlock:' + USER_ID), info: enc.encode('cache-v1') },
-                        material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']));
-            }
-            return keyPromise;
-        }
+        if (!AUTH) { window.SmartlockCache = { get: () => null, refresh: () => Promise.resolve(), clear() {} }; return; }
 
-        function openDB() {
-            return new Promise((resolve, reject) => {
-                const req = indexedDB.open(DB_NAME, 1);
-                req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-                req.onsuccess = () => resolve(req.result);
-                req.onerror = () => reject(req.error);
-            });
-        }
+        // dọn cache của user khác còn sót trong tab này (đổi tài khoản cùng tab)
+        try { Object.keys(sessionStorage).forEach(k => { if (k.indexOf('sl_bundle_') === 0 && k !== KEY) sessionStorage.removeItem(k); }); } catch (e) {}
 
-        async function store(name, obj) {
-            const key = await getKey();
-            const iv = crypto.getRandomValues(new Uint8Array(12));
-            const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(obj)));
-            const db = await openDB();
-            return new Promise((resolve, reject) => {
-                const tx = db.transaction(STORE, 'readwrite');
-                tx.objectStore(STORE).put({ iv: Array.from(iv), data: Array.from(new Uint8Array(cipher)) }, name);
-                tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
-            });
-        }
-
-        async function load(name) {
+        function readCache() {
+            if (mem) return mem;
             try {
-                const db = await openDB();
-                const rec = await new Promise((resolve, reject) => {
-                    const tx = db.transaction(STORE, 'readonly');
-                    const r = tx.objectStore(STORE).get(name);
-                    r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
-                });
-                if (!rec) return null;
-                const key = await getKey();
-                const plain = await crypto.subtle.decrypt(
-                    { name: 'AES-GCM', iv: new Uint8Array(rec.iv) }, key, new Uint8Array(rec.data));
-                return JSON.parse(dec.decode(plain));
-            } catch (e) {
-                return null; // sai khoá (phiên khác) hoặc dữ liệu hỏng -> coi như chưa có cache
-            }
+                const raw = sessionStorage.getItem(KEY);
+                if (raw) { const o = JSON.parse(raw); mem = o.data; etag = o.etag || ''; }
+            } catch (e) {}
+            return mem;
+        }
+        function writeCache(bundle, tag) {
+            mem = bundle; etag = tag || '';
+            try { sessionStorage.setItem(KEY, JSON.stringify({ etag: etag, data: bundle })); } catch (e) { /* đầy/bị chặn: vẫn còn bản trong RAM */ }
+        }
+        function clearCache() {
+            mem = null; etag = ''; stopped = true; clearTimeout(timer);
+            try { sessionStorage.removeItem(KEY); } catch (e) {}
         }
 
         function applyToUI(bundle) {
             if (!bundle) return;
-            const badge = document.getElementById('notif-badge');
-            if (badge) {
-                if (bundle.unread_count > 0) { badge.textContent = bundle.unread_count; badge.classList.remove('d-none'); }
-                else badge.classList.add('d-none');
-            }
+            const n = bundle.unread_count || 0;
+            ['notif-badge', 'notif-badge-m'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.textContent = n; el.classList.toggle('d-none', n <= 0);
+            });
             document.dispatchEvent(new CustomEvent('smartlock:cache-updated', { detail: bundle }));
         }
 
-        async function refresh() {
+        async function fetchOnce() {
+            if (stopped) return;
+            inflight = true;
             try {
-                const r = await fetch("{% url 'smartlock_api:bootstrap' %}", { credentials: 'same-origin' });
-                if (!r.ok) return;
+                readCache();
+                const headers = { 'Accept': 'application/json' };
+                if (etag && mem) headers['If-None-Match'] = etag;       // không đổi -> 304 rỗng
+                const r = await fetch(URL_SNAPSHOT, { credentials: 'same-origin', cache: 'no-store', headers });
+                if (r.status === 401 || r.status === 403) { clearCache(); return; }    // hết phiên: xoá sạch
+                failStreak = 0;
+                if (r.status === 304) return;
+                if (!r.ok) throw new Error('HTTP ' + r.status);
                 const bundle = await r.json();
-                await store('bootstrap', bundle);
+                if (!bundle.ok) throw new Error('API');
+                writeCache(bundle, r.headers.get('ETag'));
                 applyToUI(bundle);
-            } catch (e) { /* mất mạng: giữ nguyên cache cũ, thử lại ở lần refresh sau */ }
+            } catch (e) { failStreak++; }          // mất mạng: giữ cache cũ, thử lại với độ trễ tăng dần
+            finally { inflight = false; schedule(); }
+        }
+        function refresh() { chain = chain.then(fetchOnce, fetchOnce); return chain; }
+        function schedule() {
+            clearTimeout(timer);
+            if (stopped) return;
+            const wait = Math.min(REFRESH_MS * Math.pow(2, failStreak), MAX_BACKOFF_MS);
+            timer = setTimeout(() => { if (document.hidden || inflight) schedule(); else refresh(); }, wait);
         }
 
-        load('bootstrap').then(applyToUI);   // sơn UI ngay từ cache cũ (nếu đọc được)
-        refresh();                            // rồi refresh nền ngay lập tức
-        setInterval(refresh, 45000);          // và định kỳ mỗi 45s
-        document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+        applyToUI(readCache());                    // vẽ ngay từ bộ nhớ
+        refresh();                                 // rồi làm mới nền, lặp lại mỗi REFRESH_MS
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) { clearTimeout(timer); refresh(); } });
+        window.addEventListener('online', () => { failStreak = 0; clearTimeout(timer); refresh(); });
 
-        window.SmartlockCache = {
-            getBootstrap: () => load('bootstrap'),
-            clear: () => { try { indexedDB.deleteDatabase(DB_NAME); } catch (e) {} },
-        };
-        document.querySelectorAll('form[action*="logout"]').forEach(f => {
-            f.addEventListener('submit', () => window.SmartlockCache.clear());
+        window.SmartlockCache = { get: readCache, refresh: refresh, clear: clearCache };
+
+        // Đăng xuất qua API (web: huỷ session cookie), xoá cache rồi về trang đăng nhập.
+        const lo = document.getElementById('btn-logout');
+        if (lo) lo.addEventListener('click', async () => {
+            lo.disabled = true;
+            clearCache();
+            await SL.api('POST', "{% url 'smartlock_api:logout' %}", {});
+            location.href = "{% url 'smartlock:login' %}";
         });
     })();
 </script>
+{% if user.is_authenticated %}{% include "account/_live.html" %}{% endif %}
 <script>
     /* ---- mobile / WebView helpers (UI only) ---- */
     (function () {

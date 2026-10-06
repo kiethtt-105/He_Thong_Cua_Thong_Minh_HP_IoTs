@@ -35,115 +35,26 @@ Thông báo
 {% block page_actions %}
 {% if page == 'dashboard' %}
 <div class="d-flex gap-2">
-    {% if devices.count > 1 %}
-    <form method="get">
-        <select name="device" class="form-select" onchange="this.form.submit()">
-            {% for d in devices %}<option value="{{ d.id }}" {% if current_device and d.id == current_device.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}
-        </select>
-    </form>
-    {% endif %}
-    <button class="btn btn-outline-primary" onclick="location.reload()"><i class="fa-solid fa-arrows-rotate me-1"></i> Đồng bộ</button>
+    <select id="dashDevice" class="form-select d-none" aria-label="Chọn thiết bị"></select>
+    <button class="btn btn-outline-primary" id="dashSync"><i class="fa-solid fa-arrows-rotate me-1"></i> Đồng bộ</button>
 </div>
 {% elif page == 'notifications' %}
 <div class="d-flex gap-2 flex-wrap">
     <div class="btn-group">
-        <a href="?" class="btn btn-sm {% if not only_unread %}btn-primary{% else %}btn-outline-primary{% endif %}">Tất cả</a>
-        <a href="?filter=unread" class="btn btn-sm {% if only_unread %}btn-primary{% else %}btn-outline-primary{% endif %}">Chưa đọc ({{ unread_count }})</a>
+        <button type="button" class="btn btn-sm btn-primary" id="nfAll">Tất cả</button>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="nfUnread">Chưa đọc (<span id="nfUnreadN">0</span>)</button>
     </div>
-    <button type="button" class="btn btn-sm btn-outline-success" data-api-url="{% url 'smartlock_api:notifications-read' %}" data-api-body='{"all": true}' data-after="reload" data-success="Đã đánh dấu đã đọc." {% if not unread_count %}disabled{% endif %}><i class="fa-solid fa-check-double me-1"></i>Đọc tất cả</button>
+    <button type="button" class="btn btn-sm btn-outline-success" id="nfReadAll" data-api-url="{% url 'smartlock_api:notifications-read' %}" data-api-body='{"all": true}' data-after="reload" data-success="Đã đánh dấu đã đọc."><i class="fa-solid fa-check-double me-1"></i>Đọc tất cả</button>
     <button type="button" class="btn btn-sm btn-outline-danger" data-api-url="{% url 'smartlock_api:notifications' %}" data-api-method="DELETE" data-confirm="Xóa tất cả thông báo đã đọc?" data-after="reload" data-success="Đã xóa thông báo đã đọc."><i class="fa-solid fa-trash me-1"></i>Xóa đã đọc</button>
 </div>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 {% block content %}
+{# ===================== DASHBOARD: khung; mọi số liệu vẽ từ SmartlockCache ===================== #}
 {% if page == 'dashboard' %}
-{% for a in announcements %}
-<div class="alert alert-{% if a.level == 'danger' %}danger{% elif a.level == 'warning' %}warning{% else %}info{% endif %}">
-    <strong>{{ a.title }}</strong> — {{ a.body }}
-</div>
-{% endfor %}
-
-<div class="row g-3 mb-4">
-    <div class="col-4"><div class="card stat-card h-100"><div class="card-body">
-        <div class="stat-icon bg-primary-subtle text-primary"><i class="fa-solid fa-lock"></i></div>
-        <div><div class="stat-num">{{ total_devices }}</div><small class="text-muted">Thiết bị</small></div>
-    </div></div></div>
-    <div class="col-4"><div class="card stat-card h-100"><div class="card-body">
-        <div class="stat-icon bg-success-subtle text-success"><i class="fa-solid fa-wifi"></i></div>
-        <div><div class="stat-num">{{ online_devices }}</div><small class="text-muted">Đang online</small></div>
-    </div></div></div>
-    <div class="col-4"><div class="card stat-card h-100"><div class="card-body">
-        <div class="stat-icon bg-danger-subtle text-danger"><i class="fa-solid fa-bell"></i></div>
-        <div><div class="stat-num">{{ unread_count }}</div><small class="text-muted">Chưa đọc</small></div>
-    </div></div></div>
-</div>
-
-{% if current_device %}
-<div class="row g-3 mb-4">
-    <div class="col-lg-7">
-        <div class="card h-100">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="fa-solid fa-lock me-2 text-primary"></i>{{ current_device.name }}</span>
-                <span class="status {% if current_device.status == 'online' %}ok{% elif current_device.status == 'maintenance' %}warn{% endif %}">{{ current_device.status|title }}</span>
-            </div>
-            <div class="card-body text-center py-4">
-                {% if current_device.lock_state == 'locked' %}
-                    <div class="lock-ring text-success"><i class="fa-solid fa-lock"></i></div><div class="lock-state text-success">Đã khóa</div>
-                {% elif current_device.lock_state == 'unlocked' %}
-                    <div class="lock-ring text-danger"><i class="fa-solid fa-lock-open"></i></div><div class="lock-state text-danger">Đang mở</div>
-                {% elif current_device.lock_state == 'jammed' %}
-                    <div class="lock-ring text-warning"><i class="fa-solid fa-triangle-exclamation"></i></div><div class="lock-state text-warning">Bị kẹt</div>
-                {% else %}
-                    <div class="lock-ring text-secondary"><i class="fa-solid fa-circle-question"></i></div><div class="lock-state text-secondary">Không rõ</div>
-                {% endif %}
-                <p class="text-muted mt-2 mb-4"><i class="fa-solid fa-location-dot me-1"></i>{{ current_device.location|default:"Chưa cập nhật vị trí" }}</p>
-                <div class="d-flex justify-content-center gap-2 flex-wrap">
-                    <button class="btn btn-success btn-lg px-4 js-cmd" {% if current_device.status != 'online' or not caps.remote_lock %}disabled{% endif %}
-                        data-url="{% url 'smartlock_api:device-command' current_device.id %}" data-command="LOCK" data-label="khóa thiết bị">
-                        <i class="fa-solid fa-lock me-2"></i>Khóa</button>
-                    <button class="btn btn-danger btn-lg px-4 js-cmd" {% if current_device.status != 'online' or not caps.remote_unlock %}disabled{% endif %}
-                        data-url="{% url 'smartlock_api:device-command' current_device.id %}" data-command="UNLOCK" data-label="mở khóa thiết bị">
-                        <i class="fa-solid fa-lock-open me-2"></i>Mở khóa</button>
-                </div>
-                {% if current_device.status != 'online' %}<small class="text-muted d-block mt-3">Thiết bị không online, không thể gửi lệnh.</small>
-                {% elif not caps.remote_lock and not caps.remote_unlock %}<small class="text-muted d-block mt-3">Bạn chưa có quyền điều khiển từ xa khóa này.</small>{% endif %}
-            </div>
-        </div>
-    </div>
-    <div class="col-lg-5">
-        <div class="card h-100"><div class="card-body">
-            <div class="meter-label">Pin</div>
-            <div class="d-flex justify-content-between mb-1"><span>Dung lượng</span><strong>{{ current_device.battery_level }}%</strong></div>
-            <div class="progress mb-4" style="height:10px"><div class="progress-bar {% if current_device.battery_level < 20 %}bg-danger{% elif current_device.battery_level < 50 %}bg-warning{% else %}bg-success{% endif %}" style="width: {{ current_device.battery_level }}%"></div></div>
-            <div class="meter-label">Kết nối</div>
-            <div class="d-flex flex-wrap gap-2 mb-3">
-                <span class="chip {% if not current_device.wifi_enabled %}plain{% endif %}"><i class="fa-solid fa-wifi"></i>Wi-Fi</span>
-                <span class="chip {% if not current_device.bluetooth_enabled %}plain{% endif %}"><i class="fa-brands fa-bluetooth-b"></i>Bluetooth</span>
-                <span class="chip {% if not current_device.nfc_enabled %}plain{% endif %}"><i class="fa-solid fa-id-card"></i>NFC</span>
-            </div>
-            <small class="text-muted d-block">Firmware: {{ current_device.firmware_version|default:"Chưa cập nhật" }}</small>
-            <small class="text-muted d-block">Online lần cuối: {{ current_device.last_seen_at|date:"d/m/Y H:i"|default:"—" }}</small>
-            <div class="section-title mt-4">Truy cập nhanh</div>
-            <div class="row g-2">
-                <div class="col-6"><a class="tile {% if not caps.manage_nfc %}off{% endif %}" href="{% url 'smartlock:nfc-tags' %}?device={{ current_device.id }}"><i class="fa-solid fa-id-card"></i>Thẻ NFC</a></div>
-                <div class="col-6"><a class="tile {% if not caps.manage_pins %}off{% endif %}" href="{% url 'smartlock:door-pins' %}?device={{ current_device.id }}"><i class="fa-solid fa-hashtag"></i>Mã PIN</a></div>
-                <div class="col-6"><a class="tile {% if not caps.manage_sharing %}off{% endif %}" href="{% url 'smartlock:shares' %}?device={{ current_device.id }}"><i class="fa-solid fa-share-nodes"></i>Chia sẻ</a></div>
-                <div class="col-6"><a class="tile {% if not caps.view_history %}off{% endif %}" href="{% url 'smartlock:access-history' %}?device={{ current_device.id }}"><i class="fa-solid fa-door-open"></i>Lịch sử</a></div>
-            </div>
-            <a href="{% url 'smartlock:device-detail' current_device.id %}" class="btn btn-outline-primary btn-sm mt-3 d-block">Chi tiết thiết bị</a>
-        </div></div>
-    </div>
-</div>
-{% else %}
-<div class="card mb-4"><div class="card-body text-center py-5">
-    <div class="lock-ring text-primary"><i class="fa-solid fa-plug-circle-plus"></i></div>
-    <h5>Bạn chưa có thiết bị nào</h5>
-    <p class="text-muted">Tạo thiết bị mô phỏng, thêm khóa thật bằng mã, hoặc nhờ chủ khóa chia sẻ cho bạn.</p>
-    <a href="{% url 'smartlock:devices-list' %}" class="btn btn-primary me-2">Thêm thiết bị</a>
-    <a href="{% url 'smartlock:device-claim' %}" class="btn btn-outline-primary">Thêm bằng mã</a>
-</div></div>
-{% endif %}
-
+<div id="dAnn"></div>
+<div id="dStats">{% include "account/_spin.html" %}</div>
+<div id="dDevice"></div>
 <div class="row g-3">
     <div class="col-lg-7">
         <div class="card h-100"><div class="card-header">Hoạt động 7 ngày qua</div>
@@ -152,58 +63,31 @@ Thông báo
     <div class="col-lg-5">
         <div class="card h-100">
             <div class="card-header d-flex justify-content-between"><span>Thông báo mới</span><a href="{% url 'smartlock:notifications' %}" class="small">Xem tất cả</a></div>
-            <div class="card-body">
-                {% for n in recent_notifications %}
-                <div class="alert alert-{% if n.severity == 'critical' %}danger{% elif n.severity == 'warning' %}warning{% else %}info{% endif %} py-2 px-3 mb-2">
-                    <strong>{{ n.title }}</strong>{% if not n.is_read %} <span class="status brand ms-1">Mới</span>{% endif %}
-                    <small class="d-block opacity-75">{{ n.message|truncatechars:90 }}</small>
-                </div>
-                {% empty %}<p class="text-muted mb-0">Chưa có thông báo.</p>{% endfor %}
-            </div>
+            <div class="card-body" id="dNotes"></div>
         </div>
     </div>
     <div class="col-12">
         <div class="card"><div class="card-header d-flex justify-content-between"><span>Nhật ký gần đây</span><a href="{% url 'smartlock:audit-logs' %}" class="small">Xem tất cả</a></div>
-            <div>
-                {% for log in recent_logs %}
-                <div class="row-item align-items-center py-2">
-                    <span><i class="fa-solid {% if log.success %}fa-circle-check text-success{% else %}fa-circle-xmark text-danger{% endif %} me-2"></i><code>{{ log.action }}</code>{% if log.device %} <span class="text-muted small ms-1">{{ log.device.name }}</span>{% endif %}</span>
-                    <small class="text-muted text-nowrap">{{ log.created_at|date:"d/m/Y H:i" }}</small>
-                </div>
-                {% empty %}<div class="empty-state py-4">Chưa có hoạt động nào.</div>{% endfor %}
-            </div>
+            <div id="dLogs"></div>
         </div>
     </div>
 </div>
-{{ chart_data|json_script:"chart-data" }}
+
+{# ===================== TÀI KHOẢN & 2FA ===================== #}
 {% elif page == 'profile' %}
 <div class="row g-3">
-    <div class="col-lg-4">
-        <div class="card h-100"><div class="card-body text-center py-4">
-            <div class="avatar-lg">{{ user.username|upper|slice:":1" }}</div>
-            <h5 class="fw-bold mb-0">{{ user.full_name|default:user.username }}</h5>
-            <div class="text-muted small mb-3">@{{ user.username }}</div>
-            <span class="status {% if user.email_verified %}ok{% else %}warn{% endif %}">{% if user.email_verified %}Email đã xác thực{% else %}Email chưa xác thực{% endif %}</span>
-            <div class="row g-0 mini-stat border-top pt-3 mt-4">
-                <div class="col"><b>{{ device_count }}</b><small>Thiết bị</small></div>
-                <div class="col"><b>{{ card_count }}</b><small>Thẻ NFC</small></div>
-                <div class="col"><b class="fs-6 pt-1">{{ user.created_at|date:"d/m/Y" }}</b><small>Tham gia</small></div>
-            </div>
-        </div></div>
-    </div>
+    <div class="col-lg-4"><div class="card h-100"><div class="card-body text-center py-4" id="pCard">{% include "account/_spin.html" %}</div></div></div>
     <div class="col-lg-8">
         <div class="card mb-3">
             <div class="card-header"><i class="fa-solid fa-id-card me-2 text-primary"></i>Thông tin tài khoản</div>
             <div class="card-body">
-                <form data-api-url="{% url 'smartlock_api:me' %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật thông tin cá nhân.">
+                <form id="profileForm" data-api-url="{% url 'smartlock_api:me' %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật thông tin cá nhân.">
                     <div class="row g-3">
                         <div class="col-md-6"><label class="form-label">Email</label>
-                            <input class="form-control" value="{{ user.email }}" disabled>
-                            <small class="{% if user.email_verified %}text-success{% else %}text-warning{% endif %}">
-                                <i class="fa-solid {% if user.email_verified %}fa-circle-check{% else %}fa-circle-exclamation{% endif %} me-1"></i>{% if user.email_verified %}Đã xác thực{% else %}Chưa xác thực{% endif %}</small></div>
-                        <div class="col-md-6"><label class="form-label">Tên đăng nhập</label><input class="form-control" value="{{ user.username }}" disabled></div>
-                        <div class="col-md-6"><label class="form-label">Họ và tên</label><input type="text" name="full_name" class="form-control" value="{{ user.full_name|default:'' }}" maxlength="100"></div>
-                        <div class="col-md-6"><label class="form-label">Số điện thoại</label><input type="tel" name="phone" class="form-control" value="{{ user.phone|default:'' }}" maxlength="20"></div>
+                            <input class="form-control" id="pEmail" disabled><small id="pEmailState"></small></div>
+                        <div class="col-md-6"><label class="form-label">Tên đăng nhập</label><input class="form-control" id="pUsername" disabled></div>
+                        <div class="col-md-6"><label class="form-label">Họ và tên</label><input type="text" name="full_name" id="pFull" class="form-control" maxlength="100"></div>
+                        <div class="col-md-6"><label class="form-label">Số điện thoại</label><input type="tel" name="phone" id="pPhone" class="form-control" maxlength="20"></div>
                     </div>
                     <button class="btn btn-primary mt-3"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>
                 </form>
@@ -212,7 +96,7 @@ Thông báo
         <div class="card">
             <div class="card-header"><i class="fa-solid fa-key me-2 text-primary"></i>Đổi mật khẩu</div>
             <div class="card-body">
-                <form data-api-url="{% url 'smartlock_api:change-password' %}" data-api-method="POST" data-after="reload" data-success="Đã đổi mật khẩu.">
+                <form id="pwForm" novalidate>
                     <div class="row g-3">
                         <div class="col-12"><label class="form-label">Mật khẩu hiện tại</label><input type="password" name="old_password" class="form-control" required autocomplete="current-password"></div>
                         <div class="col-md-6"><label class="form-label">Mật khẩu mới</label><input type="password" name="new_password1" class="form-control" required autocomplete="new-password"></div>
@@ -223,117 +107,37 @@ Thông báo
             </div>
         </div>
     </div>
-    <!-- ===================== XÁC THỰC 2 LỚP (2FA) ===================== -->
+
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="fa-solid fa-shield-halved me-2"></i>Xác thực 2 lớp (2FA)</span>
-                {% if tf_enabled %}<span class="status ok">Đang bật</span>{% else %}<span class="status">Đang tắt</span>{% endif %}
+                <span><i class="fa-solid fa-shield-halved me-2"></i>Xác thực 2 lớp (2FA)</span><span id="tfBadge"></span>
             </div>
             <div class="card-body">
-                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-                    <div class="text-muted small">
-                        Khi bật, mỗi lần đăng nhập bạn cần thêm một bước xác thực (Google Authenticator, Passkey hoặc mã qua email).
-                    </div>
-                    {% if tf_enabled %}
-                        <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#tfPwModal"
-                                data-url="{% url 'smartlock:tf-disable' %}" data-title="Tắt xác thực 2 lớp" data-label="Tiếp tục tắt 2FA">
-                            <i class="fa-solid fa-lock-open me-1"></i>Tắt 2FA</button>
-                    {% elif tf_has_method %}
-                        <form method="post" action="{% url 'smartlock:tf-enable' %}">{% csrf_token %}
-                            <button class="btn btn-success btn-sm"><i class="fa-solid fa-lock me-1"></i>Bật 2FA</button>
-                        </form>
-                    {% endif %}
-                </div>
-                {% if not tf_has_method %}
-                    <div class="alert alert-info py-2 small"><i class="fa-solid fa-circle-info me-1"></i>Thiết lập xong phương thức đầu tiên, 2FA sẽ được bật tự động.</div>
-                {% endif %}
-
-                <ul class="list-group list-group-flush">
-                    <!-- Google Authenticator -->
-                    <li class="list-group-item px-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                        <div>
-                            <div class="fw-semibold"><i class="fa-solid fa-mobile-screen-button me-2"></i>Google Authenticator</div>
-                            <small class="{% if tf_totp %}text-success{% else %}text-muted{% endif %}">{% if tf_totp %}Đã thiết lập{% else %}Chưa thiết lập - dùng app Google/Microsoft Authenticator, Authy...{% endif %}</small>
-                        </div>
-                        {% if tf_totp %}
-                            <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#tfPwModal"
-                                    data-url="{% url 'smartlock:tf-remove-method' 'totp' %}" data-title="Gỡ Google Authenticator" data-label="Gỡ">Gỡ</button>
-                        {% else %}
-                            <form method="post" action="{% url 'smartlock:tf-totp-begin' %}">{% csrf_token %}
-                                <button class="btn btn-outline-primary btn-sm">Thiết lập</button></form>
-                        {% endif %}
-                    </li>
-
-                    <!-- Passkey / FIDO2 -->
-                    <li class="list-group-item px-0">
-                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                            <div>
-                                <div class="fw-semibold"><i class="fa-solid fa-fingerprint me-2"></i>Passkey / khóa bảo mật (FIDO2)</div>
-                                <small class="{% if tf_passkeys %}text-success{% else %}text-muted{% endif %}">{% if tf_passkeys %}{{ tf_passkeys|length }} passkey đã đăng ký{% else %}Vân tay, Face ID, Windows Hello hoặc khóa USB/NFC{% endif %}</small>
-                            </div>
-                            <div class="input-group input-group-sm" style="max-width:340px">
-                                <input type="text" id="tfPasskeyName" class="form-control" placeholder="Tên passkey (vd: Laptop)" maxlength="100">
-                                <button type="button" id="tfPasskeyAdd" class="btn btn-outline-primary"><i class="fa-solid fa-plus me-1"></i>Thêm</button>
-                            </div>
-                        </div>
-                        <div id="tfPasskeyMsg" class="small text-danger mt-1"></div>
-                        {% if tf_passkeys %}
-                        <ul class="list-unstyled mt-2 mb-0">
-                            {% for c in tf_passkeys %}
-                            <li class="d-flex justify-content-between align-items-center border rounded px-2 py-1 mb-1 small">
-                                <span><i class="fa-solid fa-key me-2 text-muted"></i>{{ c.name }}
-                                    <span class="text-muted ms-2">thêm {{ c.created_at|date:"d/m/Y" }}{% if c.last_used_at %} · dùng {{ c.last_used_at|date:"d/m/Y" }}{% endif %}</span></span>
-                                <button type="button" class="btn btn-link btn-sm text-danger p-0" data-bs-toggle="modal" data-bs-target="#tfPwModal"
-                                        data-url="{% url 'smartlock:tf-passkey-delete' c.id %}" data-title="Xóa passkey “{{ c.name }}”" data-label="Xóa">Xóa</button>
-                            </li>
-                            {% endfor %}
-                        </ul>
-                        {% endif %}
-                    </li>
-
-                    <!-- Email OTP -->
-                    <li class="list-group-item px-0">
-                        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                            <div>
-                                <div class="fw-semibold"><i class="fa-solid fa-envelope-open-text me-2"></i>Mã OTP qua email</div>
-                                <small class="{% if tf_email %}text-success{% else %}text-muted{% endif %}">{% if tf_email %}Đã bật - gửi đến {{ tf_email_masked }}{% else %}Nhận mã 6 số qua {{ tf_email_masked }}{% endif %}</small>
-                            </div>
-                            {% if tf_email %}
-                                <button type="button" class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#tfPwModal"
-                                        data-url="{% url 'smartlock:tf-remove-method' 'email' %}" data-title="Gỡ Email OTP" data-label="Gỡ">Gỡ</button>
-                            {% elif not tf_email_verified %}
-                                <small class="text-warning">Cần xác thực email trước</small>
-                            {% elif not tf_email_pending %}
-                                <form method="post" action="{% url 'smartlock:tf-email-send' %}">{% csrf_token %}
-                                    <button class="btn btn-outline-primary btn-sm">Gửi mã xác nhận</button></form>
-                            {% endif %}
-                        </div>
-                        {% if tf_email_pending %}
-                        <form method="post" action="{% url 'smartlock:tf-email-confirm' %}" class="row g-2 mt-1">{% csrf_token %}
-                            <div class="col-auto"><input type="text" name="code" class="form-control form-control-sm" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="Mã 6 số" autocomplete="one-time-code" required></div>
-                            <div class="col-auto"><button class="btn btn-primary btn-sm">Xác nhận</button></div>
-                            <div class="col-auto"><button class="btn btn-link btn-sm" formaction="{% url 'smartlock:tf-email-send' %}" formnovalidate>Gửi lại</button></div>
-                        </form>
-                        {% endif %}
-                    </li>
-
-                </ul>
+                <div class="text-muted small mb-3">Khi bật, mỗi lần đăng nhập bạn cần thêm một bước xác thực (Google Authenticator, Passkey hoặc mã qua email). 2FA tự bật khi bạn thiết lập phương thức đầu tiên và tự tắt khi gỡ hết phương thức.</div>
+                <div id="tfList">{% include "account/_spin.html" %}</div>
+                {# khối nhập mã email: dựng sẵn, chỉ hiện sau khi bấm "Gửi mã" (không bị vẽ lại 3s/lần) #}
+                <form id="tfEmailForm" class="row g-2 mt-1 d-none">
+                    <div class="col-auto"><input type="text" name="code" class="form-control form-control-sm" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="Mã 6 số" autocomplete="one-time-code" required></div>
+                    <div class="col-auto"><button class="btn btn-primary btn-sm">Xác nhận</button></div>
+                    <div class="col-auto"><button type="button" class="btn btn-link btn-sm" id="tfEmailResend">Gửi lại</button></div>
+                </form>
+                <div id="tfPasskeyMsg" class="small text-danger mt-2"></div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Modal nhập lại mật khẩu (dùng chung cho gỡ / tắt / tạo lại mã) -->
+<!-- Modal nhập lại mật khẩu (gỡ phương thức) -->
 <div class="modal fade" id="tfPwModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
-        <form method="post" class="modal-content" id="tfPwForm">
-            {% csrf_token %}
+        <form class="modal-content" id="tfPwForm">
             <div class="modal-header"><h6 class="modal-title" id="tfPwTitle">Xác nhận</h6>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Đóng"></button></div>
             <div class="modal-body">
                 <label class="form-label">Nhập lại mật khẩu để tiếp tục</label>
                 <input type="password" name="password" class="form-control" required autocomplete="current-password">
+                <div class="small text-danger mt-2" id="tfPwErr"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
@@ -343,7 +147,6 @@ Thông báo
     </div>
 </div>
 
-{% if tf_totp_setup %}
 <!-- Modal thiết lập Google Authenticator -->
 <div class="modal fade" id="tfTotpModal" tabindex="-1" data-bs-backdrop="static" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
@@ -351,126 +154,285 @@ Thông báo
             <div class="modal-header"><h6 class="modal-title">Thiết lập Google Authenticator</h6></div>
             <div class="modal-body text-center">
                 <p class="small text-muted mb-2">1. Mở app Authenticator → thêm tài khoản → quét mã QR.</p>
-                <img src="{{ tf_totp_setup.qr }}" alt="QR" width="200" height="200" class="bg-white p-2 border rounded mb-2">
+                <img id="tfQr" alt="QR" width="200" height="200" class="bg-white p-2 border rounded mb-2">
                 <p class="small text-muted mb-1">Không quét được? Nhập khóa thủ công:</p>
-                <code class="user-select-all d-block mb-3">{{ tf_totp_setup.secret }}</code>
+                <code class="user-select-all d-block mb-3" id="tfSecret"></code>
                 <p class="small text-muted mb-2">2. Nhập mã 6 số app đang hiển thị để xác nhận.</p>
-                <form method="post" action="{% url 'smartlock:tf-totp-confirm' %}" class="d-flex gap-2 justify-content-center">{% csrf_token %}
-                    <input type="hidden" name="setup_token" value="{{ tf_totp_setup.token }}">
-                    <input type="text" name="code" class="form-control text-center" style="max-width:160px" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" autocomplete="one-time-code" required autofocus>
+                <form id="tfTotpForm" class="d-flex gap-2 justify-content-center">
+                    <input type="text" name="code" class="form-control text-center" style="max-width:160px" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="000000" autocomplete="one-time-code" required>
                     <button class="btn btn-primary">Xác nhận</button>
                 </form>
+                <div class="small text-danger mt-2" id="tfTotpErr"></div>
             </div>
-            <div class="modal-footer">
-                <form method="post" action="{% url 'smartlock:tf-totp-cancel' %}">{% csrf_token %}<button class="btn btn-link text-muted">Hủy thiết lập</button></form>
-            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-link text-muted" data-bs-dismiss="modal">Hủy thiết lập</button></div>
         </div>
     </div>
 </div>
-{% endif %}
 
+{# ===================== THÔNG BÁO ===================== #}
+{% elif page == 'notifications' %}
+<div class="card" id="nfList">{% include "account/_spin.html" %}</div>
+<div class="text-center mt-3"><button type="button" class="btn btn-sm btn-outline-secondary d-none" id="nfMore">Xem thêm</button></div>
+{% else %}{{ block.super }}{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if page == 'dashboard' %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-    var csrf = (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
-
-    // --- modal nhập lại mật khẩu ---
-    var pw = document.getElementById('tfPwModal');
-    if (pw) pw.addEventListener('show.bs.modal', function (ev) {
-        var b = ev.relatedTarget; if (!b) return;
-        document.getElementById('tfPwForm').action = b.dataset.url;
-        document.getElementById('tfPwTitle').textContent = b.dataset.title || 'Xác nhận';
-        document.getElementById('tfPwSubmit').textContent = b.dataset.label || 'Xác nhận';
-        pw.querySelector('[name=password]').value = '';
+(function () {
+    const L = Live, esc = L.esc;
+    
+    const U = { devices: "{% url 'smartlock:devices-list' %}", claim: "{% url 'smartlock:device-claim' %}",
+        detail: "{% url 'smartlock:device-detail' '00000000-0000-0000-0000-000000000000' %}",
+        cmd: "{% url 'smartlock_api:device-command' '00000000-0000-0000-0000-000000000000' %}",
+        nfc: "{% url 'smartlock:nfc-tags' %}", pins: "{% url 'smartlock:door-pins' %}", shares: "{% url 'smartlock:shares' %}",
+        hist: "{% url 'smartlock:access-history' %}" };
+    let chart = null;
+    const sel = document.getElementById('dashDevice');
+    sel.addEventListener('change', () => { history.replaceState(null, '', '?device=' + sel.value); run(); });
+    document.getElementById('dashSync').addEventListener('click', async function () {
+        this.disabled = true; await SmartlockCache.refresh(); this.disabled = false; showToast('Đã đồng bộ.', 'success');
     });
 
-    // --- tự mở modal TOTP ---
-    var totpModal = document.getElementById('tfTotpModal');
-    if (totpModal && window.bootstrap) new bootstrap.Modal(totpModal).show();
+    function stats(b) {
+        const on = b.devices.filter(d => d.status === 'online').length;
+        const card = (cls, ico, n, t) => '<div class="col-4"><div class="card stat-card h-100"><div class="card-body"><div class="stat-icon bg-' + cls + '-subtle text-' + cls + '"><i class="fa-solid ' + ico + '"></i></div><div><div class="stat-num">' + n + '</div><small class="text-muted">' + t + '</small></div></div></div></div>';
+        return '<div class="row g-3 mb-4">' + card('primary', 'fa-lock', b.devices.length, 'Thiết bị') + card('success', 'fa-wifi', on, 'Đang online') + card('danger', 'fa-bell', b.unread_count, 'Chưa đọc') + '</div>';
+    }
+    function deviceBlock(b, ctx) {
+        const d = ctx.dev;
+        if (!d) return '<div class="card mb-4"><div class="card-body text-center py-5"><div class="lock-ring text-primary"><i class="fa-solid fa-plug-circle-plus"></i></div><h5>Bạn chưa có thiết bị nào</h5><p class="text-muted">Thêm khóa bằng mã, hoặc nhờ chủ khóa chia sẻ cho bạn.</p><a href="' + U.claim + '" class="btn btn-outline-primary">Thêm bằng mã</a></div></div>';
+        const c = L.caps(d), ls = L.lockInfo(d.lock_state), on = d.status === 'online', cmdUrl = L.url(U.cmd, d.id);
+        const btn = (cls, ico, label, command, lab, ok) => '<button class="btn btn-' + cls + ' btn-lg px-4 js-cmd" ' + (on && ok ? '' : 'disabled') + ' data-url="' + cmdUrl + '" data-command="' + command + '" data-label="' + lab + '"><i class="fa-solid ' + ico + ' me-2"></i>' + label + '</button>';
+        const tile = (href, ico, t, ok) => '<div class="col-6"><a class="tile ' + (ok ? '' : 'off') + '" href="' + href + '?device=' + d.id + '"><i class="fa-solid ' + ico + '"></i>' + t + '</a></div>';
+        const note = !on ? '<small class="text-muted d-block mt-3">Thiết bị không online, không thể gửi lệnh.</small>'
+            : (!c.remote_lock && !c.remote_unlock ? '<small class="text-muted d-block mt-3">Bạn chưa có quyền điều khiển từ xa khóa này.</small>' : '');
+        return '<div class="row g-3 mb-4"><div class="col-lg-7"><div class="card h-100"><div class="card-header d-flex justify-content-between align-items-center"><span><i class="fa-solid fa-lock me-2 text-primary"></i>' + esc(d.name) + '</span><span class="status ' + L.statusCls(d.status) + '">' + esc(L.cap(d.status)) + '</span></div>' +
+            '<div class="card-body text-center py-4"><div class="lock-ring ' + ls.cls + '"><i class="fa-solid ' + ls.ico + '"></i></div><div class="lock-state ' + ls.cls + '">' + ls.txt + '</div>' +
+            '<p class="text-muted mt-2 mb-4"><i class="fa-solid fa-location-dot me-1"></i>' + esc(d.location || 'Chưa cập nhật vị trí') + '</p>' +
+            '<div class="d-flex justify-content-center gap-2 flex-wrap">' + btn('success', 'fa-lock', 'Khóa', 'LOCK', 'khóa thiết bị', c.remote_lock) + btn('danger', 'fa-lock-open', 'Mở khóa', 'UNLOCK', 'mở khóa thiết bị', c.remote_unlock) + '</div>' + note + '</div></div></div>' +
+            '<div class="col-lg-5"><div class="card h-100"><div class="card-body"><div class="meter-label">Pin</div><div class="d-flex justify-content-between mb-1"><span>Dung lượng</span><strong>' + d.battery_level + '%</strong></div>' +
+            '<div class="progress mb-4" style="height:10px"><div class="progress-bar ' + L.battCls(d.battery_level) + '" style="width:' + d.battery_level + '%"></div></div>' +
+            '<div class="meter-label">Kết nối</div><div class="d-flex flex-wrap gap-2 mb-3"><span class="chip ' + (d.wifi_enabled ? '' : 'plain') + '"><i class="fa-solid fa-wifi"></i>Wi-Fi</span><span class="chip ' + (d.bluetooth_enabled ? '' : 'plain') + '"><i class="fa-brands fa-bluetooth-b"></i>Bluetooth</span><span class="chip ' + (d.nfc_enabled ? '' : 'plain') + '"><i class="fa-solid fa-id-card"></i>NFC</span></div>' +
+            '<small class="text-muted d-block">Firmware: ' + esc(d.firmware_version || 'Chưa cập nhật') + '</small><small class="text-muted d-block">Online lần cuối: ' + esc(L.dt(d.last_seen_at) || '—') + '</small>' +
+            '<div class="section-title mt-4">Truy cập nhanh</div><div class="row g-2">' + tile(U.nfc, 'fa-id-card', 'Thẻ NFC', c.manage_nfc) + tile(U.pins, 'fa-hashtag', 'Mã PIN', c.manage_pins) + tile(U.shares, 'fa-share-nodes', 'Chia sẻ', c.manage_sharing) + tile(U.hist, 'fa-door-open', 'Lịch sử', c.view_history) + '</div>' +
+            '<a href="' + L.url(U.detail, d.id) + '" class="btn btn-outline-primary btn-sm mt-3 d-block">Chi tiết thiết bị</a></div></div></div></div>';
+    }
+    function notes(b) {
+        const list = b.notifications.slice(0, 5);
+        if (!list.length) return '<p class="text-muted mb-0">Chưa có thông báo.</p>';
+        return list.map(n => '<div class="alert alert-' + L.sevCls(n.severity) + ' py-2 px-3 mb-2"><strong>' + esc(n.title) + '</strong>' + (n.is_read ? '' : ' <span class="status brand ms-1">Mới</span>') + '<small class="d-block opacity-75">' + esc((n.message || '').length > 90 ? n.message.slice(0, 89) + '…' : n.message) + '</small></div>').join('');
+    }
+    function logs(b) {
+        const list = b.audit.slice(0, 8);
+        if (!list.length) return '<div class="empty-state py-4">Chưa có hoạt động nào.</div>';
+        return list.map(l => '<div class="row-item align-items-center py-2"><span><i class="fa-solid ' + (l.success ? 'fa-circle-check text-success' : 'fa-circle-xmark text-danger') + ' me-2"></i><code>' + esc(l.action) + '</code>' + (l.device ? ' <span class="text-muted small ms-1">' + esc(l.device) + '</span>' : '') + '</span><small class="text-muted text-nowrap">' + esc(L.dt(l.created_at)) + '</small></div>').join('');
+    }
+    function drawChart(b) {
+        const cv = document.getElementById('activityChart'); if (!cv || !window.Chart) return;
+        if (!chart) {
+            Chart.defaults.font.family = "'Inter', system-ui, sans-serif"; Chart.defaults.color = '#64748b';
+            chart = new Chart(cv, { type: 'line', data: { labels: b.activity.labels, datasets: [{ label: 'Thao tác', data: b.activity.values, borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,.12)', tension: .35, fill: true, pointBackgroundColor: '#0f766e', pointRadius: 3 }] },
+                options: { responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: '#e9efef' } }, x: { grid: { display: false } } } } });
+        } else if (JSON.stringify(chart.data.datasets[0].data) !== JSON.stringify(b.activity.values)) {
+            chart.data.labels = b.activity.labels; chart.data.datasets[0].data = b.activity.values; chart.update('none');
+        }
+    }
+    const run = L.mount({
+        ctx: b => ({ dev: L.pickDevice(b.devices, L.qp('device')) }),
+        regions: {
+            dAnn: b => b.announcements.map(a => '<div class="alert alert-' + (a.level === 'danger' ? 'danger' : a.level === 'warning' ? 'warning' : 'info') + '"><strong>' + esc(a.title) + '</strong> — ' + esc(a.body) + '</div>').join(''),
+            dStats: stats, dDevice: deviceBlock, dNotes: notes, dLogs: logs
+        },
+        after: (b, ctx) => {
+            sel.classList.toggle('d-none', b.devices.length < 2);
+            L.fillSelect(sel, b.devices, ctx.dev && ctx.dev.id);
+            drawChart(b);
+        }
+    });
+})();
+</script>
 
-    // --- đăng ký passkey (WebAuthn) ---
-    function b64uToBuf(s) { s = s.replace(/-/g, '+').replace(/_/g, '/'); s += '='.repeat((4 - s.length % 4) % 4);
-        var bin = atob(s), b = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i); return b.buffer; }
-    function bufToB64u(buf) { var b = new Uint8Array(buf), s = ''; for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
-        return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+{% elif page == 'profile' %}
+<script>
+(function () {
+    const L = Live, esc = L.esc;
+    const A = { totpBegin: "{% url 'smartlock_api:2fa-totp-begin' %}", totpConfirm: "{% url 'smartlock_api:2fa-totp-confirm' %}",
+        emailSend: "{% url 'smartlock_api:2fa-setup-email-send' %}", emailConfirm: "{% url 'smartlock_api:2fa-setup-email-confirm' %}",
+        pkOptions: "{% url 'smartlock_api:2fa-setup-passkey-options' %}", pkRegister: "{% url 'smartlock_api:2fa-setup-passkey-register' %}",
+        pkRemove: "{% url 'smartlock_api:2fa-passkey-remove' '00000000-0000-0000-0000-000000000000' %}",
+        methodRemove: "{% url 'smartlock_api:2fa-method-remove' 'METHOD' %}", changePw: "{% url 'smartlock_api:change-password' %}" };
+    const $ = id => document.getElementById(id);
+    let emailPending = false, setupToken = '', removeUrl = '';
+    const modal = id => bootstrap.Modal.getOrCreateInstance($(id));
+    const done = async res => { await SmartlockCache.refresh(); showToast(res.data.message || 'Thành công.', 'success'); };
 
-    var add = document.getElementById('tfPasskeyAdd'), msg = document.getElementById('tfPasskeyMsg');
-    if (add) add.addEventListener('click', async function () {
-        msg.textContent = '';
+    // ---------- vẽ từ cache ----------
+    function card(b) {
+        const u = b.user, owned = b.devices.filter(d => d.is_owner).length, mine = b.cards.filter(c => c.is_mine).length;
+        return '<div class="avatar-lg">' + L.initial(u.username) + '</div><h5 class="fw-bold mb-0">' + esc(u.full_name || u.username) + '</h5><div class="text-muted small mb-3">@' + esc(u.username) + '</div>' +
+            '<span class="status ' + (u.email_verified ? 'ok' : 'warn') + '">' + (u.email_verified ? 'Email đã xác thực' : 'Email chưa xác thực') + '</span>' +
+            '<div class="row g-0 mini-stat border-top pt-3 mt-4"><div class="col"><b>' + owned + '</b><small>Thiết bị</small></div><div class="col"><b>' + mine + '</b><small>Thẻ NFC</small></div><div class="col"><b class="fs-6 pt-1">' + esc(L.dday(u.created_at)) + '</b><small>Tham gia</small></div></div>';
+    }
+    const rowBtn = (url, title, label) => '<button type="button" class="btn btn-outline-danger btn-sm" data-remove-url="' + esc(url) + '" data-title="' + esc(title) + '">' + label + '</button>';
+    function tfList(b) {
+        const s = b.security, u = b.user;
+        let h = '';
+        if (!s.two_fa_enabled) h += '<div class="alert alert-info py-2 small"><i class="fa-solid fa-circle-info me-1"></i>Thiết lập xong phương thức đầu tiên, 2FA sẽ được bật tự động.</div>';
+        h += '<ul class="list-group list-group-flush">';
+        h += '<li class="list-group-item px-0 d-flex justify-content-between align-items-center flex-wrap gap-2"><div><div class="fw-semibold"><i class="fa-solid fa-mobile-screen-button me-2"></i>Google Authenticator</div><small class="' + (s.totp ? 'text-success' : 'text-muted') + '">' + (s.totp ? 'Đã thiết lập' : 'Chưa thiết lập - dùng app Google/Microsoft Authenticator, Authy...') + '</small></div>' +
+            (s.totp ? rowBtn(A.methodRemove.replace('METHOD', 'totp'), 'Gỡ Google Authenticator', 'Gỡ') : '<button type="button" class="btn btn-outline-primary btn-sm" id="tfTotpBegin">Thiết lập</button>') + '</li>';
+        h += '<li class="list-group-item px-0"><div class="d-flex justify-content-between align-items-center flex-wrap gap-2"><div><div class="fw-semibold"><i class="fa-solid fa-fingerprint me-2"></i>Passkey / khóa bảo mật (FIDO2)</div><small class="' + (s.passkeys.length ? 'text-success' : 'text-muted') + '">' + (s.passkeys.length ? s.passkeys.length + ' passkey đã đăng ký' : 'Vân tay, Face ID, Windows Hello hoặc khóa USB/NFC') + '</small></div>' +
+            '<div class="input-group input-group-sm" style="max-width:340px"><input type="text" id="tfPasskeyName" class="form-control" placeholder="Tên passkey (vd: Laptop)" maxlength="100"><button type="button" id="tfPasskeyAdd" class="btn btn-outline-primary"><i class="fa-solid fa-plus me-1"></i>Thêm</button></div></div>';
+        if (s.passkeys.length) h += '<ul class="list-unstyled mt-2 mb-0">' + s.passkeys.map(c => '<li class="d-flex justify-content-between align-items-center border rounded px-2 py-1 mb-1 small"><span><i class="fa-solid fa-key me-2 text-muted"></i>' + esc(c.name) + '<span class="text-muted ms-2">thêm ' + esc(L.dday(c.created_at)) + (c.last_used_at ? ' · dùng ' + esc(L.dday(c.last_used_at)) : '') + '</span></span><button type="button" class="btn btn-link btn-sm text-danger p-0" data-remove-url="' + esc(L.url(A.pkRemove, c.id)) + '" data-title="Xóa passkey “' + esc(c.name) + '”">Xóa</button></li>').join('') + '</ul>';
+        h += '</li>';
+        h += '<li class="list-group-item px-0"><div class="d-flex justify-content-between align-items-center flex-wrap gap-2"><div><div class="fw-semibold"><i class="fa-solid fa-envelope-open-text me-2"></i>Mã OTP qua email</div><small class="' + (s.email_otp ? 'text-success' : 'text-muted') + '">' + (s.email_otp ? 'Đã bật - gửi đến ' : 'Nhận mã 6 số qua ') + esc(s.email_masked) + '</small></div>' +
+            (s.email_otp ? rowBtn(A.methodRemove.replace('METHOD', 'email'), 'Gỡ Email OTP', 'Gỡ')
+                : !u.email_verified ? '<small class="text-warning">Cần xác thực email trước</small>'
+                : '<button type="button" class="btn btn-outline-primary btn-sm" id="tfEmailSend">Gửi mã xác nhận</button>') + '</div></li></ul>';
+        return h;
+    }
+    L.mount({
+        regions: { pCard: card, tfList: tfList },
+        after: b => {
+            $('tfBadge').innerHTML = b.security.two_fa_enabled ? '<span class="status ok">Đang bật</span>' : '<span class="status">Đang tắt</span>';
+            $('pEmail').value = b.user.email; $('pUsername').value = b.user.username;
+            $('pEmailState').className = b.user.email_verified ? 'text-success' : 'text-warning';
+            $('pEmailState').innerHTML = '<i class="fa-solid ' + (b.user.email_verified ? 'fa-circle-check' : 'fa-circle-exclamation') + ' me-1"></i>' + (b.user.email_verified ? 'Đã xác thực' : 'Chưa xác thực');
+            const f = $('profileForm');       // chỉ nạp khi người dùng chưa sửa dở
+            [['pFull', b.user.full_name], ['pPhone', b.user.phone]].forEach(([id, v]) => { const i = $(id); if (document.activeElement !== i && i.value === i.defaultValue) { i.value = v || ''; i.defaultValue = v || ''; } });
+            $('tfEmailForm').classList.toggle('d-none', !(emailPending && !b.security.email_otp));
+            if (b.security.email_otp) emailPending = false;
+        }
+    });
+
+    // ---------- đổi mật khẩu ----------
+    $('pwForm').addEventListener('submit', async e => {
+        e.preventDefault();
+        const f = e.target, v = SL.formBody(f);
+        if (v.new_password1 !== v.new_password2) { showToast('Mật khẩu xác nhận không khớp.', 'danger'); return; }
+        const btn = f.querySelector('button'); btn.disabled = true;
+        const res = await SL.api('POST', A.changePw, { old_password: v.old_password, new_password: v.new_password1 });
+        btn.disabled = false;
+        if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); return; }
+        f.reset(); showToast(res.data.message || 'Đã đổi mật khẩu.', 'success');
+    });
+
+    // ---------- TOTP ----------
+    document.addEventListener('click', async e => {
+        const t = e.target.closest('#tfTotpBegin'); if (!t) return;
+        t.disabled = true;
+        const res = await SL.api('POST', A.totpBegin, {}); t.disabled = false;
+        if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); return; }
+        setupToken = res.data.setup_token; $('tfQr').src = res.data.qr; $('tfSecret').textContent = res.data.secret;
+        $('tfTotpErr').textContent = ''; $('tfTotpForm').reset(); modal('tfTotpModal').show();
+    });
+    $('tfTotpForm').addEventListener('submit', async e => {
+        e.preventDefault();
+        const res = await SL.api('POST', A.totpConfirm, { setup_token: setupToken, code: e.target.code.value });
+        if (!res.ok) { $('tfTotpErr').textContent = SL.errorMessage(res); return; }
+        modal('tfTotpModal').hide(); setupToken = ''; await done(res);
+    });
+
+    // ---------- Email OTP ----------
+    async function sendEmail() {
+        const res = await SL.api('POST', A.emailSend, {});
+        if (!res.ok) { showToast(SL.errorMessage(res), res.status === 429 ? 'warning' : 'danger'); if (res.status === 429) { emailPending = true; $('tfEmailForm').classList.remove('d-none'); } return; }
+        emailPending = true; $('tfEmailForm').classList.remove('d-none'); showToast(res.data.message || 'Đã gửi mã.', 'success');
+    }
+    document.addEventListener('click', e => { if (e.target.closest('#tfEmailSend')) sendEmail(); });
+    $('tfEmailResend').addEventListener('click', sendEmail);
+    $('tfEmailForm').addEventListener('submit', async e => {
+        e.preventDefault();
+        const res = await SL.api('POST', A.emailConfirm, { code: e.target.code.value });
+        if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); return; }
+        emailPending = false; e.target.reset(); await done(res);
+    });
+
+    // ---------- gỡ phương thức (nhập lại mật khẩu) ----------
+    document.addEventListener('click', e => {
+        const b = e.target.closest('[data-remove-url]'); if (!b) return;
+        removeUrl = b.dataset.removeUrl; $('tfPwTitle').textContent = b.dataset.title || 'Xác nhận';
+        $('tfPwForm').reset(); $('tfPwErr').textContent = ''; modal('tfPwModal').show();
+    });
+    $('tfPwForm').addEventListener('submit', async e => {
+        e.preventDefault();
+        const res = await SL.api('POST', removeUrl, { password: e.target.password.value });
+        if (!res.ok) { $('tfPwErr').textContent = SL.errorMessage(res); return; }
+        modal('tfPwModal').hide(); await done(res);
+    });
+
+    // ---------- Passkey (WebAuthn) ----------
+    const b64uToBuf = s => { s = s.replace(/-/g, '+').replace(/_/g, '/'); s += '='.repeat((4 - s.length % 4) % 4); const bin = atob(s), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a.buffer; };
+    const bufToB64u = buf => { const a = new Uint8Array(buf); let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+    document.addEventListener('click', async e => {
+        const add = e.target.closest('#tfPasskeyAdd'); if (!add) return;
+        const msg = $('tfPasskeyMsg'); msg.textContent = '';
         if (!window.PublicKeyCredential) { msg.textContent = 'Trình duyệt không hỗ trợ passkey/WebAuthn.'; return; }
         add.disabled = true;
         try {
-            var r = await fetch("{% url 'smartlock:tf-passkey-options' %}", { method: 'POST', headers: { 'X-CSRFToken': csrf }, credentials: 'same-origin' });
-            if (!r.ok) throw new Error('Không lấy được tùy chọn đăng ký.');
-            var o = await r.json();
-            o.challenge = b64uToBuf(o.challenge);
-            o.user.id = b64uToBuf(o.user.id);
-            (o.excludeCredentials || []).forEach(function (c) { c.id = b64uToBuf(c.id); });
-            var cred = await navigator.credentials.create({ publicKey: o });
-            var payload = {
-                name: document.getElementById('tfPasskeyName').value,
-                transports: cred.response.getTransports ? cred.response.getTransports() : [],
-                credential: {
-                    id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
-                    authenticatorAttachment: cred.authenticatorAttachment || null,
+            const r = await SL.api('POST', A.pkOptions, {});
+            if (!r.ok) throw new Error(SL.errorMessage(r));
+            const o = r.data.options;
+            o.challenge = b64uToBuf(o.challenge); o.user.id = b64uToBuf(o.user.id);
+            (o.excludeCredentials || []).forEach(c => { c.id = b64uToBuf(c.id); });
+            const cred = await navigator.credentials.create({ publicKey: o });
+            const r2 = await SL.api('POST', A.pkRegister, {
+                name: $('tfPasskeyName').value, transports: cred.response.getTransports ? cred.response.getTransports() : [],
+                credential: { id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type, authenticatorAttachment: cred.authenticatorAttachment || null,
                     response: { clientDataJSON: bufToB64u(cred.response.clientDataJSON), attestationObject: bufToB64u(cred.response.attestationObject) },
-                    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {}
-                }
-            };
-            var r2 = await fetch("{% url 'smartlock:tf-passkey-register' %}", { method: 'POST', credentials: 'same-origin',
-                headers: { 'X-CSRFToken': csrf, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-            var d = await r2.json();
-            if (!d.ok) throw new Error(d.error || 'Đăng ký passkey thất bại.');
-            location.reload();
-        } catch (e) {
-            msg.textContent = (e && e.name === 'NotAllowedError') ? 'Đã hủy hoặc hết thời gian chờ.' : (e.message || 'Đăng ký passkey thất bại.');
-            add.disabled = false;
+                    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {} } });
+            if (!r2.ok) throw new Error(SL.errorMessage(r2));
+            await done(r2);
+        } catch (err) {
+            msg.textContent = (err && err.name === 'NotAllowedError') ? 'Đã hủy hoặc hết thời gian chờ.' : (err.message || 'Đăng ký passkey thất bại.');
+        } finally { const a = $('tfPasskeyAdd'); if (a) a.disabled = false; }
+    });
+})();
+</script>
+
+{% elif page == 'notifications' %}
+<script>
+(function () {
+    const L = Live, esc = L.esc, $ = id => document.getElementById(id);
+    const URL_LIST = "{% url 'smartlock_api:notifications' %}", URL_READ = "{% url 'smartlock_api:notifications-read' %}";
+    let onlyUnread = L.qp('filter') === 'unread', extra = [], page = 1, hasMore = true;
+    function setTab() {
+        $('nfAll').className = 'btn btn-sm ' + (onlyUnread ? 'btn-outline-primary' : 'btn-primary');
+        $('nfUnread').className = 'btn btn-sm ' + (onlyUnread ? 'btn-primary' : 'btn-outline-primary');
+    }
+    $('nfAll').onclick = () => { onlyUnread = false; history.replaceState(null, '', '?'); setTab(); run(); };
+    $('nfUnread').onclick = () => { onlyUnread = true; history.replaceState(null, '', '?filter=unread'); setTab(); run(); };
+    setTab();
+    // "Xem thêm": các thông báo cũ hơn 50 mục trong cache lấy trực tiếp từ API (phân trang)
+    $('nfMore').onclick = async function () {
+        this.disabled = true; page = Math.max(page, 1) + 1;
+        const res = await SL.api('GET', URL_LIST + '?page_size=50&page=' + page + (onlyUnread ? '&unread=1' : ''));
+        this.disabled = false;
+        if (!res.ok) { showToast(SL.errorMessage(res), 'danger'); return; }
+        extra = extra.concat(res.data.items || []); hasMore = !!res.data.has_next; run();
+    };
+    function render(b) {
+        const seen = new Set(b.notifications.map(n => n.id));
+        let list = b.notifications.concat(extra.filter(n => !seen.has(n.id)));
+        if (onlyUnread) list = list.filter(n => !n.is_read);
+        const dev = {}; b.devices.forEach(d => dev[d.id] = d.name);
+        if (!list.length) return L.empty('fa-regular fa-bell-slash', 'Chưa có thông báo nào', '');
+        return list.map(n => {
+            const sev = n.severity === 'critical' ? ['bg-danger-subtle text-danger', 'fa-circle-exclamation'] : n.severity === 'warning' ? ['bg-warning-subtle text-warning', 'fa-triangle-exclamation'] : ['bg-info-subtle text-info', 'fa-bell'];
+            return '<div class="row-item align-items-center ' + (n.is_read ? '' : 'unread') + '"><div class="d-flex gap-3"><div class="stat-icon ' + sev[0] + '"><i class="fa-solid ' + sev[1] + '"></i></div><div><div class="fw-semibold">' + esc(n.title) + (n.is_read ? '' : ' <span class="status brand ms-1">Mới</span>') + '</div><div>' + esc(n.message) + '</div><small class="text-muted">' + esc(L.dt(n.created_at)) + (n.device_id && dev[n.device_id] ? ' • ' + esc(dev[n.device_id]) : '') + '</small></div></div>' +
+                (n.is_read ? '' : '<button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-api-url="' + URL_READ + '" data-api-body=\'{"ids": ["' + esc(n.id) + '"]}\' data-after="reload" data-success="Đã đánh dấu đã đọc.">Đã đọc</button>') + '</div>';
+        }).join('');
+    }
+    const run = L.mount({
+        regions: { nfList: render },
+        after: b => {
+            $('nfUnreadN').textContent = b.unread_count; $('nfReadAll').disabled = !b.unread_count;
+            $('nfMore').classList.toggle('d-none', !(hasMore && b.notifications.length >= 50));
         }
     });
-});
-</script>
-{% elif page == 'notifications' %}
-<div class="card">
-    {% for n in notifications %}
-    <div class="row-item align-items-center {% if not n.is_read %}unread{% endif %}">
-        <div class="d-flex gap-3">
-            <div class="stat-icon {% if n.severity == 'critical' %}bg-danger-subtle text-danger{% elif n.severity == 'warning' %}bg-warning-subtle text-warning{% else %}bg-info-subtle text-info{% endif %}">
-                <i class="fa-solid {% if n.severity == 'critical' %}fa-circle-exclamation{% elif n.severity == 'warning' %}fa-triangle-exclamation{% else %}fa-bell{% endif %}"></i>
-            </div>
-            <div>
-                <div class="fw-semibold">{{ n.title }} {% if not n.is_read %}<span class="status brand ms-1">Mới</span>{% endif %}</div>
-                <div>{{ n.message }}</div>
-                <small class="text-muted">{{ n.created_at|date:"d/m/Y H:i" }}{% if n.device %} • {{ n.device.name }}{% endif %}</small>
-            </div>
-        </div>
-        {% if not n.is_read %}
-        <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" data-api-url="{% url 'smartlock_api:notifications-read' %}" data-api-body='{"ids": ["{{ n.id }}"]}' data-after="reload" data-success="Đã đánh dấu đã đọc.">Đã đọc</button>
-        {% endif %}
-    </div>
-    {% empty %}
-    <div class="empty-state"><div class="ei"><i class="fa-regular fa-bell-slash"></i></div><h6>Chưa có thông báo nào</h6></div>
-    {% endfor %}
-</div>
-{% if notifications.has_other_pages %}
-<nav class="mt-3"><ul class="pagination justify-content-center mb-0">
-    {% if notifications.has_previous %}<li class="page-item"><a class="page-link" href="?page={{ notifications.previous_page_number }}{{ qs }}">‹</a></li>{% endif %}
-    <li class="page-item disabled"><span class="page-link">{{ notifications.number }} / {{ notifications.paginator.num_pages }}</span></li>
-    {% if notifications.has_next %}<li class="page-item"><a class="page-link" href="?page={{ notifications.next_page_number }}{{ qs }}">›</a></li>{% endif %}
-</ul></nav>
-{% endif %}
-{% else %}{{ block.super }}{% endif %}
-{% endblock %}
-{% block scripts %}
-{% if page == 'dashboard' %}
-<script>
-    const cd = JSON.parse(document.getElementById('chart-data').textContent);
-    Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
-    Chart.defaults.color = '#64748b';
-    new Chart(document.getElementById('activityChart'), {
-        type: 'line',
-        data: { labels: cd.labels, datasets: [{ label: 'Thao tác', data: cd.values, borderColor: '#0f766e', backgroundColor: 'rgba(15,118,110,.12)', tension: .35, fill: true, pointBackgroundColor: '#0f766e', pointRadius: 3 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-                   scales: { y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: '#e9efef' } }, x: { grid: { display: false } } } }
-    });
+})();
 </script>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}

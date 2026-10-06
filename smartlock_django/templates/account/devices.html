@@ -1,6 +1,6 @@
 {% extends 'account/layout.html' %}
-{# Gộp: devices_list, device_detail, device_add, device_claim. View truyền biến `page` để chọn trang. #}
-{% block title %}{% if page == 'devices_list' %}Thiết bị{% elif page == 'device_detail' %}{{ device.name }}{% elif page == 'device_add' %}Thêm thiết bị{% elif page == 'device_claim' %}Thêm khóa bằng mã{% else %}{{ block.super }}{% endif %}{% endblock %}
+{# Danh sách / chi tiết / thêm bằng mã. Dữ liệu vẽ từ SmartlockCache (API snapshot); view chỉ render khung. #}
+{% block title %}{% if page == 'devices_list' %}Thiết bị{% elif page == 'device_detail' %}Chi tiết thiết bị{% elif page == 'device_claim' %}Thêm khóa bằng mã{% else %}{{ block.super }}{% endif %}{% endblock %}
 
 {% block extra_head %}
 <style>
@@ -47,24 +47,21 @@
 </style>
 {% endblock %}
 
-{% block page_title %}{% if page == 'devices_list' %}Thiết bị của tôi{% elif page == 'device_detail' %}{{ device.name }}{% elif page == 'device_add' %}Tạo thiết bị mới{% elif page == 'device_claim' %}Thêm khóa bằng mã thiết bị{% else %}{{ block.super }}{% endif %}{% endblock %}
+{% block page_title %}{% if page == 'devices_list' %}Thiết bị của tôi{% elif page == 'device_detail' %}<span id="dvTitle">Thiết bị</span>{% elif page == 'device_claim' %}Thêm khóa bằng mã thiết bị{% else %}{{ block.super }}{% endif %}{% endblock %}
 
 {% block page_sub %}
 {% if page == 'devices_list' %}<p class="page-sub">Khóa bạn sở hữu và khóa được chia sẻ cho bạn.</p>
-{% elif page == 'device_detail' %}<p class="page-sub"><code>{{ device.device_code }}</code>{% if device.location %} · <i class="fa-solid fa-location-dot"></i> {{ device.location }}{% endif %}</p>
-{% elif page == 'device_add' %}<p class="page-sub">Hệ thống tự sinh device code và provisioning secret cho khóa mới.</p>
+{% elif page == 'device_detail' %}<p class="page-sub" id="dvSub">&nbsp;</p>
 {% elif page == 'device_claim' %}<p class="page-sub">Nhập device code và provisioning secret của khóa đã cấp nguồn và kết nối mạng.</p>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 
 {% block page_actions %}
 {% if page == 'devices_list' %}
-<div class="d-flex gap-2">
-    <a href="{% url 'smartlock:device-claim' %}" class="btn btn-outline-primary"><i class="fa-solid fa-link me-2"></i>Thêm bằng mã</a>
-</div>
+<div class="d-flex gap-2"><a href="{% url 'smartlock:device-claim' %}" class="btn btn-outline-primary"><i class="fa-solid fa-link me-2"></i>Thêm bằng mã</a></div>
 {% elif page == 'device_detail' %}
 <a href="{% url 'smartlock:devices-list' %}" class="btn btn-outline-secondary"><i class="fa-solid fa-arrow-left me-2"></i>Danh sách</a>
-{% elif page == 'device_add' or page == 'device_claim' %}
+{% elif page == 'device_claim' %}
 <a href="{% url 'smartlock:devices-list' %}" class="btn btn-outline-secondary"><i class="fa-solid fa-arrow-left me-2"></i>Quay lại</a>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
@@ -72,10 +69,9 @@
 {% block content %}
 {# ===================== DANH SÁCH ===================== #}
 {% if page == 'devices_list' %}
-{% if device_list %}
-<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 d-none" id="devBar">
     <div class="seg" id="devFilter">
-        <button type="button" class="on" data-f="all">Tất cả <span class="text-muted">{{ device_list|length }}</span></button>
+        <button type="button" class="on" data-f="all">Tất cả <span class="text-muted" id="devCount">0</span></button>
         <button type="button" data-f="online">Online</button>
         <button type="button" data-f="offline">Offline</button>
     </div>
@@ -84,182 +80,11 @@
         <input type="search" id="devSearch" class="form-control" placeholder="Tìm theo tên, mã, vị trí…">
     </div>
 </div>
-{% endif %}
-
-<div class="row g-3" id="devGrid">
-    {% for d in device_list %}
-    <div class="col-md-6 col-xl-4 dev-item" data-status="{{ d.status }}" data-q="{{ d.name|lower }} {{ d.device_code|lower }} {{ d.location|default:''|lower }}">
-        <div class="card dev-card h-100"><div class="card-body d-flex flex-column">
-            <div class="dev-top">
-                <div class="dev-ico {% if d.lock_state == 'locked' %}locked{% elif d.lock_state == 'unlocked' %}unlocked{% elif d.lock_state == 'jammed' %}jammed{% else %}plain{% endif %}">
-                    <i class="fa-solid {% if d.lock_state == 'unlocked' %}fa-lock-open{% elif d.lock_state == 'jammed' %}fa-triangle-exclamation{% else %}fa-lock{% endif %}"></i>
-                </div>
-                <div class="min-w-0 flex-grow-1">
-                    <h6 class="dev-name text-truncate">{{ d.name }}</h6>
-                    <div class="dev-loc text-truncate"><i class="fa-solid fa-location-dot me-1"></i>{{ d.location|default:"Chưa cập nhật vị trí" }}</div>
-                </div>
-                <span class="status {% if d.status == 'online' %}ok{% elif d.status == 'maintenance' %}warn{% elif d.status == 'revoked' %}bad{% elif d.status == 'provisioning' %}info{% endif %}">{{ d.status|title }}</span>
-            </div>
-
-            <div class="batt mb-2">
-                <i class="fa-solid fa-battery-three-quarters text-muted"></i>
-                <div class="progress"><div class="progress-bar {% if d.battery_level < 20 %}bg-danger{% elif d.battery_level < 50 %}bg-warning{% else %}bg-success{% endif %}" style="width: {{ d.battery_level }}%"></div></div>
-                <strong>{{ d.battery_level }}%</strong>
-            </div>
-            <div class="d-flex justify-content-between align-items-center small text-muted">
-                <span class="conn" title="Kết nối đang bật">
-                    <i class="fa-solid fa-wifi {% if not d.wifi_enabled %}off{% endif %}" title="Wi-Fi"></i>
-                    <i class="fa-brands fa-bluetooth-b {% if not d.bluetooth_enabled %}off{% endif %}" title="Bluetooth"></i>
-                    <i class="fa-brands fa-nfc-symbol {% if not d.nfc_enabled %}off{% endif %}" title="NFC"></i>
-                </span>
-                <span>{% if d.last_seen_at %}Online {{ d.last_seen_at|timesince }} trước{% else %}Chưa từng online{% endif %}</span>
-            </div>
-
-            <div class="foot mt-auto">
-                <div class="d-flex align-items-center gap-2 flex-wrap">
-                    <code>{{ d.device_code }}</code>
-                    {% if d.owner_id == user.id %}<span class="chip">Chủ sở hữu</span>{% else %}<span class="chip plain">Được chia sẻ</span>{% endif %}
-                </div>
-                <a href="{% url 'smartlock:device-detail' d.id %}" class="btn btn-sm btn-outline-primary text-nowrap stretched-link">Mở <i class="fa-solid fa-arrow-right ms-1"></i></a>
-            </div>
-        </div></div>
-    </div>
-    {% empty %}
-    <div class="col-12"><div class="card"><div class="empty-state">
-        <div class="ei"><i class="fa-solid fa-plug-circle-plus"></i></div>
-        <h6>Bạn chưa có thiết bị nào</h6>
-        <div class="mb-3">Thêm khóa bằng device code + secret do quản trị viên cấp.</div>
-        <a href="{% url 'smartlock:device-claim' %}" class="btn btn-outline-primary btn-sm ms-1"><i class="fa-solid fa-link me-1"></i>Thêm bằng mã</a>
-    </div></div></div>
-    {% endfor %}
-    <div class="col-12 d-none" id="devNone"><div class="card"><div class="empty-state py-4"><div>Không có thiết bị nào khớp bộ lọc.</div></div></div></div>
-</div>
+<div class="row g-3" id="devGrid">{% include "account/_spin.html" %}</div>
 
 {# ===================== CHI TIẾT ===================== #}
 {% elif page == 'device_detail' %}
-<div class="row g-3">
-    <div class="col-lg-8">
-        <div class="card mb-3"><div class="card-body">
-            <div class="lock-panel">
-                <div class="lp-state">
-                    <div class="lp-ring {% if device.lock_state == 'locked' %}locked{% elif device.lock_state == 'unlocked' %}unlocked{% elif device.lock_state == 'jammed' %}jammed{% else %}unknown{% endif %}">
-                        <i class="fa-solid {% if device.lock_state == 'unlocked' %}fa-lock-open{% elif device.lock_state == 'jammed' %}fa-triangle-exclamation{% elif device.lock_state == 'locked' %}fa-lock{% else %}fa-circle-question{% endif %}"></i>
-                    </div>
-                    <div>
-                        <div class="meter-label mb-1">Trạng thái khóa</div>
-                        <div class="lp-title {% if device.lock_state == 'locked' %}text-success{% elif device.lock_state == 'unlocked' %}text-danger{% elif device.lock_state == 'jammed' %}text-warning{% else %}text-secondary{% endif %}">
-                            {% if device.lock_state == 'locked' %}Đã khóa{% elif device.lock_state == 'unlocked' %}Đang mở{% elif device.lock_state == 'jammed' %}Bị kẹt{% else %}Không rõ{% endif %}
-                        </div>
-                        <div class="mt-2"><span class="status {% if device.status == 'online' %}ok{% elif device.status == 'maintenance' %}warn{% elif device.status == 'revoked' %}bad{% elif device.status == 'provisioning' %}info{% endif %}">{{ device.status|title }}</span></div>
-                    </div>
-                </div>
-                <div>
-                    <div class="cmd-grid">
-                        <button class="btn btn-success js-cmd" {% if device.status != 'online' or not caps.remote_lock %}disabled{% endif %} data-url="{% url 'smartlock_api:device-command' device.id %}" data-command="LOCK" data-label="khóa thiết bị"><i class="fa-solid fa-lock me-2"></i>Khóa</button>
-                        <button class="btn btn-danger js-cmd" {% if device.status != 'online' or not caps.remote_unlock %}disabled{% endif %} data-url="{% url 'smartlock_api:device-command' device.id %}" data-command="UNLOCK" data-label="mở khóa thiết bị"><i class="fa-solid fa-lock-open me-2"></i>Mở khóa</button>
-                        {% if is_owner %}<button class="btn btn-outline-secondary js-cmd" {% if device.status != 'online' %}disabled{% endif %} data-url="{% url 'smartlock_api:device-command' device.id %}" data-command="REBOOT" data-label="khởi động lại thiết bị"><i class="fa-solid fa-power-off me-2"></i>Khởi động lại</button>{% endif %}
-                    </div>
-                    {% if device.status != 'online' %}
-                    <div class="small text-muted mt-2"><i class="fa-solid fa-circle-info me-1"></i>Khóa đang {{ device.status }} — chỉ gửi lệnh khi thiết bị online.</div>
-                    {% elif not caps.remote_lock and not caps.remote_unlock %}
-                    <div class="small text-muted mt-2"><i class="fa-solid fa-circle-info me-1"></i>Bạn chưa có quyền điều khiển từ xa (hoặc Wi-Fi của khóa đang tắt).</div>
-                    {% endif %}
-                </div>
-            </div>
-        </div></div>
-
-        <div class="card mb-3">
-            <div class="card-header">Thông tin thiết bị</div>
-            <div class="card-body">
-                <div class="row g-4">
-                    <div class="col-md-6"><dl class="kv" style="grid-template-columns:120px 1fr">
-                        <dt>Mã thiết bị</dt><dd><code>{{ device.device_code }}</code></dd>
-                        <dt>Mã MAC</dt><dd>{{ device.mac_address|default:"Chưa có" }}</dd>
-                        <dt>Firmware</dt><dd>{{ device.firmware_version|default:"Chưa có" }}</dd>
-                        <dt>Chế độ</dt><dd>{{ device.get_device_mode_display }}</dd>
-                    </dl></div>
-                    <div class="col-md-6"><dl class="kv" style="grid-template-columns:120px 1fr">
-                        <dt>Vị trí</dt><dd>{{ device.location|default:"Chưa cập nhật" }}</dd>
-                        <dt>Pin</dt><dd><div class="d-flex align-items-center gap-2"><div class="progress flex-grow-1" style="height:6px"><div class="progress-bar {% if device.battery_level < 20 %}bg-danger{% elif device.battery_level < 50 %}bg-warning{% else %}bg-success{% endif %}" style="width: {{ device.battery_level }}%"></div></div>{{ device.battery_level }}%</div></dd>
-                        <dt>Online cuối</dt><dd>{{ device.last_seen_at|date:"d/m/Y H:i"|default:"—" }}</dd>
-                        <dt>Kết nối</dt><dd>
-                            <div class="cap-list">
-                                <span class="cap {% if not device.wifi_enabled %}off{% endif %}"><i class="fa-solid fa-wifi"></i>Wi-Fi</span>
-                                <span class="cap {% if not device.bluetooth_enabled %}off{% endif %}"><i class="fa-brands fa-bluetooth-b"></i>Bluetooth</span>
-                                <span class="cap {% if not device.nfc_enabled %}off{% endif %}"><i class="fa-brands fa-nfc-symbol"></i>NFC</span>
-                            </div>
-                        </dd>
-                    </dl></div>
-                </div>
-            </div>
-        </div>
-
-        {% if is_owner %}
-        <div class="card">
-            <div class="card-header">Chỉnh sửa thiết bị</div>
-            <div class="card-body">
-                <form data-api-url="{% url 'smartlock_api:device-detail' device.id %}" data-api-method="PATCH" data-after="reload" data-success="Đã cập nhật thiết bị.">
-                    <div class="row g-3">
-                        <div class="col-md-6"><label class="form-label">Tên thiết bị</label><input type="text" name="name" class="form-control" value="{{ device.name }}" required maxlength="100"></div>
-                        <div class="col-md-6"><label class="form-label">Vị trí</label><input type="text" name="location" class="form-control" value="{{ device.location|default:'' }}" maxlength="255"></div>
-                        <div class="col-12 d-flex flex-wrap gap-4">
-                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="wifi_enabled" id="wifi" {% if device.wifi_enabled %}checked{% endif %}><label class="form-check-label" for="wifi">Wi-Fi</label></div>
-                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="bluetooth_enabled" id="bt" {% if device.bluetooth_enabled %}checked{% endif %}><label class="form-check-label" for="bt">Bluetooth</label></div>
-                            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="nfc_enabled" id="nfc" {% if device.nfc_enabled %}checked{% endif %}><label class="form-check-label" for="nfc">NFC</label></div>
-                        </div>
-                    </div>
-                    <button class="btn btn-primary mt-3"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>
-                </form>
-            </div>
-        </div>
-        {% endif %}
-    </div>
-
-    <div class="col-lg-4">
-        <div class="card mb-3">
-            <div class="card-header">Quản lý truy cập</div>
-            <div class="quick">
-                {% if caps.manage_nfc or is_owner %}<a href="{% url 'smartlock:nfc-tags' %}?device={{ device.id }}"><i class="fa-solid fa-id-card"></i>Thẻ NFC<i class="fa-solid fa-chevron-right go"></i></a>{% endif %}
-                {% if caps.manage_pins or is_owner %}<a href="{% url 'smartlock:door-pins' %}?device={{ device.id }}"><i class="fa-solid fa-hashtag"></i>Mã PIN cửa<i class="fa-solid fa-chevron-right go"></i></a>{% endif %}
-                {% if caps.manage_faces or is_owner %}<a href="{% url 'smartlock:face-profiles' %}?device={{ device.id }}"><i class="fa-solid fa-face-smile"></i>Khuôn mặt<i class="fa-solid fa-chevron-right go"></i></a>{% endif %}
-                {% if caps.manage_sharing %}<a href="{% url 'smartlock:shares' %}?device={{ device.id }}"><i class="fa-solid fa-share-nodes"></i>Chia sẻ khóa<i class="fa-solid fa-chevron-right go"></i></a>{% endif %}
-                {% if caps.view_history or is_owner %}<a href="{% url 'smartlock:access-history' %}?device={{ device.id }}"><i class="fa-solid fa-door-open"></i>Lịch sử ra vào<i class="fa-solid fa-chevron-right go"></i></a>{% endif %}
-            </div>
-        </div>
-
-        <div class="card mb-3">
-            <div class="card-header">Lệnh gần đây</div>
-            <div>
-                {% for c in recent_commands %}
-                <div class="row-item align-items-center">
-                    <div><strong>{{ c.command_type }}</strong><div class="small text-muted">{{ c.issued_by.username }} • {{ c.created_at|date:"d/m H:i" }}</div></div>
-                    <span class="status {% if c.status == 'acknowledged' %}ok{% elif c.status == 'failed' or c.status == 'expired' %}bad{% elif c.status == 'pending' or c.status == 'sent' %}info{% endif %}">{{ c.status }}</span>
-                </div>
-                {% empty %}<div class="empty-state py-4"><div>Chưa có lệnh nào.</div></div>{% endfor %}
-            </div>
-        </div>
-
-        {% if is_owner %}
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center"><span>Người có quyền truy cập</span><a href="{% url 'smartlock:shares' %}?device={{ device.id }}" class="small fw-semibold">Quản lý</a></div>
-            <div>
-                {% for a in accesses %}
-                <div class="row-item">
-                    <div class="d-flex gap-3 align-items-start">
-                        <div class="avatar-sm" style="width:38px;height:38px">{{ a.user.username|upper|slice:":1" }}</div>
-                        <div class="min-w-0">
-                            <div class="fw-semibold">{{ a.user.full_name|default:a.user.username }}</div>
-                            <div class="my-1 d-flex flex-wrap gap-1">{% for p in a.permissions.all %}<span class="chip">{{ p.name }}</span>{% endfor %}</div>
-                            <small class="text-muted">{% if a.expires_at %}Hết hạn {{ a.expires_at|date:"d/m/Y H:i" }}{% else %}Không giới hạn{% endif %}</small>
-                        </div>
-                    </div>
-                </div>
-                {% empty %}<div class="empty-state py-4"><div>Chưa chia sẻ cho ai.</div></div>{% endfor %}
-            </div>
-        </div>
-        {% endif %}
-    </div>
-</div>
+<div id="dvRoot" data-id="{{ device_id }}">{% include "account/_spin.html" %}</div>
 
 {# ===================== THÊM BẰNG MÃ ===================== #}
 {% elif page == 'device_claim' %}
@@ -284,29 +109,122 @@
 {% if page == 'devices_list' %}
 <script>
 (function () {
-    var items = Array.prototype.slice.call(document.querySelectorAll('.dev-item'));
-    if (!items.length) return;
-    var f = 'all', q = '';
-    var none = document.getElementById('devNone');
-    function apply() {
-        var shown = 0;
-        items.forEach(function (el) {
-            var st = el.dataset.status;
-            var okF = f === 'all' || (f === 'online' ? st === 'online' : st !== 'online');
-            var okQ = !q || el.dataset.q.indexOf(q) !== -1;
-            var vis = okF && okQ;
-            el.classList.toggle('d-none', !vis);
-            if (vis) shown++;
-        });
-        none.classList.toggle('d-none', shown !== 0);
+    const L = Live, esc = L.esc;
+    const DETAIL = "{% url 'smartlock:device-detail' '00000000-0000-0000-0000-000000000000' %}", CLAIM = "{% url 'smartlock:device-claim' %}";
+    let f = 'all', q = '';
+    function card(d) {
+        const ls = L.lockInfo(d.lock_state), ico = ls.k === 'unlocked' ? 'fa-lock-open' : ls.k === 'jammed' ? 'fa-triangle-exclamation' : 'fa-lock';
+        return '<div class="col-md-6 col-xl-4"><div class="card dev-card h-100"><div class="card-body d-flex flex-column">' +
+            '<div class="dev-top"><div class="dev-ico ' + (ls.k === 'unknown' ? 'plain' : ls.k) + '"><i class="fa-solid ' + ico + '"></i></div>' +
+            '<div class="min-w-0 flex-grow-1"><h6 class="dev-name text-truncate">' + esc(d.name) + '</h6><div class="dev-loc text-truncate"><i class="fa-solid fa-location-dot me-1"></i>' + esc(d.location || 'Chưa cập nhật vị trí') + '</div></div>' +
+            '<span class="status ' + L.statusCls(d.status) + '">' + esc(L.cap(d.status)) + '</span></div>' +
+            '<div class="batt mb-2"><i class="fa-solid fa-battery-three-quarters text-muted"></i><div class="progress"><div class="progress-bar ' + L.battCls(d.battery_level) + '" style="width:' + d.battery_level + '%"></div></div><strong>' + d.battery_level + '%</strong></div>' +
+            '<div class="d-flex justify-content-between align-items-center small text-muted"><span class="conn"><i class="fa-solid fa-wifi ' + (d.wifi_enabled ? '' : 'off') + '" title="Wi-Fi"></i><i class="fa-brands fa-bluetooth-b ' + (d.bluetooth_enabled ? '' : 'off') + '" title="Bluetooth"></i><i class="fa-brands fa-nfc-symbol ' + (d.nfc_enabled ? '' : 'off') + '" title="NFC"></i></span>' +
+            '<span>' + (d.last_seen_at ? 'Online ' + esc(L.ago(d.last_seen_at)) + ' trước' : 'Chưa từng online') + '</span></div>' +
+            '<div class="foot mt-auto"><div class="d-flex align-items-center gap-2 flex-wrap"><code>' + esc(d.device_code) + '</code>' + (d.is_owner ? '<span class="chip">Chủ sở hữu</span>' : '<span class="chip plain">Được chia sẻ</span>') + '</div>' +
+            '<a href="' + L.url(DETAIL, d.id) + '" class="btn btn-sm btn-outline-primary text-nowrap stretched-link">Mở <i class="fa-solid fa-arrow-right ms-1"></i></a></div></div></div></div>';
     }
-    document.getElementById('devFilter').addEventListener('click', function (e) {
-        var b = e.target.closest('button'); if (!b) return;
-        f = b.dataset.f;
-        this.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
-        apply();
+    function grid(b) {
+        if (!b.devices.length) return '<div class="col-12"><div class="card">' + L.empty('fa-plug-circle-plus', 'Bạn chưa có thiết bị nào', 'Thêm khóa bằng device code + secret do quản trị viên cấp.<div class="mt-3"><a href="' + CLAIM + '" class="btn btn-outline-primary btn-sm"><i class="fa-solid fa-link me-1"></i>Thêm bằng mã</a></div>') + '</div></div>';
+        const list = b.devices.filter(d => (f === 'all' || (f === 'online' ? d.status === 'online' : d.status !== 'online')) &&
+            (!q || (d.name + ' ' + d.device_code + ' ' + d.location).toLowerCase().indexOf(q) !== -1));
+        return list.length ? list.map(card).join('') : '<div class="col-12"><div class="card"><div class="empty-state py-4"><div>Không có thiết bị nào khớp bộ lọc.</div></div></div></div>';
+    }
+    const run = L.mount({
+        regions: { devGrid: grid },
+        after: b => { document.getElementById('devBar').classList.toggle('d-none', !b.devices.length); document.getElementById('devCount').textContent = b.devices.length; }
     });
-    document.getElementById('devSearch').addEventListener('input', function () { q = this.value.trim().toLowerCase(); apply(); });
+    document.getElementById('devFilter').addEventListener('click', function (e) {
+        const bt = e.target.closest('button'); if (!bt) return; f = bt.dataset.f;
+        this.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === bt)); run();
+    });
+    document.getElementById('devSearch').addEventListener('input', function () { q = this.value.trim().toLowerCase(); run(); });
+})();
+</script>
+{% elif page == 'device_detail' %}
+<script>
+(function () {
+    const L = Live, esc = L.esc, root = document.getElementById('dvRoot'), id = root.dataset.id;
+    const Z = '00000000-0000-0000-0000-000000000000';
+    const U = { list: "{% url 'smartlock:devices-list' %}", cmd: "{% url 'smartlock_api:device-command' '00000000-0000-0000-0000-000000000000' %}",
+        patch: "{% url 'smartlock_api:device-detail' '00000000-0000-0000-0000-000000000000' %}",
+        nfc: "{% url 'smartlock:nfc-tags' %}", pins: "{% url 'smartlock:door-pins' %}", faces: "{% url 'smartlock:face-profiles' %}",
+        shares: "{% url 'smartlock:shares' %}", hist: "{% url 'smartlock:access-history' %}" };
+    const permName = { UNLOCK: 'Mở khóa từ xa', LOCK: 'Khóa từ xa', BLUETOOTH: 'Bluetooth', NFC_PHONE: 'NFC điện thoại', manage_nfc: 'Thẻ NFC của riêng mình', manage_face_profiles: 'Khuôn mặt của riêng mình', manage_pins: 'Cấp mã PIN', view_history: 'Xem lịch sử' };
+    const cmdCls = s => s === 'acknowledged' ? 'ok' : (s === 'failed' || s === 'expired') ? 'bad' : (s === 'pending' || s === 'sent') ? 'info' : '';
+
+    function lockPanel(d, c, ls) {
+        const on = d.status === 'online', url = L.url(U.cmd, d.id);
+        const b = (cls, ico, t, cmd, lab, ok) => '<button class="btn btn-' + cls + ' js-cmd" ' + (on && ok ? '' : 'disabled') + ' data-url="' + url + '" data-command="' + cmd + '" data-label="' + lab + '"><i class="fa-solid ' + ico + ' me-2"></i>' + t + '</button>';
+        const note = !on ? '<div class="small text-muted mt-2"><i class="fa-solid fa-circle-info me-1"></i>Khóa đang ' + esc(d.status) + ' — chỉ gửi lệnh khi thiết bị online.</div>'
+            : (!c.remote_lock && !c.remote_unlock ? '<div class="small text-muted mt-2"><i class="fa-solid fa-circle-info me-1"></i>Bạn chưa có quyền điều khiển từ xa (hoặc Wi-Fi của khóa đang tắt).</div>' : '');
+        return '<div class="card mb-3"><div class="card-body"><div class="lock-panel"><div class="lp-state"><div class="lp-ring ' + ls.k + '"><i class="fa-solid ' + ls.ico + '"></i></div><div><div class="meter-label mb-1">Trạng thái khóa</div><div class="lp-title ' + ls.cls + '">' + ls.txt + '</div><div class="mt-2"><span class="status ' + L.statusCls(d.status) + '">' + esc(L.cap(d.status)) + '</span></div></div></div>' +
+            '<div><div class="cmd-grid">' + b('success', 'fa-lock', 'Khóa', 'LOCK', 'khóa thiết bị', c.remote_lock) + b('danger', 'fa-lock-open', 'Mở khóa', 'UNLOCK', 'mở khóa thiết bị', c.remote_unlock) +
+            (d.is_owner ? b('outline-secondary', 'fa-power-off', 'Khởi động lại', 'REBOOT', 'khởi động lại thiết bị', true) : '') + '</div>' + note + '</div></div></div></div>';
+    }
+    function info(d) {
+        const cp = (on, ico, t) => '<span class="cap ' + (on ? '' : 'off') + '"><i class="' + ico + '"></i>' + t + '</span>';
+        const mode = { real: 'Thiết bị thật', simulated: 'Mô phỏng' }[d.device_mode] || d.device_mode;
+        return '<div class="card mb-3"><div class="card-header">Thông tin thiết bị</div><div class="card-body"><div class="row g-4"><div class="col-md-6"><dl class="kv" style="grid-template-columns:120px 1fr">' +
+            '<dt>Mã thiết bị</dt><dd><code>' + esc(d.device_code) + '</code></dd><dt>Mã MAC</dt><dd>' + esc(d.mac_address || 'Chưa có') + '</dd><dt>Firmware</dt><dd>' + esc(d.firmware_version || 'Chưa có') + '</dd><dt>Chế độ</dt><dd>' + esc(mode) + '</dd></dl></div>' +
+            '<div class="col-md-6"><dl class="kv" style="grid-template-columns:120px 1fr"><dt>Vị trí</dt><dd>' + esc(d.location || 'Chưa cập nhật') + '</dd>' +
+            '<dt>Pin</dt><dd><div class="d-flex align-items-center gap-2"><div class="progress flex-grow-1" style="height:6px"><div class="progress-bar ' + L.battCls(d.battery_level) + '" style="width:' + d.battery_level + '%"></div></div>' + d.battery_level + '%</div></dd>' +
+            '<dt>Online cuối</dt><dd>' + esc(L.dt(d.last_seen_at) || '—') + '</dd><dt>Kết nối</dt><dd><div class="cap-list">' + cp(d.wifi_enabled, 'fa-solid fa-wifi', 'Wi-Fi') + cp(d.bluetooth_enabled, 'fa-brands fa-bluetooth-b', 'Bluetooth') + cp(d.nfc_enabled, 'fa-brands fa-nfc-symbol', 'NFC') + '</div></dd></dl></div></div></div></div>';
+    }
+    function quick(d, c) {
+        const a = (ok, href, ico, t) => ok ? '<a href="' + href + '?device=' + d.id + '"><i class="fa-solid ' + ico + '"></i>' + t + '<i class="fa-solid fa-chevron-right go"></i></a>' : '';
+        return '<div class="card mb-3"><div class="card-header">Quản lý truy cập</div><div class="quick">' + a(c.manage_nfc || c.is_owner, U.nfc, 'fa-id-card', 'Thẻ NFC') + a(c.manage_pins || c.is_owner, U.pins, 'fa-hashtag', 'Mã PIN cửa') + a(c.manage_faces || c.is_owner, U.faces, 'fa-face-smile', 'Khuôn mặt') + a(c.manage_sharing, U.shares, 'fa-share-nodes', 'Chia sẻ khóa') + a(c.view_history || c.is_owner, U.hist, 'fa-clock-rotate-left', 'Lịch sử ra vào') + '</div></div>';
+    }
+    function cmds(b, d) {
+        const list = b.commands.filter(c => c.device_id === d.id).slice(0, 8);
+        return '<div class="card mb-3"><div class="card-header">Lệnh gần đây</div><div>' + (list.length ? list.map(c => '<div class="row-item align-items-center"><div><strong>' + esc(c.command) + '</strong><div class="small text-muted">' + esc(c.by) + ' • ' + esc(L.dshort(c.created_at)) + '</div></div><span class="status ' + cmdCls(c.status) + '">' + esc(c.status) + '</span></div>').join('') : '<div class="empty-state py-4"><div>Chưa có lệnh nào.</div></div>') + '</div></div>';
+    }
+    function people(b, d) {
+        const list = b.shares_out.filter(a => a.device_id === d.id);
+        return '<div class="card"><div class="card-header d-flex justify-content-between align-items-center"><span>Người có quyền truy cập</span><a href="' + U.shares + '?device=' + d.id + '" class="small fw-semibold">Quản lý</a></div><div>' +
+            (list.length ? list.map(a => '<div class="row-item"><div class="d-flex gap-3 align-items-start"><div class="avatar-sm" style="width:38px;height:38px">' + L.initial(a.user.username) + '</div><div class="min-w-0"><div class="fw-semibold">' + esc(a.user.full_name || a.user.username) + '</div><div class="my-1 d-flex flex-wrap gap-1">' + a.permissions.map(p => '<span class="chip">' + esc(permName[p] || p) + '</span>').join('') + '</div><small class="text-muted">' + (a.expires_at ? 'Hết hạn ' + esc(L.dt(a.expires_at)) : 'Không giới hạn') + '</small></div></div></div>').join('') : '<div class="empty-state py-4"><div>Chưa chia sẻ cho ai.</div></div>') + '</div></div>';
+    }
+    function editForm(d) {
+        // Form chỉnh sửa dựng MỘT LẦN (không bị vẽ lại mỗi 3s để khỏi mất chữ đang gõ)
+        return '<div class="card"><div class="card-header">Chỉnh sửa thiết bị</div><div class="card-body"><form id="dvEdit" data-api-url="' + L.url(U.patch, d.id) + '" data-api-method="PATCH" data-success="Đã cập nhật thiết bị.">' +
+            '<div class="row g-3"><div class="col-md-6"><label class="form-label">Tên thiết bị</label><input type="text" name="name" class="form-control" required maxlength="100"></div>' +
+            '<div class="col-md-6"><label class="form-label">Vị trí</label><input type="text" name="location" class="form-control" maxlength="255"></div>' +
+            '<div class="col-12 d-flex flex-wrap gap-4">' + [['wifi_enabled', 'Wi-Fi'], ['bluetooth_enabled', 'Bluetooth'], ['nfc_enabled', 'NFC']].map(x => '<div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="' + x[0] + '" id="e_' + x[0] + '"><label class="form-check-label" for="e_' + x[0] + '">' + x[1] + '</label></div>').join('') + '</div></div>' +
+            '<button class="btn btn-primary mt-3"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button></form></div></div>';
+    }
+    function fillEdit(d) {
+        const f = document.getElementById('dvEdit'); if (!f) return;
+        const same = f.name.value === d.name && f.location.value === d.location &&
+            ['wifi_enabled', 'bluetooth_enabled', 'nfc_enabled'].every(k => f[k].checked === !!d[k]);
+        const dirty = !same && Array.from(f.elements).some(e => e.name && (e.type === 'checkbox' ? e.checked !== e.defaultChecked : e.value !== e.defaultValue));
+        if (dirty || f.contains(document.activeElement)) return;
+        f.name.value = f.name.defaultValue = d.name; f.location.value = f.location.defaultValue = d.location;
+        ['wifi_enabled', 'bluetooth_enabled', 'nfc_enabled'].forEach(k => { f[k].checked = f[k].defaultChecked = !!d[k]; });
+    }
+    let shell = false;
+    L.mount({
+        ctx: b => ({ dev: b.devices.find(x => x.id === id) }),
+        regions: {
+            dvLock: (b, x) => x.dev ? lockPanel(x.dev, L.caps(x.dev), L.lockInfo(x.dev.lock_state)) : '',
+            dvInfo: (b, x) => x.dev ? info(x.dev) : '',
+            dvQuick: (b, x) => x.dev ? quick(x.dev, L.caps(x.dev)) : '',
+            dvCmds: (b, x) => x.dev ? cmds(b, x.dev) : '',
+            dvPeople: (b, x) => x.dev && x.dev.is_owner ? people(b, x.dev) : ''
+        },
+        before: (b, x) => {
+            if (shell) return;
+            if (!x.dev) { root.innerHTML = '<div class="card">' + L.empty('fa-lock', 'Không tìm thấy thiết bị', 'Thiết bị không tồn tại hoặc bạn không còn quyền truy cập.<div class="mt-3"><a class="btn btn-outline-primary btn-sm" href="' + U.list + '">Về danh sách</a></div>') + '</div>'; return; }
+            shell = true;
+            root.innerHTML = '<div class="row g-3"><div class="col-lg-8"><div id="dvLock"></div><div id="dvInfo"></div>' + (x.dev.is_owner ? editForm(x.dev) : '') + '</div><div class="col-lg-4"><div id="dvQuick"></div><div id="dvCmds"></div><div id="dvPeople"></div></div></div>';
+        },
+        after: (b, x) => {
+            if (!x.dev) return;
+            document.getElementById('dvTitle').textContent = x.dev.name;
+            document.getElementById('dvSub').innerHTML = '<code>' + esc(x.dev.device_code) + '</code>' + (x.dev.location ? ' · <i class="fa-solid fa-location-dot"></i> ' + esc(x.dev.location) : '');
+            document.title = x.dev.name + ' · Smart Lock';
+            fillEdit(x.dev);
+        }
+    });
 })();
 </script>
 {% elif page == 'device_claim' %}

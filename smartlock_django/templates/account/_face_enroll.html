@@ -1,9 +1,7 @@
-{# Đăng ký khuôn mặt bằng QUÉT CAMERA. Thay toàn bộ form cũ có ô "embedding_json" bằng:
-   {% include "account/_face_enroll.html" %}
-   Cần trong context: device, face_enroll_url (API /api/app/devices/<id>/faces/), face_min_frames (view face_profiles đã truyền).
+{# Đăng ký khuôn mặt bằng QUÉT CAMERA. data-url / data-device do trang face_profiles gán theo thiết bị đang chọn
+   (API /api/app/devices/<id>/faces/). Cần trong context: face_min_frames.
    Ảnh chỉ xử lý trong trình duyệt; chỉ vector 128 số (đã trung bình ở server) được lưu, mã hoá Fernet. #}
-<div id="fe-root" data-url="{{ face_enroll_url }}" data-device="{{ device.id }}" data-frames="5">
-  {% csrf_token %}
+<div id="fe-root" data-url="" data-device="" data-frames="{{ face_min_frames|default:5 }}">
   <p>
     <label>Tên hiển thị<br>
       <input type="text" id="fe-name" maxlength="100" placeholder="VD: Bố, Khách thuê phòng 2">
@@ -85,10 +83,9 @@
       if (vectors.length < NEED) { say('Không quét đủ khung hình. Hãy thử lại.'); return; }
 
       say('Đang lưu...');
-      var token = root.querySelector('[name=csrfmiddlewaretoken]').value;
       var res = await fetch(root.dataset.url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': token },
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
         credentials: 'same-origin',
         body: JSON.stringify({
           device: root.dataset.device,
@@ -99,7 +96,10 @@
       });
       var data = await res.json().catch(function () { return {}; });
       say(data.message || (data.error && data.error.message) || (res.ok ? 'Đã đăng ký khuôn mặt.' : 'Không lưu được, hãy thử lại.'));
-      if (res.ok && data.ok) setTimeout(function () { location.reload(); }, 900);
+      if (res.ok && data.ok) {
+        if (window.SmartlockCache) await SmartlockCache.refresh();
+        setTimeout(function () { var m = document.getElementById('registerFace'); if (m && window.bootstrap) bootstrap.Modal.getOrCreateInstance(m).hide(); say(''); }, 900);
+      }
     } catch (e) {
       say(e && e.name === 'NotAllowedError' ? 'Bạn chưa cho phép dùng camera.' : 'Lỗi khi quét: ' + (e && e.message || e));
     } finally {
