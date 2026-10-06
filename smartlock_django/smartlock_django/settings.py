@@ -219,6 +219,7 @@ REPLICA_FRESH_MODELS = set(env_list("REPLICA_FRESH_MODELS", ",".join([
     "sessions.Session", "smartlock.User", "smartlock.OneTimeCode", "smartlock.TwoFactorConfig",
     "smartlock.Fido2Credential", "smartlock.MobileSession", "smartlock.DeviceCommand",
     "smartlock.SystemSettings", "otp_totp.TOTPDevice", "otp_static.StaticDevice", "otp_static.StaticToken",
+    "smartlock.SecurityRecord",
 ])))
 if LOCAL_REPLICA:
     # Mặc định SQLite (không cần cài gì). Postgres local: REPLICA_ENGINE=django.db.backends.postgresql + REPLICA_DB_*.
@@ -434,9 +435,6 @@ def _replica_ready():
 
 
 class ReplicaRouter:
-    """GHI -> Supabase. ĐỌC -> bản sao local, trừ: bảng REPLICA_FRESH_MODELS, trong transaction.atomic(),
-    và REPLICA_STICKY_SECONDS giây sau khi vừa ghi (để thấy ngay dữ liệu mình vừa ghi). Mất Supabase -> đọc local."""
-
     def db_for_read(self, model, **hints):
         from django.db import connections
         if not _replica_ready() or model._meta.app_label == 'django_cache':
@@ -460,13 +458,8 @@ class ReplicaRouter:
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         return True
 
+_REPLICA_APPEND_ONLY = {'smartlock.ActivityLog': 'created_at'}
 
-# Bảng log chỉ-thêm: chỉ chép dòng mới. Bảng khác chép lại toàn bộ mỗi lượt (nhiều chỗ dùng queryset.update()
-# nên không thể tin cột updated_at để lọc).
-_REPLICA_APPEND_ONLY = {
-    'smartlock.AuditLog': 'created_at', 'smartlock.AccessEvent': 'created_at',
-    'smartlock.NfcLog': 'created_at', 'smartlock.DeviceStatusLog': 'recorded_at',
-}
 _replica_sync_lock = _threading.Lock()
 _replica_wake = _threading.Event()
 _replica_state = {'snap': None, 'full_at': 0.0}

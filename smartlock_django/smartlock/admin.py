@@ -1,24 +1,5 @@
 # smartlock/admin.py
-"""
-Django admin (/admin/) - phân quyền theo VAI TRÒ, đồng bộ với /manage-sys/ (cùng cờ settings.ADMIN_FULL_POWER).
 
-  ADMIN_FULL_POWER=True (mặc định): MỌI tài khoản quản trị (is_admin, hoặc Superuser có is_staff) đều có
-               QUYỀN CAO NHẤT như Superuser: xem + thêm + sửa + xoá gần như mọi thứ, đổi cài đặt hệ thống,
-               cấp/thu hồi admin, sửa cả tài khoản Superuser khác. Admin KHÔNG cần is_staff để vào /admin/.
-  ADMIN_FULL_POWER=False: chính sách cũ - Admin chỉ xem + vận hành, Superuser mới có quyền cao nhất.
-  Khác       : không thấy gì ở /admin/ (kể cả nếu có is_staff).
-
-Những chỗ LUÔN giữ cho Superuser thật (kể cả khi ADMIN_FULL_POWER=True), vì Django admin không hỏi lại được mật khẩu:
-  - Bật/tắt cờ is_superuser và đổi mật khẩu của người khác (chiếm tài khoản).
-  - Không ai tự đổi quyền của chính mình, không hạ Superuser cuối cùng, không để tài khoản quản trị làm chủ khoá.
-  - Log chỉ-xoá-không-sửa, dữ liệu sinh trắc/hash không bao giờ hiện.
-
-Mọi thao tác thêm/sửa/xoá đều ghi AuditLog (ADMIN_<MODEL>_*). Thao tác nhạy cảm ghi strict: không ghi được
-log => thao tác bị huỷ (changeform của Django admin nằm trong transaction).
-
-Việc cần NHẬP LẠI MẬT KHẨU + gõ mã thiết bị (gán chủ khoá, gỡ chủ, xoay secret) vẫn nằm ở /manage-sys/
-vì admin action của Django không hỏi được mật khẩu.
-"""
 import re
 import secrets
 
@@ -36,8 +17,8 @@ from .models import (
     AccessCard, AccessEvent, Announcement, AuditLog, CardDeviceAccess, Device, DeviceAccess,
     DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, Fido2Credential, MobileSession,
     NfcLog, NfcReader, Notification, OneTimeCode, Permission, SystemSettings, TwoFactorConfig, User,
+    AccessCredential,
 )
-
 admin.site.site_header = 'Smart Lock - Quản trị'
 admin.site.site_title = 'Smart Lock'
 
@@ -599,12 +580,13 @@ class CardDeviceAccessForm(forms.ModelForm):
     def clean(self):
         c = super().clean()
         card, device = c.get('access_card'), c.get('device')
+        if card and card.kind != 'CARD':
+            raise ValidationError('Chỉ được chọn thẻ RFID.')
         if card and services.is_admin(card.user):
             raise ValidationError('Thẻ của tài khoản quản trị không được gắn vào khoá.')
         if device and not device.owner_id:
             raise ValidationError('Khoá chưa có chủ.')
         return c
-
 
 @admin.register(CardDeviceAccess)
 class CardDeviceAccessAdmin(BaseModelAdmin):
@@ -613,7 +595,8 @@ class CardDeviceAccessAdmin(BaseModelAdmin):
     list_display = ('access_card', 'device', 'is_active', 'created_at')
     list_filter = ('is_active',)
     list_select_related = ('access_card', 'device')
-    autocomplete_fields = ('access_card', 'device')
+    autocomplete_fields = ('device',)          # bỏ 'access_card'
+    raw_id_fields = ('access_card',)            # chọn thẻ bằng ID, không cần admin cho AccessCredential
 
 
 @admin.register(DoorPinCode)

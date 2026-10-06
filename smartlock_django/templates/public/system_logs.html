@@ -1,796 +1,284 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
 <head>
-<meta charset="UTF-8">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nhật ký hệ thống real-time - Smart Lock</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<title>Giám sát toàn hệ thống · SmartLock</title>
 <style>
-  :root{
-    --bg:#f7f5f1; --bg-elev:#ffffff; --bg-elev2:#f1ece3; --border:#e3d9c8; --border-soft:#ece5d8;
-    --text:#2a2318; --muted:#6b5f4c; --muted-dim:#8c8170;
-    --brass:#a9702f; --brass-bright:#8a5a22; --brass-dim:rgba(169,112,47,.12); --brass-border:rgba(169,112,47,.35);
-    --ok:#2f8f5b; --ok-bg:rgba(47,143,91,.12); --ok-border:rgba(47,143,91,.35);
-    --warn:#b57515; --warn-bg:rgba(181,117,21,.13); --warn-border:rgba(181,117,21,.35);
-    --danger:#c23f30; --danger-bg:rgba(194,63,48,.12); --danger-border:rgba(194,63,48,.35);
-    --info:#2f6fac; --info-bg:rgba(47,111,172,.12);
-    --neutral:#6b6355; --neutral-bg:rgba(107,99,85,.12);
-    --font-sans:'IBM Plex Sans',-apple-system,'Segoe UI',Roboto,sans-serif;
-    --font-mono:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
-    --radius:14px;
-  }
-  @media (prefers-reduced-motion: reduce){ *{animation-duration:.001ms !important; transition-duration:.001ms !important;} }
-  *{box-sizing:border-box;}
-  html{scroll-padding-top:120px;}
-  body{margin:0;background:
-      radial-gradient(1200px 500px at 12% -10%, rgba(169,112,47,.05), transparent 60%),
-      var(--bg);
-    color:var(--text);font-family:var(--font-sans);font-size:16px;}
-  ::selection{background:var(--brass-dim);color:var(--brass-bright);}
-  a{color:var(--brass);}
-  :focus-visible{outline:2px solid var(--brass-bright);outline-offset:2px;border-radius:4px;}
+:root{color-scheme:light;--bg:#f3f6f2;--pn:#fff;--p2:#eaf0ea;--ln:#d3dcd3;--tx:#15252a;--mu:#52656a;--br:#0b6b63;--ok:#157f3b;--er:#c62828;--wa:#b45309;--in:#1d6fa5}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{font:16px/1.55 system-ui,"Segoe UI",sans-serif;background:var(--bg);color:var(--tx);display:grid;grid-template-rows:auto 1fr;grid-template-columns:220px 1fr}
+:focus-visible{outline:3px solid #f0a020;outline-offset:2px}
+header{grid-column:1/3;display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:14px 24px;border-bottom:2px solid var(--ln);background:var(--pn)}
+h1{font-size:22px;margin:0;font-weight:800}
+.bd{padding:4px 14px;border:1.5px solid var(--ln);border-radius:99px;font-size:14px;color:var(--mu);background:var(--bg)}.bd.ro{color:#fff;background:var(--br);border-color:var(--br);font-weight:600}.bd.bad{color:var(--wa);border-color:var(--wa);background:#fff7ed}
+#clock{margin-left:auto;font:600 18px ui-monospace,Consolas,monospace;color:var(--tx)}
+#rail{padding:16px 12px;border-right:2px solid var(--ln);background:var(--pn);display:flex;flex-direction:column;gap:6px;overflow:auto}
+#rail button{all:unset;cursor:pointer;padding:12px 14px;border-radius:10px;color:var(--tx);font-size:17px;font-weight:600}
+#rail button:hover{background:var(--p2)}#rail button[aria-selected=true]{background:var(--br);color:#fff}
+#wrap{display:flex;flex-direction:column;min-width:0;min-height:0}
+#sub{display:flex;gap:8px;padding:14px 24px;border-bottom:2px solid var(--ln);overflow:auto;flex:none;background:var(--pn)}
+#sub button{all:unset;cursor:pointer;padding:9px 18px;border-radius:99px;color:var(--tx);border:1.5px solid var(--ln);white-space:nowrap;font-size:15px;font-weight:600}
+#sub button:hover{border-color:var(--br)}#sub button[aria-selected=true]{background:var(--br);border-color:var(--br);color:#fff}
+#pane{flex:1;overflow:auto;padding:22px 24px 48px}
+h3{font-size:18px;color:var(--tx);font-weight:700;margin:26px 0 12px}h3:first-child{margin-top:0}
+.tg{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+.tl{background:var(--pn);border:1.5px solid var(--ln);border-left:8px solid var(--ln);border-radius:12px;padding:16px 18px}
+.tl b{display:block;font-size:40px;line-height:1.1;font-weight:800;font-variant-numeric:tabular-nums}.tl span{color:var(--mu);font-size:15px}.tl em{display:block;font-style:normal;font-size:13px;color:var(--mu);margin-top:6px}
+.tl.g{border-left-color:var(--ok)}.tl.g b{color:var(--ok)}.tl.w{border-left-color:var(--wa)}.tl.w b{color:var(--wa)}.tl.r{border-left-color:var(--er)}.tl.r b{color:var(--er)}.tl.a{border-left-color:var(--br)}.tl.a b{color:var(--br)}
+.bx{background:var(--pn);border:1.5px solid var(--ln);border-radius:12px;padding:18px;margin-top:10px}
+.bar{display:flex;gap:14px;flex-wrap:wrap;align-items:end;margin-bottom:14px}
+label{display:flex;flex-direction:column;gap:4px;font-size:14px;font-weight:600;color:var(--mu)}
+input,select,.b{font:inherit;font-size:15px;color:var(--tx);background:var(--pn);border:1.5px solid #b9c5ba;border-radius:8px;padding:8px 12px}
+.b{cursor:pointer;font-weight:600}.b:hover:not(:disabled),input:hover,select:hover{border-color:var(--br)}.b:disabled{opacity:.45;cursor:default}
+.tw{overflow:auto;border:1.5px solid var(--ln);border-radius:12px;background:var(--pn);max-height:calc(100vh - 330px)}
+table{border-collapse:collapse;width:100%}
+th,td{padding:11px 16px;border-bottom:1px solid var(--ln);text-align:left;white-space:nowrap;max-width:340px;overflow:hidden;text-overflow:ellipsis}
+th{position:sticky;top:0;background:var(--p2);font-weight:700;font-size:14px;color:var(--tx);z-index:1}th[data-c]{cursor:pointer}th[data-c]:hover{color:var(--br)}
+tr.rw{cursor:pointer}tr.rw:hover td{background:#f1f7f1}
+code{font:14px ui-monospace,Consolas,monospace;color:var(--in)}.nl{color:#8a9a9a}
+.ok{color:var(--ok)}.er{color:var(--er)}.wa{color:var(--wa)}.mu{color:var(--mu)}i{font-style:normal;font-weight:800}
+.pl{display:inline-block;padding:2px 12px;border-radius:99px;font-size:14px;font-weight:600;background:var(--p2);border:1.5px solid var(--ln)}
+.pl.ok{background:#e6f6ea;border-color:var(--ok);color:var(--ok)}.pl.er{background:#fdeaea;border-color:var(--er);color:var(--er)}.pl.wa{background:#fff3e0;border-color:var(--wa);color:var(--wa)}
+pre{margin:0;padding:14px;background:#f1f4f1;color:var(--tx);white-space:pre-wrap;word-break:break-all;font:14px ui-monospace,Consolas,monospace}
+.pg{display:flex;gap:12px;align-items:center;margin-top:12px;color:var(--mu);font-size:15px}
+.sp{display:flex;gap:18px;align-items:flex-start}.sd{width:270px;flex:none;max-height:calc(100vh - 250px);overflow:auto;background:var(--pn);border:1.5px solid var(--ln);border-radius:12px;padding:10px}
+.sd button{all:unset;box-sizing:border-box;display:flex;justify-content:space-between;gap:8px;width:100%;padding:8px 12px;cursor:pointer;border-radius:8px;font-size:15px}
+.sd button:hover{background:var(--p2)}.sd button[aria-current=true]{background:var(--br);color:#fff;font-weight:700}
+.ch{display:inline-flex;gap:8px;align-items:center;padding:5px 14px;border-radius:99px;background:var(--p2);border:1.5px solid var(--ln);font-size:15px;margin:0 8px 8px 0}.ch a{color:var(--er);cursor:pointer;font-weight:800}
+@media(max-width:800px){body{grid-template-columns:1fr}header{grid-column:1}#rail{flex-direction:row;border-right:0;border-bottom:2px solid var(--ln)}.sp{flex-direction:column}.sd{width:100%;max-height:200px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
 
-  .wrap{max-width:1520px;margin:0 auto;padding:0 24px 72px;}
-
-  /* ---------- header ---------- */
-  header{position:sticky;top:0;z-index:20;background:rgba(255,255,255,.94);backdrop-filter:blur(10px);
-         border-bottom:1px solid var(--border-soft);}
-  .banner{background:rgba(194,63,48,.08);border-bottom:1px solid var(--danger-border);color:#8f2c20;
-          padding:9px 20px;font-size:14px;text-align:center;letter-spacing:.01em;}
-  .banner b{color:#7a2418;}
-  .topbar{max-width:1520px;margin:0 auto;padding:20px 24px 16px;display:flex;justify-content:space-between;
-          align-items:flex-end;flex-wrap:wrap;gap:14px;}
-  .brandline{display:flex;align-items:center;gap:12px;}
-  .keyglyph{width:38px;height:38px;border-radius:10px;background:var(--brass-dim);border:1px solid var(--brass-border);
-            display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0;}
-  h1{font-size:24px;margin:0;font-weight:700;letter-spacing:-.01em;color:var(--text);}
-  .sub{color:var(--muted);font-size:14.5px;margin:3px 0 0;}
-  .live{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--muted);font-family:var(--font-mono);
-        background:var(--bg-elev2);border:1px solid var(--border);padding:8px 15px 8px 12px;border-radius:999px;}
-  .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);flex-shrink:0;
-       box-shadow:0 0 0 0 rgba(47,143,91,.6);animation:pulse 1.8s infinite;}
-  .dot.bad{background:var(--danger);animation:none;}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(47,143,91,.5);}70%{box-shadow:0 0 0 7px rgba(47,143,91,0);}100%{box-shadow:0 0 0 0 rgba(47,143,91,0);}}
-
-  /* ---------- tabs ---------- */
-  .tabbar{max-width:1520px;margin:0 auto;padding:0 24px;display:flex;gap:3px;overflow-x:auto;
-          scrollbar-width:thin;}
-  .tabbar::-webkit-scrollbar{height:5px;}
-  .tabbar::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px;}
-  .tab{appearance:none;border:none;background:transparent;color:var(--muted);font-family:var(--font-sans);
-       font-size:14.5px;font-weight:600;padding:12px 16px;cursor:pointer;white-space:nowrap;
-       border-bottom:2.5px solid transparent;display:flex;align-items:center;gap:8px;transition:color .15s;}
-  .tab:hover{color:var(--text);}
-  .tab.active{color:var(--brass-bright);border-bottom-color:var(--brass);}
-  .tab .chip{font-family:var(--font-mono);font-size:11.5px;background:var(--bg-elev2);color:var(--muted);
-             padding:2px 7px;border-radius:999px;border:1px solid var(--border);}
-  .tab.active .chip{color:var(--brass-bright);border-color:var(--brass-border);background:var(--brass-dim);}
-
-  main{padding-top:26px;}
-  .panel{display:none;}
-  .panel.active{display:block;animation:fadein .25s ease;}
-  @keyframes fadein{from{opacity:0;transform:translateY(3px);}to{opacity:1;transform:translateY(0);}}
-
-  /* ---------- stat cards ---------- */
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px;margin-bottom:26px;}
-  .stat{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px;
-        box-shadow:0 1px 2px rgba(42,35,24,.04);}
-  .stat .num{font-family:var(--font-mono);font-size:30px;font-weight:700;color:var(--text);}
-  .stat .num.danger{color:var(--danger);} .stat .num.warn{color:var(--warn);} .stat .num.ok{color:var(--ok);}
-  .stat .label{color:var(--muted);font-size:13.5px;margin-top:5px;}
-
-  /* ---------- alerts (overview) ---------- */
-  .alertbox{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);
-            padding:20px 22px;margin-bottom:26px;box-shadow:0 1px 2px rgba(42,35,24,.04);}
-  .alertbox h2{margin:0 0 14px;font-size:17px;font-weight:700;display:flex;align-items:center;gap:9px;}
-  .alertlist{display:flex;flex-direction:column;gap:8px;}
-  .alertitem{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:14.5px;
-             padding:11px 14px;border-radius:9px;background:var(--danger-bg);border:1px solid var(--danger-border);}
-  .alertitem.warnish{background:var(--warn-bg);border-color:var(--warn-border);}
-  .alertitem .name{font-weight:700;}
-  .alertitem .meta{color:var(--muted);font-family:var(--font-mono);font-size:13px;}
-  .allclear{color:var(--ok);font-size:14.5px;display:flex;align-items:center;gap:9px;padding:5px 2px;font-weight:600;}
-
-  /* ---------- device grid ---------- */
-  .devgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;}
-  .devcard{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;
-           transition:border-color .15s;box-shadow:0 1px 2px rgba(42,35,24,.04);}
-  .devcard:hover{border-color:var(--brass-border);}
-  .devcard .name{font-weight:700;font-size:16.5px;margin-bottom:2px;}
-  .devcard .code{color:var(--muted-dim);font-size:13px;margin-bottom:12px;font-family:var(--font-mono);}
-  .devcard .rows{display:flex;flex-direction:column;gap:7px;font-size:14px;}
-  .devcard .rows span.k{color:var(--muted);}
-  .devcard .rows .v{font-family:var(--font-mono);}
-  .pill{display:inline-block;padding:3px 11px;border-radius:999px;font-size:12.5px;font-weight:700;
-        font-family:var(--font-mono);border:1px solid transparent;}
-  .pill.locked{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-border);}
-  .pill.unlocked{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-border);}
-  .pill.jammed,.pill.unknown{background:var(--neutral-bg);color:var(--neutral);}
-  .pill.online{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-border);}
-  .pill.offline{background:var(--neutral-bg);color:var(--neutral);}
-  .pill.maintenance{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-border);}
-  .pill.provisioning,.pill.revoked{background:var(--info-bg);color:var(--info);}
-  .pill.info{background:var(--info-bg);color:var(--info);}
-  .pill.warning{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-border);}
-  .pill.critical{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-border);}
-  .pill.pending{background:var(--neutral-bg);color:var(--neutral);}
-  .pill.sent{background:var(--info-bg);color:var(--info);}
-  .pill.acknowledged{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-border);}
-  .pill.failed,.pill.expired{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-border);}
-  .tamper{color:var(--danger);font-weight:700;}
-  .ok-txt{color:var(--ok);font-weight:600;} .fail-txt{color:var(--danger);font-weight:600;}
-
-  /* ---------- charts ---------- */
-  .charts{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:26px;}
-  .chartcard{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);padding:20px;
-             box-shadow:0 1px 2px rgba(42,35,24,.04);}
-  .chartcard h3{margin:0 0 13px;font-size:14.5px;color:var(--muted);font-weight:700;}
-  canvas{max-height:200px;}
-  @media (max-width: 1080px){.charts{grid-template-columns:1fr;}}
-  .charts-2{grid-template-columns:repeat(2,1fr);margin-bottom:20px;}
-  .charts-2 canvas{max-height:170px;}
-  @media (max-width: 700px){.charts-2{grid-template-columns:1fr;}}
-
-  /* ---------- section / tables ---------- */
-  .section{background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);padding:24px;
-           box-shadow:0 1px 2px rgba(42,35,24,.04);}
-  .section-head{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap;}
-  .section-head h2{margin:0;font-size:17px;font-weight:700;display:flex;align-items:center;gap:9px;}
-  .count{background:var(--bg-elev2);color:var(--muted);font-size:13px;padding:3px 11px;border-radius:999px;
-         font-family:var(--font-mono);}
-  .searchbox{position:relative;}
-  .searchbox input{background:var(--bg-elev2);border:1px solid var(--border);color:var(--text);
-                    border-radius:9px;padding:9px 14px 9px 34px;font-size:14.5px;font-family:var(--font-sans);
-                    width:240px;max-width:60vw;}
-  .searchbox input::placeholder{color:var(--muted-dim);}
-  .searchbox svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);opacity:.5;pointer-events:none;}
-  .hint{color:var(--muted-dim);font-size:13px;margin-top:12px;}
-
-  table{width:100%;border-collapse:collapse;font-size:14.5px;font-family:var(--font-mono);}
-  th,td{padding:11px 12px;border-bottom:1px solid var(--border-soft);text-align:left;white-space:nowrap;}
-  th{color:var(--muted);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.03em;
-     font-family:var(--font-sans);background:var(--bg-elev);position:sticky;top:0;}
-  tbody tr:hover{background:var(--bg-elev2);}
-  .empty-row td{color:var(--muted-dim);text-align:center;padding:28px;font-family:var(--font-sans);}
-  .tablewrap{overflow:auto;max-height:600px;border:1px solid var(--border-soft);border-radius:10px;}
-  @keyframes rowflash{0%{background:var(--brass-dim);}100%{background:transparent;}}
-  tbody tr.row-new{animation:rowflash 1.8s ease-out;}
-
-  .grid2{display:grid;grid-template-columns:1fr;gap:18px;}
-  .panel-devices .devgrid{margin-top:2px;}
+/* ===== Giao diện pro + hiệu ứng chuyển mượt ===== */
+:root{--e:cubic-bezier(.2,.7,.2,1);--sh:0 1px 2px rgba(16,40,38,.06),0 8px 22px rgba(16,40,38,.06);--sh2:0 2px 4px rgba(16,40,38,.08),0 14px 30px rgba(16,40,38,.12)}
+html{scroll-behavior:smooth}body{-webkit-font-smoothing:antialiased}
+header{background:linear-gradient(120deg,#094f4a,#0b6b63 55%,#12897c);color:#fff;border-bottom:0;box-shadow:0 2px 14px rgba(9,79,74,.35);position:relative;z-index:3}
+h1{display:flex;align-items:center;gap:12px;letter-spacing:.2px}
+h1::before{content:"🔒";display:grid;place-items:center;width:38px;height:38px;border-radius:11px;background:rgba(255,255,255,.18);font-size:20px}
+header .bd{background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.32);transition:background .3s var(--e),color .3s var(--e)}
+header .bd.ro{background:#fff;color:#0b6b63;border-color:#fff}header .bd.bad{background:#fff3e0;color:#b45309;border-color:#fff3e0}
+#clock{color:#fff}
+#sync::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#7ee2a8;margin-right:8px;vertical-align:1px}
+#sync.ld::before{background:#ffd479;animation:pulse 1s ease-in-out infinite}#sync.bad::before{background:#ffb15c}
+@keyframes pulse{50%{transform:scale(1.7);opacity:.35}}
+#rail{box-shadow:2px 0 14px rgba(16,40,38,.05);position:relative;z-index:2}
+#rail button{transition:background .25s var(--e),color .25s var(--e),transform .25s var(--e),box-shadow .25s var(--e)}
+#rail button:hover{transform:translateX(4px)}
+#rail button[aria-selected=true]{background:linear-gradient(120deg,#0b6b63,#12897c);box-shadow:0 6px 16px rgba(11,107,99,.35);transform:none}
+#sub button{transition:background .25s var(--e),color .25s var(--e),border-color .25s var(--e),transform .2s var(--e),box-shadow .25s var(--e)}
+#sub button:hover{transform:translateY(-2px)}#sub button[aria-selected=true]{box-shadow:0 5px 14px rgba(11,107,99,.3)}
+#pane.in{animation:fi .5s var(--e)}
+@keyframes fi{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+#pane.in .tl{animation:up .55s var(--e) both}
+#pane.in .tl:nth-child(1){animation-delay:.02s}#pane.in .tl:nth-child(2){animation-delay:.07s}#pane.in .tl:nth-child(3){animation-delay:.12s}#pane.in .tl:nth-child(4){animation-delay:.17s}#pane.in .tl:nth-child(5){animation-delay:.22s}#pane.in .tl:nth-child(n+6){animation-delay:.27s}
+@keyframes up{from{opacity:0;transform:translateY(18px) scale(.97)}to{opacity:1;transform:none}}
+.tl,.bx,.tw,.sd{box-shadow:var(--sh)}
+.tl{transition:transform .3s var(--e),box-shadow .3s var(--e)}.tl:hover{transform:translateY(-4px);box-shadow:var(--sh2)}
+.tw{transition:box-shadow .3s var(--e)}
+th{box-shadow:0 1px 0 var(--ln)}
+td{transition:background .2s var(--e)}
+tr.rw:hover td{background:#e9f5f1}
+tr.dt pre{animation:dn .3s var(--e)}@keyframes dn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+#pane.in svg rect{transform-box:fill-box;transform-origin:bottom;animation:grow .8s var(--e) both}
+@keyframes grow{from{transform:scaleY(0)}to{transform:none}}
+input,select,.b{transition:border-color .2s var(--e),box-shadow .2s var(--e),transform .15s var(--e),background .2s var(--e)}
+input:focus,select:focus{border-color:var(--br);box-shadow:0 0 0 4px rgba(11,107,99,.15);outline:0}
+.b:hover:not(:disabled){background:#eef6f3;transform:translateY(-1px)}.b:active:not(:disabled){transform:scale(.97)}
+.pl,.ch{transition:transform .2s var(--e)}.pl:hover,.ch:hover{transform:translateY(-1px)}
+.sd button{transition:background .2s var(--e),color .2s var(--e),padding-left .2s var(--e)}.sd button:hover{padding-left:16px}
+#o:empty,#b:empty{min-height:220px;border-radius:12px;background:linear-gradient(90deg,#e6ece6 25%,#f4f8f4 45%,#e6ece6 65%);background-size:300% 100%;animation:sk 1.3s linear infinite}
+@keyframes sk{from{background-position:100% 0}to{background-position:0 0}}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#bccabd;border-radius:9px;border:2px solid transparent;background-clip:content-box}::-webkit-scrollbar-thumb:hover{background:#8fa493;background-clip:content-box;border:2px solid transparent}
+@media(prefers-reduced-motion:reduce){*,*::before{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
 </style>
 </head>
 <body>
-
 <header>
-  <div class="banner">
-    ⚠ <b>Trang demo</b> - ĐỒ THIỆT THÌ ĐỪNG CÓ PULIC CÁI NÀY RA NHÉ!!
-  </div>
-  <div class="topbar">
-    <div class="brandline">
-      <div class="keyglyph">🔑</div>
-      <div>
-        <h1>Nhật ký hệ thống real-time</h1>
-        <p class="sub">Tự động cập nhật mỗi 2 giây, không cần tải lại trang.</p>
-      </div>
-    </div>
-    <div class="live">
-      <span class="dot" id="liveDot"></span>
-      <span id="liveText">Đang kết nối…</span>
-    </div>
-  </div>
-  <nav class="tabbar" id="tabbar" role="tablist">
-    <button class="tab" data-tab="overview" role="tab"><span>📊 Tổng quan</span></button>
-    <button class="tab" data-tab="devices" role="tab"><span>🔌 Thiết bị</span><span class="chip" id="chipDevices">0</span></button>
-    <button class="tab" data-tab="commands" role="tab"><span>🔒 Lệnh khoá/mở</span><span class="chip" id="chipCommands">0</span></button>
-    <button class="tab" data-tab="status" role="tab"><span>📡 Trạng thái</span><span class="chip" id="chipStatus">0</span></button>
-    <button class="tab" data-tab="nfc" role="tab"><span>💳 NFC</span><span class="chip" id="chipNfc">0</span></button>
-    <button class="tab" data-tab="rules" role="tab"><span>⚙ Tự động hoá</span><span class="chip" id="chipRules">0</span></button>
-    <button class="tab" data-tab="logins" role="tab"><span>🔑 Đăng nhập</span><span class="chip" id="chipLogins">0</span></button>
-    <button class="tab" data-tab="audit" role="tab"><span>📋 Audit</span><span class="chip" id="chipAudit">0</span></button>
-  </nav>
+  <h1>Giám sát toàn hệ thống</h1>
+  <span class="bd ro">Chỉ xem · không ghi dữ liệu</span>
+  <span class="bd" id="dbi">DB…</span>
+  <span class="bd" id="sync">đang tải…</span>
+  <span id="clock"></span>
 </header>
-
-<div class="wrap">
-<main>
-
-  <!-- ================= OVERVIEW ================= -->
-  <section class="panel" id="panel-overview">
-    <div class="stats" id="statsRow"></div>
-
-    <div class="alertbox">
-      <h2>🚨 Cần chú ý</h2>
-      <div class="alertlist" id="alertList"></div>
-    </div>
-
-    <div class="charts">
-      <div class="chartcard">
-        <h3>Lệnh khoá / mở khoá theo phút</h3>
-        <canvas id="chartLock"></canvas>
-      </div>
-      <div class="chartcard">
-        <h3>Quẹt thẻ NFC: thành công / thất bại theo phút</h3>
-        <canvas id="chartNfc"></canvas>
-      </div>
-      <div class="chartcard">
-        <h3>Audit log: tổng / lỗi theo phút</h3>
-        <canvas id="chartAudit"></canvas>
-      </div>
-      <div class="chartcard">
-        <h3>Đăng nhập: thành công / thất bại theo phút</h3>
-        <canvas id="chartLogin"></canvas>
-      </div>
-      <div class="chartcard">
-        <h3>Luật tự động hoá kích hoạt theo phút</h3>
-        <canvas id="chartRules"></canvas>
-      </div>
-      <div class="chartcard">
-        <h3>Thiết bị báo trạng thái (heartbeat) theo phút</h3>
-        <canvas id="chartHeartbeat"></canvas>
-      </div>
-      <div class="chartcard">
-        <h3>Sự kiện tamper theo phút</h3>
-        <canvas id="chartTamper"></canvas>
-      </div>
-      <div class="chartcard">
-        <h3>Pin trung bình các thiết bị (%)</h3>
-        <canvas id="chartBattery"></canvas>
-      </div>
-      <div class="chartcard">
-        <h3>Nhiệt độ trung bình các thiết bị (°C)</h3>
-        <canvas id="chartTemp"></canvas>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= DEVICES ================= -->
-  <section class="panel panel-devices" id="panel-devices">
-    <div class="section">
-      <div class="section-head">
-        <h2>🔌 Trạng thái thiết bị (live) <span class="count" id="devCount">0</span></h2>
-        <div class="searchbox">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="searchDevices" type="text" placeholder="Tìm thiết bị…">
-        </div>
-      </div>
-      <div class="charts charts-2">
-        <div class="chartcard"><h3>Phân bố trạng thái thiết bị</h3><canvas id="chartDevStatus"></canvas></div>
-        <div class="chartcard"><h3>Phân bố trạng thái khoá</h3><canvas id="chartDevLock"></canvas></div>
-      </div>
-      <div class="devgrid" id="deviceGrid"></div>
-    </div>
-  </section>
-
-  <!-- ================= COMMANDS ================= -->
-  <section class="panel" id="panel-commands">
-    <div class="section">
-      <div class="section-head">
-        <h2>🔒 Lệnh khoá / mở khoá thiết bị <span class="count" id="cmdCount">0</span></h2>
-        <div class="searchbox">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="searchCommands" type="text" placeholder="Tìm theo thiết bị, trạng thái…">
-        </div>
-      </div>
-      <div class="charts charts-2">
-        <div class="chartcard"><h3>Phân bố loại lệnh</h3><canvas id="chartCmdType"></canvas></div>
-        <div class="chartcard"><h3>Phân bố trạng thái lệnh</h3><canvas id="chartCmdStatus"></canvas></div>
-      </div>
-      <div class="tablewrap"><table>
-        <thead><tr><th>Thời gian</th><th>Thiết bị</th><th>Lệnh</th><th>Trạng thái</th><th>Người gửi</th><th>Xác nhận lúc</th></tr></thead>
-        <tbody id="cmdBody"></tbody>
-      </table></div>
-      <p class="hint">Danh sách gần nhất được server trả về (không phải toàn bộ lịch sử) - dùng ô tìm kiếm để lọc nhanh.</p>
-    </div>
-  </section>
-
-  <!-- ================= STATUS LOGS ================= -->
-  <section class="panel" id="panel-status">
-    <div class="section">
-      <div class="section-head">
-        <h2>📡 Trạng thái thiết bị báo về <span class="count" id="statusCount">0</span></h2>
-        <div class="searchbox">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="searchStatus" type="text" placeholder="Tìm theo thiết bị…">
-        </div>
-      </div>
-      <div class="charts charts-2">
-        <div class="chartcard"><h3>Phân bố trạng thái khoá</h3><canvas id="chartStatusLock"></canvas></div>
-        <div class="chartcard"><h3>Tamper: có / không</h3><canvas id="chartStatusTamper"></canvas></div>
-      </div>
-      <div class="tablewrap"><table>
-        <thead><tr><th>Thời gian</th><th>Thiết bị</th><th>Khoá</th><th>Pin</th><th>Nhiệt độ</th><th>Sóng</th><th>Tamper</th></tr></thead>
-        <tbody id="statusBody"></tbody>
-      </table></div>
-    </div>
-  </section>
-
-  <!-- ================= NFC ================= -->
-  <section class="panel" id="panel-nfc">
-    <div class="section">
-      <div class="section-head">
-        <h2>💳 NFC / quẹt thẻ <span class="count" id="nfcCount">0</span></h2>
-        <div class="searchbox">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="searchNfc" type="text" placeholder="Tìm theo user, thiết bị…">
-        </div>
-      </div>
-      <div class="charts charts-2">
-        <div class="chartcard"><h3>Thành công / thất bại</h3><canvas id="chartNfcResult"></canvas></div>
-        <div class="chartcard"><h3>Loại sự kiện (phổ biến nhất)</h3><canvas id="chartNfcEvent"></canvas></div>
-      </div>
-      <div class="tablewrap"><table>
-        <thead><tr><th>Thời gian</th><th>Thiết bị</th><th>User</th><th>Đầu đọc</th><th>Sự kiện</th><th>Kết quả</th><th>IP</th></tr></thead>
-        <tbody id="nfcBody"></tbody>
-      </table></div>
-    </div>
-  </section>
-
-  <!-- ================= RULES ================= -->
-  <section class="panel" id="panel-rules">
-    <div class="section">
-      <div class="section-head">
-        <h2>⚙ Luật tự động hoá đã kích hoạt <span class="count" id="ruleCount">0</span></h2>
-        <div class="searchbox">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="searchRules" type="text" placeholder="Tìm theo luật, thiết bị…">
-        </div>
-      </div>
-      <div class="charts charts-2">
-        <div class="chartcard"><h3>Hành động đã thực hiện</h3><canvas id="chartRuleAction"></canvas></div>
-        <div class="chartcard"><h3>Luật kích hoạt nhiều nhất</h3><canvas id="chartRuleName"></canvas></div>
-      </div>
-      <div class="tablewrap"><table>
-        <thead><tr><th>Thời gian</th><th>Luật</th><th>Thiết bị</th><th>Hành động</th><th>Giá trị đo</th></tr></thead>
-        <tbody id="ruleBody"></tbody>
-      </table></div>
-    </div>
-  </section>
-
-  <!-- ================= LOGINS ================= -->
-  <section class="panel" id="panel-logins">
-    <div class="section">
-      <div class="section-head">
-        <h2>🔑 Lượt đăng nhập <span class="count" id="loginCount">0</span></h2>
-        <div class="searchbox">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="searchLogins" type="text" placeholder="Tìm theo định danh, IP…">
-        </div>
-      </div>
-      <div class="charts charts-2">
-        <div class="chartcard"><h3>Thành công / thất bại</h3><canvas id="chartLoginResult"></canvas></div>
-        <div class="chartcard"><h3>Định danh đăng nhập sai nhiều nhất</h3><canvas id="chartLoginTop"></canvas></div>
-      </div>
-      <div class="tablewrap"><table>
-        <thead><tr><th>Thời gian</th><th>Định danh</th><th>User</th><th>Kết quả</th><th>IP</th></tr></thead>
-        <tbody id="loginBody"></tbody>
-      </table></div>
-    </div>
-  </section>
-
-  <!-- ================= AUDIT ================= -->
-  <section class="panel" id="panel-audit">
-    <div class="section">
-      <div class="section-head">
-        <h2>📋 Audit log (toàn hệ thống) <span class="count" id="auditCount">0</span></h2>
-        <div class="searchbox">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="searchAudit" type="text" placeholder="Tìm theo hành động, actor, IP…">
-        </div>
-      </div>
-      <div class="charts charts-2">
-        <div class="chartcard"><h3>Mức độ nghiêm trọng</h3><canvas id="chartAuditSeverity"></canvas></div>
-        <div class="chartcard"><h3>Thành công / thất bại</h3><canvas id="chartAuditResult"></canvas></div>
-      </div>
-      <div class="tablewrap"><table>
-        <thead><tr><th>Thời gian</th><th>Hành động</th><th>Người thực hiện</th><th>Đối tượng</th><th>Thiết bị</th><th>Mức độ</th><th>Kết quả</th><th>IP</th></tr></thead>
-        <tbody id="auditBody"></tbody>
-      </table></div>
-    </div>
-  </section>
-
-</main>
-</div>
+<nav id="rail" role="tablist" aria-label="Nhóm chức năng"></nav>
+<div id="wrap"><div id="sub" role="tablist" aria-label="Tab nhỏ"></div><div id="pane"></div></div>
 
 <script>
-const API_URL = "{% url 'smartlock:public-system-logs-data' %}";
-const POLL_MS = 2000;
+const $=s=>document.querySelector(s),BASE=location.pathname.replace(/\/?$/,'/');
+const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=t=>t?new Date(t).toLocaleString('vi-VN',{hour12:false}):'—';
+const ago=t=>{if(!t)return'chưa bao giờ';const s=(Date.now()-new Date(t))/1e3;return s<60?Math.round(s)+' giây trước':s<3600?Math.round(s/60)+' phút trước':s<86400?Math.round(s/3600)+' giờ trước':Math.round(s/86400)+' ngày trước'};
+const pill=(t,c='')=>`<span class="pl ${c}">${esc(t)}</span>`;
+const tile=(v,l,c='',h='')=>`<div class="tl ${c}"><b>${esc(v)}</b><span>${l}</span>${h?`<em>${h}</em>`:''}</div>`;
+const tg=(t,b)=>`<h3>${t}</h3><div class="tg">${b}</div>`;
+const none=(n,m)=>`<tr><td colspan="${n}" class="nl">${m}</td></tr>`;
+const yn=b=>b?'<i class="ok">✓</i>':'<i class="er">✗</i>';
+const UU=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/,DT=/^\d{4}-\d\d-\d\dT/;
+const cell=v=>v===null||v===undefined?'<span class="nl">—</span>':typeof v==='boolean'?yn(v):typeof v==='object'?`<code>${esc(JSON.stringify(v)).slice(0,70)}</code>`:typeof v==='string'&&UU.test(v)?`<code title="${v}">${v.slice(0,8)}…</code>`:typeof v==='string'&&DT.test(v)?fmt(v):esc(v);
 
-/* ---------- helpers ---------- */
-function esc(s){ return (s ?? '—').toString().replace(/[&<>"']/g, c => ({
-  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-function fmtTime(iso){
-  if(!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleString('vi-VN', {hour12:false});
+/* ---- lưu theo TAB: sessionStorage tự xoá khi đóng tab ---- */
+const SS={get(k,d){try{const v=sessionStorage.getItem('sl:'+k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{sessionStorage.setItem('sl:'+k,JSON.stringify(v))}catch{}}};
+const ST=SS.get('st',{g:'ov',s:{},f:{}});const save=()=>SS.set('st',ST);
+let TOK=0,REF=null;
+const sync=(m,e)=>{const el=$('#sync');el.className='bd'+(m==='err'||m==='cache'?' bad':m==='load'?' ld':'');el.textContent={load:'đang tải…',ok:'cập nhật '+new Date().toLocaleTimeString('vi-VN',{hour12:false}),cache:'bản lưu trong tab'+(e?' · '+e:''),err:'lỗi: '+e}[m]};
+const mk=(path,p)=>{const u=new URL(BASE+path,location.origin);for(const[k,v]of Object.entries(p||{}))(Array.isArray(v)?v:[v]).forEach(x=>x!==''&&x!=null&&u.searchParams.append(k,x));return u};
+async function load(path,p,render){
+  const t=TOK,u=mk(path,p),key='c:'+path+u.search,c=SS.get(key,null);
+  if(c){render(c);sync('cache')}else sync('load');
+  try{const r=await fetch(u,{credentials:'same-origin'});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Lỗi '+r.status);SS.set(key,j);if(t===TOK){render(j);sync('ok')}}
+  catch(e){if(t!==TOK)return;sync(c?'cache':'err',e.message);if(!c)render(null,e.message)}
 }
+setInterval(()=>$('#clock').textContent=new Date().toLocaleTimeString('vi-VN',{hour12:false}),1000);
+setInterval(()=>{if(!document.hidden&&REF)REF()},10000);
 
-function emptyRow(colspan){ return `<tr class="empty-row"><td colspan="${colspan}">Chưa có dữ liệu</td></tr>`; }
-
-/* ---------- tabs (state persists across polls; deep-linkable via #hash) ---------- */
-const TABS = ['overview','devices','commands','status','nfc','rules','logins','audit'];
-function activateTab(name, pushHash=true){
-  if(!TABS.includes(name)) name = 'overview';
-  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
-  if(pushHash) history.replaceState(null, '', '#' + name);
+/* ---- cấu trúc tab ---- */
+const G={
+ ov:{n:'🏠 Tổng quan',s:[['kpi','Chỉ số chính'],['act','Hoạt động 24 giờ'],['cfg','Cấu hình & sức khỏe']]},
+ dv:{n:'🔒 Thiết bị',s:[['all','Tất cả'],['physical','Khóa vật lý'],['simulated','Khóa ảo'],['alert','Cảnh báo']]},
+ ev:{n:'📜 Nhật ký',s:[['all','Tất cả'],['AUDIT','Audit'],['ACCESS','Ra vào'],['NFC','NFC'],['STATUS','Trạng thái thiết bị'],['fail','Thất bại']]},
+ ad:{n:'👤 Quản trị',s:[['users','Người dùng'],['logins','Lượt đăng nhập'],['ann','Thông báo hệ thống'],['cfg','Cấu hình & phân quyền']]},
+ ch:{n:'🔌 API & kênh',s:[['api','Endpoint API'],['cmd','Lệnh MQTT'],['ses','Phiên app']]},
+ db:{n:'🗄️ Cơ sở dữ liệu',s:[['app','Dữ liệu ứng dụng'],['sys','Django & bảo mật']]}};
+function nav(){
+  $('#rail').innerHTML=Object.entries(G).map(([k,g])=>`<button role="tab" data-g="${k}" aria-selected="${k===ST.g}">${g.n}</button>`).join('');
+  $('#sub').innerHTML=G[ST.g].s.map(([k,n])=>`<button role="tab" data-s="${k}" aria-selected="${k===ST.s[ST.g]}">${n}</button>`).join('');
+  $('#rail').querySelectorAll('button').forEach(b=>b.onclick=()=>go(b.dataset.g));
+  $('#sub').querySelectorAll('button').forEach(b=>b.onclick=()=>go(ST.g,b.dataset.s));
 }
-document.getElementById('tabbar').addEventListener('click', e => {
-  const btn = e.target.closest('.tab');
-  if(btn) activateTab(btn.dataset.tab);
-});
-window.addEventListener('hashchange', () => activateTab(location.hash.slice(1), false));
-activateTab(location.hash.slice(1) || 'overview', false);
+function go(g,s){ST.g=g;ST.s[g]=s||ST.s[g]||G[g].s[0][0];save();TOK++;REF=null;nav();anim();V[g](ST.s[g])}
+const flt=(k,d)=>(ST.f[k]=ST.f[k]||d);
+const OV=()=>load('overview/',{},()=>{});
+const pager=(id,p,z,t,cb)=>{const n=Math.max(1,Math.ceil(t/z));$('#'+id).innerHTML=`<button class="b" data-d="-1" ${p<=1?'disabled':''}>‹ Trước</button><span>Trang ${p}/${n} · ${t.toLocaleString('vi-VN')} dòng</span><button class="b" data-d="1" ${p>=n?'disabled':''}>Sau ›</button>`;$('#'+id).querySelectorAll('button').forEach(b=>b.onclick=()=>cb(p+ +b.dataset.d))};
+const detail=(tr,obj)=>{const n=tr.nextElementSibling;if(n&&n.classList.contains('dt')){n.remove();return}tr.insertAdjacentHTML('afterend',`<tr class="dt"><td colspan="${tr.children.length}"><pre>${esc(JSON.stringify(obj,null,2))}</pre></td></tr>`)};
+const V={};
 
-/* ---------- generic filtered/highlighted table renderer ---------- */
-const seenKeys = {};
-function renderTable({bodyId, countId, searchId, rows, columns, keyFn, colspan}){
-  const q = (document.getElementById(searchId)?.value || '').trim().toLowerCase();
-  const filtered = q
-    ? rows.filter(r => columns.some(c => String(c.get(r) ?? '').toLowerCase().includes(q)))
-    : rows;
+/* ================= TỔNG QUAN ================= */
+V.ov=s=>{
+  $('#pane').innerHTML='<div id="o"></div>';
+  const draw=(j,e)=>{const o=$('#o');if(!j){o.textContent=e;return}
+    const d=j.devices,u=j.users,k=j.kinds,f=j.fail24,c=j.commands,st=d.filter(x=>x.stale).length,tp=d.filter(x=>x.tamper).length;
+    $('#dbi').textContent=`${j.db.vendor} · ${j.db.latency_ms} ms · ${j.db.tables} bảng`;$('#dbi').className='bd'+(j.db.latency_ms>1000?' bad':'');
+    if(s==='kpi')o.innerHTML=
+      tg('Thiết bị',tile(d.length,'tổng thiết bị','a')+tile(d.filter(x=>x.mode==='physical').length,'khóa vật lý')+tile(d.filter(x=>x.mode==='simulated').length,'khóa ảo')+tile(d.filter(x=>x.status==='online').length,'đang online','g')+tile(st,'mất tín hiệu',st?'w':'g')+tile(tp,'cảnh báo tháo',tp?'r':'g'))+
+      tg('Người dùng & bảo mật',tile(u.total,'người dùng','a')+tile(u.active,'đã kích hoạt')+tile(u.admin,'quản trị viên')+tile(u.two_fa,'bật 2FA')+tile(u.unverified,'chưa xác thực email',u.unverified?'w':'g')+tile(u.locked,'đang bị khóa đăng nhập',u.locked?'w':'g')+tile(u.sessions_active,'phiên app hoạt động'))+
+      tg('Dữ liệu & lệnh',tile(k.AUDIT||0,'audit log')+tile(k.ACCESS||0,'lượt ra vào')+tile(k.NFC||0,'log NFC')+tile((k.STATUS||0).toLocaleString('vi-VN'),'bản tin trạng thái')+tile(j.commands24,'lệnh 24 giờ','a')+tile(c.failed||0,'lệnh thất bại',c.failed?'r':'g'));
+    else if(s==='act'){
+      const cl={AUDIT:'#0b6b63',ACCESS:'#e08a00',NFC:'#7a5bd0',STATUS:'#4a9bd0'},nm={AUDIT:'Audit',ACCESS:'Ra vào',NFC:'NFC',STATUS:'Trạng thái'},W=760,H=190,n=j.hours.length,bw=W/n;let mx=1;
+      for(let i=0;i<n;i++)mx=Math.max(mx,Object.values(j.series).reduce((a,x)=>a+x[i],0));
+      let sv=`<svg viewBox="0 0 ${W} ${H+18}" width="100%" role="img" aria-label="Sự kiện theo giờ">`;
+      for(let i=0;i<n;i++){let y=H;for(const q of Object.keys(cl)){const v=(j.series[q]||[])[i]||0,h=v/mx*H;y-=h;sv+=`<rect x="${i*bw+1}" y="${y}" width="${bw-2}" height="${h}" fill="${cl[q]}"><title>${j.hours[i]} · ${nm[q]}: ${v}</title></rect>`}if(i%3===0)sv+=`<text x="${i*bw}" y="${H+13}" font-size="11" fill="#52656a">${j.hours[i]}</text>`}
+      o.innerHTML=`<div class="bx"><h3>Sự kiện theo giờ (cao nhất ${mx}/giờ)</h3>${sv}</svg><div style="margin-top:8px">${Object.keys(cl).map(q=>`<span class="ch"><i style="color:${cl[q]}">■</i>${nm[q]}</span>`).join('')}</div></div>`+
+        `<h3>Theo loại log</h3><div class="tw"><table><thead><tr><th>Loại</th><th>Tổng</th><th>24 giờ</th><th>Thất bại 24 giờ</th></tr></thead><tbody>${Object.keys(nm).map(q=>`<tr><td>${nm[q]}</td><td>${(k[q]||0).toLocaleString('vi-VN')}</td><td>${j.kinds24[q]||0}</td><td class="${f[q]?'er':''}">${f[q]||0}</td></tr>`).join('')}</tbody></table></div>`+
+        `<h3>Lệnh điều khiển theo trạng thái (toàn bộ)</h3><div>${Object.entries(c).map(([a,b])=>`<span class="ch">${a}: <b>${b}</b></span>`).join('')||'<span class="mu">Chưa có lệnh.</span>'}</div>`}
+    else o.innerHTML=tg('Cơ sở dữ liệu',tile(j.db.vendor,'loại DB','a')+tile(j.db.latency_ms+' ms','độ trễ truy vấn',j.db.latency_ms>1000?'w':'g',j.db.latency_ms>1000?'DB ở xa nên trang lưu cache trong tab':'')+tile(j.db.tables,'số bảng'))+
+      tg('Biến cấu hình (chỉ báo đã đặt hay chưa)',Object.entries(j.config).map(([a,b])=>tile(b?'Đã đặt':'THIẾU',a,b?'g':'r')).join(''))};
+  REF=()=>load('overview/',{},draw);REF()};
 
-  const countEl = document.getElementById(countId);
-  countEl.textContent = q ? `${filtered.length}/${rows.length}` : rows.length;
+/* ================= THIẾT BỊ ================= */
+V.dv=s=>{
+  const f=flt('dv',{q:'',st:''});
+  $('#pane').innerHTML=`<div class="bar"><label>Tìm<input id="q" value="${esc(f.q)}" placeholder="tên, mã, chủ khóa, MAC"></label><label>Trạng thái<select id="st"><option value="">Tất cả</option><option value="online">Online</option><option value="offline">Offline</option><option value="stale">Mất tín hiệu</option></select></label><span class="mu" id="n"></span></div><div class="tw"><table><thead><tr><th>Tên</th><th>Loại</th><th>Trạng thái</th><th>Khóa</th><th>Pin</th><th>Sóng</th><th>Nhiệt độ</th><th>Chủ khóa</th><th>Firmware</th><th>Kết nối</th><th>Thấy lần cuối</th></tr></thead><tbody id="b"></tbody></table></div><p class="mu">Bấm vào một dòng để xem đầy đủ thông tin thiết bị.</p>`;
+  $('#st').value=f.st;let J=null;
+  const draw=j=>{if(j)J=j;if(!J)return;const q=f.q.toLowerCase();
+    const r=J.devices.filter(x=>(s==='all'||s==='alert'||x.mode===s)&&(s!=='alert'||x.tamper||x.stale||x.battery<20)&&(!f.st||(f.st==='stale'?x.stale:x.status===f.st))&&(!q||[x.name,x.code,x.owner,x.mac].join(' ').toLowerCase().includes(q)));
+    $('#n').textContent=`${r.length}/${J.devices.length} thiết bị`;
+    $('#b').innerHTML=r.map((x,i)=>`<tr class="rw" data-i="${i}"><td>${esc(x.name)}<br><code>${esc(x.code)}</code></td><td>${x.mode==='simulated'?pill('Khóa ảo','wa'):pill('Vật lý')}</td><td>${pill(x.status,x.status==='online'?'ok':'')}${x.stale?' '+pill('mất tín hiệu','wa'):''}</td><td>${esc(x.lock||'—')}</td><td class="${x.battery<20?'er':''}">${x.battery}%</td><td>${x.signal??'—'}</td><td>${x.temp??'—'}</td><td>${esc(x.owner||'chưa bán')}</td><td>${esc(x.fw||'—')}</td><td>${x.radio.join(' · ')||'—'}</td><td title="${fmt(x.last_seen)}">${ago(x.last_seen)}${x.tamper?' <b class="er">⚠ bị tháo</b>':''}</td></tr>`).join('')||none(11,'Không có thiết bị khớp. Bỏ bớt bộ lọc hoặc đổi tab.');
+    $('#b').onclick=e=>{const tr=e.target.closest('tr.rw');if(!tr)return;const x=r[tr.dataset.i];if(tr.nextElementSibling&&tr.nextElementSibling.classList.contains('dt'))return detail(tr,0);fetch(mk('device/'+x.id+'/'),{credentials:'same-origin'}).then(q=>q.json()).then(j=>detail(tr,j)).catch(()=>detail(tr,x))}};
+  $('#q').oninput=e=>{f.q=e.target.value;save();draw()};$('#st').onchange=e=>{f.st=e.target.value;save();draw()};
+  REF=()=>load('overview/',{},draw);REF()};
 
-  const prevKeys = seenKeys[bodyId];
-  const nextKeys = new Set();
-  const isFirstPaint = prevKeys === undefined;
+/* ================= NHẬT KÝ ================= */
+V.ev=s=>{
+  const f=flt('ev',{sv:'',m:'',dv:'',h:'24',q:'',z:'50',ar:'0'});let P=1,T=0,tm=null;
+  const o=SS.get('c:overview/',null),dvs=o?o.devices:[];
+  $('#pane').innerHTML=`<div class="bar"><label>Mức<select id="sv"><option value="">Mọi mức</option><option>info</option><option>warning</option><option>critical</option></select></label>${s==='ACCESS'||s==='all'?'<label>Kênh mở<select id="m"><option value="">Mọi kênh</option><option>RFID</option><option>PIN</option><option>FACE</option><option>BLE</option><option>NFC_PHONE</option></select></label>':''}<label>Thiết bị<select id="dv"><option value="">Tất cả</option>${dvs.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></label><label>Khoảng<select id="h"><option value="1">1 giờ</option><option value="24">24 giờ</option><option value="168">7 ngày</option><option value="720">30 ngày</option><option value="">Toàn bộ</option></select></label><label>Tìm<input id="q" value="${esc(f.q)}" placeholder="hành động, user, IP, lý do"></label><label>Dòng<select id="z"><option>25</option><option>50</option><option>100</option><option>200</option></select></label><label>Tự làm mới<select id="ar"><option value="0">Tắt</option><option value="5000">5 giây</option><option value="15000">15 giây</option></select></label></div><div class="tw"><table><thead><tr><th>Thời gian</th><th>Loại</th><th>Sự kiện</th><th>Người</th><th>Thiết bị</th><th>Kênh</th><th>IP</th><th>Mức</th><th>KQ</th></tr></thead><tbody id="b"></tbody></table></div><div class="pg" id="pg"></div><p class="mu">Bấm vào một dòng để xem metadata, user-agent và lý do.</p>`;
+  for(const k of ['sv','m','dv','h','z','ar'])if($('#'+k))$('#'+k).value=f[k];
+  const run=()=>load('events/',{kind:/^[A-Z]+$/.test(s)?s:'',ok:s==='fail'?'0':'',severity:f.sv,method:f.m,device:f.dv,hours:f.h,q:f.q,page:P,size:f.z},j=>{
+    if(!j){$('#b').innerHTML=none(9,'Lỗi tải nhật ký.');return}T=j.total;
+    $('#b').innerHTML=j.rows.map((x,i)=>`<tr class="rw" data-i="${i}"><td>${fmt(x.time)}</td><td>${x.kind}</td><td>${esc(x.what||'—')}</td><td>${esc(x.who||'—')}</td><td>${esc(x.device||'—')}</td><td>${x.channel}</td><td>${esc(x.ip||'—')}</td><td class="${x.sev==='critical'?'er':x.sev==='warning'?'wa':''}">${x.sev}</td><td>${yn(x.ok)}</td></tr>`).join('')||none(9,'Không có sự kiện khớp. Thử nới khoảng thời gian.');
+    $('#b').onclick=e=>{const tr=e.target.closest('tr.rw');if(tr)detail(tr,j.rows[tr.dataset.i])};pager('pg',j.page,j.size,T,p=>{P=p;run()})});
+  for(const k of ['sv','m','dv','h','z'])if($('#'+k))$('#'+k).onchange=e=>{f[k]=e.target.value;save();P=1;run()};
+  let d;$('#q').oninput=e=>{f.q=e.target.value;save();clearTimeout(d);d=setTimeout(()=>{P=1;run()},350)};
+  $('#ar').onchange=e=>{f.ar=e.target.value;save();clearInterval(tm);if(+f.ar)tm=setInterval(()=>{if(document.hidden||!$('#ar')||ST.g!=='ev')clearInterval(tm);else run()},+f.ar)};
+  $('#ar').onchange({target:$('#ar')});run()};
 
-  const html = filtered.length ? filtered.map(r => {
-    const key = keyFn(r);
-    nextKeys.add(key);
-    const isNew = !isFirstPaint && !prevKeys.has(key);
-    const tds = columns.map(c => {
-      const val = c.html ? c.html(r) : esc(c.get(r));
-      return `<td class="${c.cls ? c.cls(r) : ''}">${val}</td>`;
-    }).join('');
-    return `<tr class="${isNew ? 'row-new' : ''}">${tds}</tr>`;
-  }).join('') : emptyRow(colspan);
 
-  document.getElementById(bodyId).innerHTML = html;
-  seenKeys[bodyId] = nextKeys;
-}
+/* ================= QUẢN TRỊ (chỉ đọc) ================= */
+const RL={superuser:'er',admin:'wa',user:''};
+function LIST(path,opts,heads,row){
+  const f=flt(path,{q:'',st:''});let P=1;
+  $('#pane').innerHTML=`<div class="bar"><label>Tìm<input id="q" value="${esc(f.q)}" placeholder="tìm kiếm"></label>${opts.length?`<label>Lọc<select id="st">${opts.map(([v,n])=>`<option value="${v}">${n}</option>`).join('')}</select></label>`:''}<span class="mu" id="n"></span></div><div class="tw"><table><thead><tr>${heads.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody id="b"></tbody></table></div><div class="pg" id="pg"></div><p class="mu">Bấm vào một dòng để xem đầy đủ.</p>`;
+  if($('#st'))$('#st').value=f.st;
+  const run=()=>load(path+'/',{q:f.q,status:f.st,page:P,size:25},j=>{if(!j){$('#b').innerHTML=none(heads.length,'Lỗi tải dữ liệu.');return}
+    $('#n').textContent=j.total.toLocaleString('vi-VN')+' bản ghi';
+    $('#b').innerHTML=j.rows.map((x,i)=>`<tr class="rw" data-i="${i}">${row(x)}</tr>`).join('')||none(heads.length,'Không có bản ghi khớp.');
+    $('#b').onclick=e=>{const tr=e.target.closest('tr.rw');if(tr)detail(tr,j.rows[tr.dataset.i])};pager('pg',j.page,j.size,j.total,p=>{P=p;run()})});
+  let d;$('#q').oninput=e=>{f.q=e.target.value;save();clearTimeout(d);d=setTimeout(()=>{P=1;run()},350)};
+  if($('#st'))$('#st').onchange=e=>{f.st=e.target.value;save();P=1;run()};run()}
+const td=(...a)=>a.map(x=>`<td>${x}</td>`).join('');
+V.ad=s=>{
+  if(s==='users')return LIST('users',[['','Tất cả'],['active','Đang hoạt động'],['inactive','Vô hiệu hóa'],['unverified','Chưa xác thực email'],['locked','Đang bị khóa'],['admin','Quản trị viên'],['2fa','Đã bật 2FA']],
+    ['Email','Tên đăng nhập','Họ tên','Vai trò','Hoạt động','Email','2FA','Khóa đăng nhập','Số khóa','Tạo lúc'],
+    x=>td(esc(x.email),esc(x.username),esc(x.full_name||'—'),pill(x.role,RL[x.role]),yn(x.is_active),yn(x.email_verified),yn(x.two_fa_enabled),x.is_locked?pill('đang khóa','wa'):'—',x.device_count??0,fmt(x.created_at)));
+  if(s==='logins')return LIST('logins',[['','Tất cả'],['ok','Thành công'],['fail','Thất bại']],['Thời gian','Tài khoản thử','Người dùng','IP','Cổng','Kết quả','Hành động','Trình duyệt'],
+    x=>td(fmt(x.created_at),esc(x.identifier||'—'),esc(x.user?x.user.email:'—'),esc(x.ip_address||'—'),x.is_manage_portal?pill('Quản trị','wa'):pill('Người dùng'),yn(x.success),`<code>${esc(x.action)}</code>`,esc((x.user_agent||'—').slice(0,50))));
+  if(s==='ann')return LIST('announcements',[['','Tất cả'],['active','Đang hiển thị'],['inactive','Đã ẩn']],['Tiêu đề','Mức','Hiển thị','Người tạo','Tạo lúc','Nội dung'],
+    x=>td(esc(x.title),pill(x.level,x.level==='danger'?'er':x.level==='warning'?'wa':''),yn(x.is_active),esc(x.created_by?x.created_by.email:'—'),fmt(x.created_at),esc((x.body||'').slice(0,80))));
+  $('#pane').innerHTML='<div id="o"></div>';
+  const draw=j=>{if(!j){$('#o').textContent='Lỗi tải dữ liệu.';return}const c=j.settings;
+    $('#o').innerHTML=tg('Cài đặt hệ thống',tile(c.registration_enabled?'Mở':'Đóng','đăng ký tài khoản',c.registration_enabled?'g':'w')+tile(c.session_timeout_hours+' giờ','hết hạn phiên người dùng','a')+tile(c.verification_token_expiry_minutes+' phút','hạn link xác thực email')+tile(c.share_code_expiry_minutes+' phút','hạn mã chia sẻ khóa')+tile(c.login_lockout_stage_minutes.join(' → ')+' phút','mốc khóa khi sai mật khẩu','w')+tile(Math.round(j.session_seconds/60)+' phút','phiên trang quản trị'))+
+      tg('Phân quyền',tile(j.roles.superuser,'superuser','r')+tile(j.roles.admin,'quản trị viên','w')+tile(j.roles.user,'người dùng thường')+tile(j.admin_full_power?'Bật':'Tắt','ADMIN_FULL_POWER (admin làm thao tác nhạy cảm)',j.admin_full_power?'w':'g'))+
+      `<h3>Danh sách tài khoản quản trị</h3><div class="tw"><table><thead><tr><th>Email</th><th>Tên đăng nhập</th><th>Vai trò</th><th>Đăng nhập lần cuối</th></tr></thead><tbody>${j.admins.map(a=>`<tr>${td(esc(a.email),esc(a.username),pill(a.role,RL[a.role]),fmt(a.last_login))}</tr>`).join('')}</tbody></table></div><p class="mu">Cập nhật lần cuối: ${fmt(c.updated_at)}${c.updated_by?' bởi '+esc(c.updated_by.email):''}. Trang này chỉ xem; thao tác ghi làm ở trang quản trị /manage-sys/ (có xác nhận lại mật khẩu và ghi audit).</p>`};
+  REF=()=>load('admin-settings/',{},draw);REF()};
 
-/* ---------- charts ---------- */
-/* palette for known category labels, used by both distribution charts and legends */
-const CAT_COLOR = {
-  online:'#5cb586', offline:'#8b8272', maintenance:'#dba14a', provisioning:'#6f9fce', revoked:'#6f9fce',
-  locked:'#5cb586', unlocked:'#dba14a', jammed:'#8b8272', unknown:'#8b8272',
-  pending:'#8b8272', sent:'#6f9fce', acknowledged:'#5cb586', failed:'#d5695c', expired:'#d5695c',
-  info:'#6f9fce', warning:'#dba14a', critical:'#d5695c',
-  'Có':'#d5695c', 'Không':'#5cb586', 'Thành công':'#5cb586', 'Thất bại':'#d5695c',
-  LOCK:'#c9924f', UNLOCK:'#dba14a', REBOOT:'#6f9fce',
-};
-const FALLBACK_COLORS = ['#c9924f','#6f9fce','#5cb586','#dba14a','#d5695c','#8b8272','#e6ac6a','#9a8f7c'];
-function colorFor(label, idx){ return CAT_COLOR[label] || FALLBACK_COLORS[idx % FALLBACK_COLORS.length]; }
+/* ================= API & KÊNH ================= */
+V.ch=s=>{
+  if(s==='api'){const f=flt('ch',{q:''});$('#pane').innerHTML=`<div id="t"></div><div class="bar" style="margin-top:14px"><label>Tìm endpoint<input id="q" value="${esc(f.q)}" placeholder="đường dẫn, tên, mô tả"></label></div><div id="r"></div><h3>Hành động audit nhiều nhất 24 giờ</h3><div class="tw"><table><thead><tr><th>Hành động</th><th>Lượt</th><th>Thất bại</th></tr></thead><tbody id="a"></tbody></table></div>`;let J=null;
+    const draw=j=>{if(j)J=j;if(!J)return;const q=f.q.toLowerCase();
+      $('#t').innerHTML='<div class="tg">'+tile(J.health.status==='up'?'Hoạt động':'LỖI','kết nối DB',J.health.status==='up'?'g':'r')+tile(J.health.ms??'—','ms truy vấn DB')+J.groups.map(g=>tile(g.routes.length,g.label,'a')).join('')+'</div>';
+      $('#a').innerHTML=J.top_actions_24h.map(x=>`<tr><td>${esc(x.action||'(trống)')}</td><td>${x.n}</td><td class="${x.bad?'er':''}">${x.bad}</td></tr>`).join('')||none(3,'Chưa có audit log trong 24 giờ.');
+      $('#r').innerHTML=J.groups.map(g=>{const r=g.routes.filter(x=>!q||[x.path,x.name,x.doc].join(' ').toLowerCase().includes(q));return r.length?`<h3>/api/${esc(g.key)}/ · ${esc(g.label)} · ${r.length} endpoint</h3><div class="tw"><table><tbody>${r.map(x=>`<tr><td><code>${esc(x.path)}</code></td><td class="mu">${esc(x.module)}</td><td class="mu" title="${esc(x.doc)}">${esc(x.doc)}</td></tr>`).join('')}</tbody></table></div>`:''}).join('')||'<p class="mu">Không có endpoint khớp.</p>'};
+    $('#q').oninput=e=>{f.q=e.target.value;save();draw()};REF=()=>load('api/',{},draw);REF();return}
+  $('#pane').innerHTML='<div id="o"></div>';
+  const draw=j=>{const o=$('#o');if(!j){o.textContent='Lỗi tải dữ liệu.';return}
+    if(s==='cmd'){const bad=j.by.filter(x=>x.status==='failed'||x.status==='expired').reduce((a,x)=>a+x.n,0);
+      o.innerHTML=tg('Kết nối',tile(j.mqtt.host_set?'Đã đặt':'THIẾU','MQTT_HOST',j.mqtt.host_set?'g':'r')+tile(j.mqtt.webhook_secret_set?'Đã đặt':'THIẾU','MQTT_WEBHOOK_SECRET',j.mqtt.webhook_secret_set?'g':'r')+tile(j.fcm_set?'Đã đặt':'Chưa bật','Firebase push',j.fcm_set?'g':'w')+tile(j.ack_latency_s==null?'—':j.ack_latency_s+' s','độ trễ xác nhận TB 24 giờ','a')+tile(bad,'thất bại / hết hạn 24 giờ',bad?'w':'g')+tile(j.offline_after_s+' s','ngưỡng coi là offline'))+
+        `<h3>Lệnh 24 giờ theo loại</h3><div>${j.by.map(x=>`<span class="ch">${x.type} · ${x.status}: <b>${x.n}</b></span>`).join('')||'<span class="mu">Không có lệnh.</span>'}</div><h3>60 lệnh gần nhất</h3><div class="tw"><table><thead><tr><th>Thời gian</th><th>Thiết bị</th><th>Lệnh</th><th>Trạng thái</th><th>Người gửi</th><th>Xác nhận</th><th>Hết hạn</th><th>Nguồn</th></tr></thead><tbody>${j.recent.map(c=>`<tr><td>${fmt(c.time)}</td><td>${esc(c.device)}</td><td>${c.type}</td><td>${pill(c.status,c.status==='acknowledged'?'ok':c.status==='failed'?'er':c.status==='expired'?'wa':'')}</td><td>${esc(c.by)}</td><td>${fmt(c.ack)}</td><td>${fmt(c.expires)}</td><td>${esc(c.payload&&c.payload.source||'—')}</td></tr>`).join('')||none(8,'Chưa có lệnh.')}</tbody></table></div>`}
+    else o.innerHTML=`<div class="tw"><table><thead><tr><th>Người dùng</th><th>Nền tảng</th><th>Phiên bản</th><th>Máy</th><th>IP</th><th>Push</th><th>Dùng lần cuối</th><th>Hết hạn</th><th>Trạng thái</th></tr></thead><tbody>${j.sessions.map(x=>`<tr><td>${esc(x.user)}</td><td>${esc(x.platform)}</td><td>${esc(x.app)}</td><td>${esc(x.device_name)}</td><td>${esc(x.ip||'—')}</td><td>${yn(x.push)}</td><td>${ago(x.last_used)}</td><td>${fmt(x.expires)}</td><td>${pill(x.revoked?'đã thu hồi':'hoạt động',x.revoked?'er':'ok')}</td></tr>`).join('')||none(9,'Chưa có phiên app.')}</tbody></table></div>`};
+  REF=()=>load('channels/',{},draw);REF()};
 
-const lineOpts = {
-  responsive:true, maintainAspectRatio:false, animation:false,
-  interaction:{mode:'index', intersect:false}, spanGaps:true,
-  scales:{
-    x:{ticks:{color:'#6b5f4c', maxTicksLimit:6, font:{family:'IBM Plex Mono', size:11.5}}, grid:{color:'#ece5d8'}},
-    y:{beginAtZero:true, ticks:{color:'#6b5f4c', precision:0, font:{family:'IBM Plex Mono', size:11.5}}, grid:{color:'#ece5d8'}}
-  },
-  plugins:{legend:{labels:{color:'#2a2318', boxWidth:11, font:{size:12.5, family:'IBM Plex Sans'}}}}
-};
-function lineDataset(label, color, fillAlpha){
-  return {label, data:[], borderColor:color, backgroundColor:color.length===7?`${color}${fillAlpha}`:color,
-           tension:.3, fill:true, pointRadius:0, borderWidth:2};
-}
-function makeLineChart(canvasId, datasets){
-  return new Chart(document.getElementById(canvasId), {type:'line', data:{labels:[], datasets}, options: lineOpts});
-}
-function makeDoughnut(canvasId){
-  return new Chart(document.getElementById(canvasId), {
-    type:'doughnut',
-    data:{labels:[], datasets:[{data:[], backgroundColor:[], borderColor:'#ffffff', borderWidth:2}]},
-    options:{responsive:true, maintainAspectRatio:false, animation:false,
-      plugins:{legend:{position:'right', labels:{color:'#2a2318', boxWidth:10, font:{size:12, family:'IBM Plex Sans'}}}}},
-  });
-}
-function makeBarChart(canvasId){
-  return new Chart(document.getElementById(canvasId), {
-    type:'bar',
-    data:{labels:[], datasets:[{data:[], backgroundColor:[]}]},
-    options:{responsive:true, maintainAspectRatio:false, animation:false,
-      scales:{x:{ticks:{color:'#6b5f4c', font:{family:'IBM Plex Sans', size:11}}, grid:{display:false}},
-              y:{beginAtZero:true, ticks:{color:'#6b5f4c', precision:0, font:{family:'IBM Plex Mono', size:11.5}}, grid:{color:'#ece5d8'}}},
-      plugins:{legend:{display:false}}},
-  });
-}
-function updateDistChart(chart, counts, order){
-  const labels = order || Object.keys(counts);
-  const data = labels.map(l => counts[l] || 0);
-  chart.data.labels = labels;
-  chart.data.datasets[0].data = data;
-  chart.data.datasets[0].backgroundColor = labels.map((l,i) => colorFor(l,i));
-  chart.update('none');
-}
-function countBy(rows, getter){
-  const counts = {};
-  rows.forEach(r => { const v = getter(r) ?? '—'; counts[v] = (counts[v]||0) + 1; });
-  return counts;
-}
-function topN(counts, n){
-  return Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, n).reduce((o,[k,v]) => (o[k]=v, o), {});
-}
+/* ================= CƠ SỞ DỮ LIỆU ================= */
+V.db=s=>{
+  const f=flt('db',{t:'',f:[],o:'',q:'',z:'50'});let P=1,TB=[],COLS=[],ROWS=[];
+  $('#pane').innerHTML=`<div class="sp"><div class="sd"><label>Lọc bảng<input id="tq" placeholder="tên bảng"></label><div id="tl" style="margin-top:6px"></div></div><div style="flex:1;min-width:0"><div class="bar"><label>Tìm trong bảng<input id="q" value="${esc(f.q)}" placeholder="mọi cột văn bản"></label><label>Cột<select id="fc"></select></label><label>Phép<select id="fo"><option value="contains">chứa</option><option value="eq">bằng</option><option value="starts">bắt đầu bằng</option><option value="gt">lớn hơn</option><option value="lt">nhỏ hơn</option><option value="null">rỗng</option><option value="notnull">không rỗng</option></select></label><label>Giá trị<input id="fv"></label><button class="b" id="fa">Thêm bộ lọc</button><label>Dòng<select id="z"><option>25</option><option>50</option><option>100</option><option>200</option></select></label><button class="b" id="csv">Xuất CSV trang này</button></div><div id="chips"></div><div class="tw"><table><thead id="h"></thead><tbody id="b"></tbody></table></div><div class="pg" id="pg">Chọn một bảng ở bên trái.</div><p class="mu">Bấm vào một dòng để xem đầy đủ. Cột bí mật (hash, secret, token, embedding…) luôn bị che.</p></div></div>`;
+  $('#z').value=f.z;
+  const inGroup=t=>s==='app'?/^(smartlock_|manage_sys)/.test(t):!/^(smartlock_|manage_sys)/.test(t);
+  const list=()=>{const q=$('#tq').value.toLowerCase();$('#tl').innerHTML=TB.filter(t=>inGroup(t.table)&&t.table.includes(q)).map(t=>`<button data-t="${t.table}" aria-current="${t.table===f.t}"><span>${esc(t.table.replace('smartlock_',''))}</span><span class="${t.table===f.t?'':'mu'}">${t.rows}</span></button>`).join('')||'<span class="mu">Không có bảng.</span>';
+    $('#tl').querySelectorAll('button').forEach(b=>b.onclick=()=>{f.t=b.dataset.t;f.f=[];f.o='';f.q='';$('#q').value='';save();P=1;list();rows()})};
+  const rows=()=>{if(!f.t||!inGroup(f.t)){$('#h').innerHTML='';$('#b').innerHTML='';return}
+    load('db/rows/',{table:f.t,q:f.q,f:f.f,order:f.o,page:P,size:f.z},j=>{
+      if(!j){$('#pg').textContent='Lỗi tải bảng.';return}COLS=j.columns;ROWS=j.rows;
+      if($('#fc').dataset.t!==f.t){$('#fc').innerHTML=COLS.filter(c=>!c.secret).map(c=>`<option>${c.name}</option>`).join('');$('#fc').dataset.t=f.t}
+      $('#h').innerHTML='<tr>'+COLS.map(c=>`<th data-c="${c.name}" title="${c.type}">${c.name}${f.o===c.name?' ▲':f.o==='-'+c.name?' ▼':''}</th>`).join('')+'</tr>';
+      $('#h').querySelectorAll('th').forEach(th=>th.onclick=()=>{f.o=f.o===th.dataset.c?'-'+th.dataset.c:th.dataset.c;save();P=1;rows()});
+      $('#b').innerHTML=j.rows.map((r,i)=>`<tr class="rw" data-i="${i}">${r.map(cell).map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')||none(COLS.length,'Không có dòng khớp.');
+      $('#b').onclick=e=>{const tr=e.target.closest('tr.rw');if(tr)detail(tr,Object.fromEntries(COLS.map((c,k)=>[c.name,ROWS[tr.dataset.i][k]])))};
+      $('#chips').innerHTML=f.f.map((x,i)=>`<span class="ch">${esc(x.split(':').join(' '))} <a data-i="${i}">✕</a></span>`).join('');
+      $('#chips').querySelectorAll('a').forEach(a=>a.onclick=()=>{f.f.splice(+a.dataset.i,1);save();P=1;rows()});
+      pager('pg',j.page,j.size,j.total,p=>{P=p;rows()});if(j.warnings.length)$('#pg').insertAdjacentHTML('beforeend','<span class="wa">'+esc(j.warnings.join('; '))+'</span>')})};
+  $('#tq').oninput=list;$('#fa').onclick=()=>{f.f.push(`${$('#fc').value}:${$('#fo').value}:${$('#fv').value}`);save();P=1;rows()};
+  let d;$('#q').oninput=e=>{f.q=e.target.value;save();clearTimeout(d);d=setTimeout(()=>{P=1;rows()},350)};
+  $('#z').onchange=e=>{f.z=e.target.value;save();P=1;rows()};
+  $('#csv').onclick=()=>{if(!ROWS.length)return;const q=v=>'"'+String(typeof v==='object'&&v?JSON.stringify(v):v??'').replace(/"/g,'""')+'"';const t=[COLS.map(c=>q(c.name)).join(',')].concat(ROWS.map(r=>r.map(q).join(','))).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+t],{type:'text/csv'}));a.download=f.t+'.csv';a.click()};
+  load('db/tables/',{},j=>{if(j){TB=j.tables;list()}});rows()};
 
-let charts = {};
-function initCharts(){
-  charts.lock      = makeLineChart('chartLock',      [lineDataset('LOCK','#c9924f','29'), lineDataset('UNLOCK','#dba14a','1f')]);
-  charts.nfc       = makeLineChart('chartNfc',       [lineDataset('Thành công','#5cb586','24'), lineDataset('Thất bại','#d5695c','24')]);
-  charts.audit     = makeLineChart('chartAudit',     [lineDataset('Tổng','#6f9fce','24'), lineDataset('Lỗi','#d5695c','24')]);
-  charts.login     = makeLineChart('chartLogin',     [lineDataset('Thành công','#5cb586','24'), lineDataset('Thất bại','#d5695c','24')]);
-  charts.rules     = makeLineChart('chartRules',     [lineDataset('Luật kích hoạt','#c9924f','29')]);
-  charts.heartbeat = makeLineChart('chartHeartbeat', [lineDataset('Báo cáo trạng thái','#6f9fce','24')]);
-  charts.tamper    = makeLineChart('chartTamper',    [lineDataset('Tamper','#d5695c','29')]);
-  charts.battery   = makeLineChart('chartBattery',   [lineDataset('Pin TB (%)','#5cb586','24')]);
-  charts.temp      = makeLineChart('chartTemp',      [lineDataset('Nhiệt độ TB (°C)','#dba14a','24')]);
+/* ---- hiệu ứng: chuyển tab mượt + đếm số ---- */
+let ANIM=true,ATM=null;
+function anim(){const p=$('#pane');p.classList.remove('in');void p.offsetWidth;p.classList.add('in');p.scrollTop=0;ANIM=true;clearTimeout(ATM);ATM=setTimeout(()=>p.classList.remove('in'),1100)}
+function countUp(){document.querySelectorAll('#pane .tl b').forEach(b=>{const t=b.textContent.trim();if(!/^\d+$/.test(t)||+t<2)return;const n=+t,t0=performance.now();(function f(now){const k=Math.min(1,(now-t0)/700),e=1-Math.pow(1-k,3);b.textContent=Math.round(n*e);if(k<1)requestAnimationFrame(f);else b.textContent=n})(t0)})}
+new MutationObserver(()=>{if(ANIM&&document.querySelector('#pane .tl b')){ANIM=false;if(!matchMedia('(prefers-reduced-motion:reduce)').matches)countUp()}}).observe($('#pane'),{childList:true,subtree:true});
 
-  charts.devStatus   = makeDoughnut('chartDevStatus');
-  charts.devLock     = makeBarChart('chartDevLock');
-  charts.cmdType     = makeBarChart('chartCmdType');
-  charts.cmdStatus   = makeBarChart('chartCmdStatus');
-  charts.statusLock  = makeBarChart('chartStatusLock');
-  charts.statusTamper= makeDoughnut('chartStatusTamper');
-  charts.nfcResult   = makeDoughnut('chartNfcResult');
-  charts.nfcEvent    = makeBarChart('chartNfcEvent');
-  charts.ruleAction  = makeBarChart('chartRuleAction');
-  charts.ruleName    = makeBarChart('chartRuleName');
-  charts.loginResult = makeDoughnut('chartLoginResult');
-  charts.loginTop    = makeBarChart('chartLoginTop');
-  charts.auditSeverity = makeDoughnut('chartAuditSeverity');
-  charts.auditResult   = makeDoughnut('chartAuditResult');
-}
-
-function setLine(chart, labels, ...series){
-  chart.data.labels = labels;
-  series.forEach((s,i) => chart.data.datasets[i].data = s || []);
-  chart.update('none');
-}
-function updateCharts(c){
-  setLine(charts.lock, c.labels, c.lock, c.unlock);
-  setLine(charts.nfc, c.labels, c.nfc_ok, c.nfc_fail);
-  setLine(charts.audit, c.labels, c.audit_total, c.audit_fail);
-  setLine(charts.login, c.labels, c.login_ok, c.login_fail);
-  setLine(charts.rules, c.labels, c.rule_fires);
-  setLine(charts.heartbeat, c.labels, c.status_reports);
-  setLine(charts.tamper, c.labels, c.tamper_events);
-  setLine(charts.battery, c.labels, c.avg_battery);
-  setLine(charts.temp, c.labels, c.avg_temp);
-}
-
-/* ---------- overview: stats + alerts ---------- */
-function renderStats(s){
-  const items = [
-    [s.total_devices, 'Thiết bị', ''], [s.devices_online, 'Đang online', 'ok'], [s.total_users, 'Người dùng', ''],
-    [s.total_commands, 'Lệnh khoá/mở', ''], [s.total_status_logs, 'Log trạng thái', ''],
-    [s.total_nfc_logs, 'Log NFC', ''], [s.total_rule_logs, 'Log luật tự động', ''],
-    [s.total_audit_logs, 'Audit log', ''],
-    [s.failed_login_24h, 'Đăng nhập lỗi (24h)', s.failed_login_24h > 0 ? 'danger' : ''],
-    [s.failed_nfc_24h, 'NFC lỗi (24h)', s.failed_nfc_24h > 0 ? 'danger' : ''],
-    [s.failed_audit_24h, 'Audit lỗi (24h)', s.failed_audit_24h > 0 ? 'danger' : ''],
-    [s.total_login_attempts, 'Lượt đăng nhập', ''],
-  ];
-  document.getElementById('statsRow').innerHTML = items.map(([n,l,cls]) =>
-    `<div class="stat"><div class="num ${cls}">${n}</div><div class="label">${l}</div></div>`).join('');
-}
-
-function renderAlerts(devices){
-  const abnormal = devices.filter(d => d.status !== 'online');
-  const tampered = devices.filter(d => d.tamper_detected);
-  const items = [
-    ...tampered.map(d => ({name:d.name, meta:`${d.code} · phát hiện tác động vật lý`, cls:''})),
-    ...abnormal.map(d => ({name:d.name, meta:`${d.code} · trạng thái: ${d.status}`, cls:'warnish'})),
-  ];
-  const box = document.getElementById('alertList');
-  if(!items.length){
-    box.innerHTML = '<div class="allclear">✓ Tất cả thiết bị đang online và ổn định.</div>';
-    return;
-  }
-  box.innerHTML = items.map(it => `
-    <div class="alertitem ${it.cls}">
-      <span class="name">${esc(it.name)}</span>
-      <span class="meta">${esc(it.meta)}</span>
-    </div>`).join('');
-}
-
-/* ---------- devices ---------- */
-function renderDevices(devices){
-  const q = (document.getElementById('searchDevices').value || '').trim().toLowerCase();
-  const filtered = q ? devices.filter(d =>
-    [d.name, d.code, d.owner, d.status].some(v => String(v ?? '').toLowerCase().includes(q))) : devices;
-
-  document.getElementById('devCount').textContent = q ? `${filtered.length}/${devices.length}` : devices.length;
-  document.getElementById('chipDevices').textContent = devices.length;
-
-  if(!filtered.length){
-    document.getElementById('deviceGrid').innerHTML = '<div style="color:var(--muted);font-size:13px;">Không có thiết bị phù hợp.</div>';
-    return;
-  }
-  document.getElementById('deviceGrid').innerHTML = filtered.map(d => `
-    <div class="devcard">
-      <div class="name">${esc(d.name)}</div>
-      <div class="code">${esc(d.code)} · chủ: ${esc(d.owner)}</div>
-      <div class="rows">
-        <div><span class="k">Trạng thái </span><span class="pill ${esc(d.status)}">${esc(d.status)}</span></div>
-        <div><span class="k">Khoá </span>${d.lock_state ? `<span class="pill ${esc(d.lock_state)}">${esc(d.lock_state)}</span>` : '<span class="v">—</span>'}</div>
-        <div><span class="k">Pin </span><span class="v">${d.battery_level}%</span> ${d.tamper_detected ? '<span class="tamper">⚠ TAMPER</span>' : ''}</div>
-        <div><span class="k">Nhiệt độ </span><span class="v">${d.temperature ?? '—'}°C</span> · <span class="k">Sóng </span><span class="v">${d.signal_strength ?? '—'}</span></div>
-        <div><span class="k">Last seen </span><span class="v">${fmtTime(d.last_seen_at)}</span></div>
-      </div>
-    </div>`).join('');
-
-  updateDistChart(charts.devStatus, countBy(devices, d=>d.status), ['online','offline','maintenance','provisioning','revoked']);
-  updateDistChart(charts.devLock, countBy(devices, d=>d.lock_state || 'unknown'), ['locked','unlocked','jammed','unknown']);
-}
-
-/* ---------- table configs ---------- */
-function renderCommands(rows){
-  document.getElementById('chipCommands').textContent = rows.length;
-  renderTable({
-    bodyId:'cmdBody', countId:'cmdCount', searchId:'searchCommands', rows, colspan:6,
-    keyFn:r => `${r.time}|${r.device}|${r.command_type}`,
-    columns:[
-      {get:r=>fmtTime(r.time)},
-      {get:r=>r.device},
-      {get:r=>r.command_type, html:r=>`<b>${esc(r.command_type)}</b>`},
-      {get:r=>r.status, html:r=>`<span class="pill ${esc(r.status)}">${esc(r.status)}</span>`},
-      {get:r=>r.issued_by},
-      {get:r=>fmtTime(r.acknowledged_at)},
-    ],
-  });
-  updateDistChart(charts.cmdType, countBy(rows, r=>r.command_type));
-  updateDistChart(charts.cmdStatus, countBy(rows, r=>r.status), ['pending','sent','acknowledged','failed','expired']);
-}
-
-function renderStatusLogs(rows){
-  document.getElementById('chipStatus').textContent = rows.length;
-  renderTable({
-    bodyId:'statusBody', countId:'statusCount', searchId:'searchStatus', rows, colspan:7,
-    keyFn:r => `${r.time}|${r.device}`,
-    columns:[
-      {get:r=>fmtTime(r.time)},
-      {get:r=>r.device},
-      {get:r=>r.lock_state, html:r=>`<span class="pill ${esc(r.lock_state)}">${esc(r.lock_state)}</span>`},
-      {get:r=>r.battery_level, html:r=>`${r.battery_level}%`},
-      {get:r=>r.temperature, html:r=>`${r.temperature ?? '—'}°C`},
-      {get:r=>r.signal_strength, html:r=>`${r.signal_strength ?? '—'}`},
-      {get:r=>r.tamper_detected?'có':'', html:r=>r.tamper_detected ? '<span class="tamper">⚠ CÓ</span>' : '—'},
-    ],
-  });
-  updateDistChart(charts.statusLock, countBy(rows, r=>r.lock_state || 'unknown'), ['locked','unlocked','jammed','unknown']);
-  updateDistChart(charts.statusTamper, countBy(rows, r=>r.tamper_detected ? 'Có' : 'Không'), ['Có','Không']);
-}
-
-function renderNfc(rows){
-  document.getElementById('chipNfc').textContent = rows.length;
-  renderTable({
-    bodyId:'nfcBody', countId:'nfcCount', searchId:'searchNfc', rows, colspan:7,
-    keyFn:r => `${r.time}|${r.device}|${r.user}`,
-    columns:[
-      {get:r=>fmtTime(r.time)},
-      {get:r=>r.device},
-      {get:r=>r.user},
-      {get:r=>r.reader},
-      {get:r=>r.event_type},
-      {get:r=>r.success?'ok':'fail', html:r=>r.success ? '<span class="ok-txt">OK</span>' : '<span class="fail-txt">FAIL</span>'},
-      {get:r=>r.ip},
-    ],
-  });
-  updateDistChart(charts.nfcResult, countBy(rows, r=>r.success ? 'Thành công' : 'Thất bại'), ['Thành công','Thất bại']);
-  updateDistChart(charts.nfcEvent, topN(countBy(rows, r=>r.event_type), 8));
-}
-
-function renderRules(rows){
-  document.getElementById('chipRules').textContent = rows.length;
-  renderTable({
-    bodyId:'ruleBody', countId:'ruleCount', searchId:'searchRules', rows, colspan:5,
-    keyFn:r => `${r.time}|${r.rule}|${r.device}`,
-    columns:[
-      {get:r=>fmtTime(r.time)},
-      {get:r=>r.rule},
-      {get:r=>r.device},
-      {get:r=>r.action_taken},
-      {get:r=>r.measured_value},
-    ],
-  });
-  updateDistChart(charts.ruleAction, countBy(rows, r=>r.action_taken));
-  updateDistChart(charts.ruleName, topN(countBy(rows, r=>r.rule), 6));
-}
-
-function renderLogins(rows){
-  document.getElementById('chipLogins').textContent = rows.length;
-  renderTable({
-    bodyId:'loginBody', countId:'loginCount', searchId:'searchLogins', rows, colspan:5,
-    keyFn:r => `${r.time}|${r.identifier}|${r.ip}`,
-    columns:[
-      {get:r=>fmtTime(r.time)},
-      {get:r=>r.identifier},
-      {get:r=>r.user},
-      {get:r=>r.success?'ok':'fail', html:r=>r.success ? '<span class="ok-txt">OK</span>' : '<span class="fail-txt">FAIL</span>'},
-      {get:r=>r.ip},
-    ],
-  });
-  updateDistChart(charts.loginResult, countBy(rows, r=>r.success ? 'Thành công' : 'Thất bại'), ['Thành công','Thất bại']);
-  updateDistChart(charts.loginTop, topN(countBy(rows.filter(r=>!r.success), r=>r.identifier), 6));
-}
-
-function renderAudit(rows){
-  document.getElementById('chipAudit').textContent = rows.length;
-  renderTable({
-    bodyId:'auditBody', countId:'auditCount', searchId:'searchAudit', rows, colspan:8,
-    keyFn:r => `${r.time}|${r.action}|${r.actor}`,
-    columns:[
-      {get:r=>fmtTime(r.time)},
-      {get:r=>r.action},
-      {get:r=>r.actor},
-      {get:r=>r.target},
-      {get:r=>r.device},
-      {get:r=>r.severity, html:r=>`<span class="pill ${esc(r.severity)}">${esc(r.severity)}</span>`},
-      {get:r=>r.success?'ok':'fail', html:r=>r.success ? '<span class="ok-txt">OK</span>' : '<span class="fail-txt">FAIL</span>'},
-      {get:r=>r.ip},
-    ],
-  });
-  updateDistChart(charts.auditSeverity, countBy(rows, r=>r.severity), ['info','warning','critical']);
-  updateDistChart(charts.auditResult, countBy(rows, r=>r.success ? 'Thành công' : 'Thất bại'), ['Thành công','Thất bại']);
-}
-
-/* ---------- poll loop ---------- */
-let lastData = null;
-async function poll(){
-  try{
-    const res = await fetch(API_URL, {cache:'no-store'});
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    lastData = data;
-
-    renderStats(data.stats);
-    renderAlerts(data.devices);
-    updateCharts(data.chart);
-    renderDevices(data.devices);
-    renderCommands(data.commands);
-    renderStatusLogs(data.status_logs);
-    renderNfc(data.nfc_logs);
-    renderRules(data.rule_logs);
-    renderLogins(data.login_attempts);
-    renderAudit(data.audit_logs);
-
-    document.getElementById('liveDot').classList.remove('bad');
-    document.getElementById('liveText').textContent =
-      'Cập nhật lúc ' + new Date(data.server_time).toLocaleTimeString('vi-VN', {hour12:false});
-  }catch(err){
-    document.getElementById('liveDot').classList.add('bad');
-    document.getElementById('liveText').textContent = 'Mất kết nối - đang thử lại…';
-    console.error('poll error', err);
-  }
-}
-
-/* re-filter tables instantly as the user types, without waiting for the next poll */
-['searchDevices','searchCommands','searchStatus','searchNfc','searchRules','searchLogins','searchAudit']
-  .forEach(id => {
-    document.getElementById(id).addEventListener('input', () => {
-      if(!lastData) return;
-      const map = {
-        searchDevices: () => renderDevices(lastData.devices),
-        searchCommands: () => renderCommands(lastData.commands),
-        searchStatus: () => renderStatusLogs(lastData.status_logs),
-        searchNfc: () => renderNfc(lastData.nfc_logs),
-        searchRules: () => renderRules(lastData.rule_logs),
-        searchLogins: () => renderLogins(lastData.login_attempts),
-        searchAudit: () => renderAudit(lastData.audit_logs),
-      };
-      map[id]();
-    });
-  });
-
-initCharts();
-poll();
-setInterval(poll, POLL_MS);
+go(ST.g,ST.s[ST.g]);
 </script>
 </body>
 </html>

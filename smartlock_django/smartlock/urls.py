@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from . import views,sysview
 
 app_name = 'smartlock'
 
@@ -36,5 +36,11 @@ urlpatterns = [
 
     # DEMO: log toàn hệ thống real-time, không cần đăng nhập. Chỉ bật khi settings.DEMO_LOGS_ENABLED; gỡ trước khi deploy thật.
     path('demo/system-logs/', views.public_system_logs, name='public-system-logs'),
-    path('demo/system-logs/data/', views.public_system_logs_api, name='public-system-logs-data'),
+    path('demo/system-logs/data/', views.public_system_logs_api, name='public-system-logs-data'),  # giữ nếu còn dùng
+    path('demo/system-logs/overview/', sysview.overview_api, name='sysview-overview'),
+    path('demo/system-logs/events/', sysview.events_api, name='sysview-events'),
+    path('demo/system-logs/db/tables/', sysview.db_tables_api, name='sysview-db-tables'),
+    path('demo/system-logs/api/', sysview.api_api, name='sysview-api'),
+    path('demo/system-logs/channels/', sysview.channels_api, name='sysview-channels'),
+    path('demo/system-logs/db/rows/', sysview.db_rows_api, name='sysview-db-rows'),
 ]
