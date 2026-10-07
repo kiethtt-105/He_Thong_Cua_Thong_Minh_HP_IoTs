@@ -87,7 +87,8 @@ def is_manager(user):
 
 
 # Thao tác NHẠY CẢM (cấp/thu hồi quyền quản trị, đổi secret thiết bị, gỡ chủ khoá, đổi cài đặt).
-# settings.ADMIN_FULL_POWER = True (mặc định): MỌI tài khoản quản trị có quyền cao nhất, làm được tất cả.
+# settings.ADMIN_FULL_POWER = True (mặc định): MỌI tài khoản quản trị có quyền cao nhất, làm được tất cả
+# (has_full_power đọc cờ này mỗi lần gọi).
 # Đặt ADMIN_FULL_POWER=False để quay lại chính sách cũ: các thao tác này chỉ dành cho Superuser.
 # Các lớp bảo vệ KHÔNG đổi: nhập lại mật khẩu + gõ xác nhận, audit strict, không tự thao tác lên chính mình,
 # không để hệ thống mất superuser cuối cùng.
@@ -99,11 +100,25 @@ def is_superuser_role(user):
     return bool(user and user.is_authenticated and user.is_active and user.is_superuser)
 
 
+def admin_full_power_enabled():
+    """settings.ADMIN_FULL_POWER (mặc định True). Đọc lúc gọi để đổi cấu hình/test có hiệu lực ngay."""
+    return bool(getattr(dj_settings, 'ADMIN_FULL_POWER', True))
+
+
 def has_full_power(user):
-    """Quyền cao nhất: Superuser, hoặc bất kỳ admin đang hoạt động khi ADMIN_FULL_POWER bật."""
+    """Quyền cao nhất: Superuser luôn có; admin đang hoạt động chỉ có khi ADMIN_FULL_POWER bật."""
     if is_superuser_role(user):
         return True
-    return is_manager(user)   # mọi admin đang hoạt động = quyền cao nhất
+    return admin_full_power_enabled() and is_manager(user)
+
+
+def admin_caps(user):
+    """Một nguồn duy nhất cho template: quyền của người đang đăng nhập + chính sách hiện hành."""
+    return {
+        'full_power': has_full_power(user),
+        'admin_full_power': admin_full_power_enabled(),   # chính sách cho cột "Admin" ở ma trận quyền
+        'role': 'superuser' if is_superuser_role(user) else ('admin' if is_manager(user) else 'user'),
+    }
 
 
 def action_denied_reason(actor, action):
@@ -295,6 +310,8 @@ def _render(request, page, context=None, **kwargs):
     """_render(request, 'user_list', ctx) -> manage_sys/users.html với page='user_list'."""
     ctx = dict(context or {})
     ctx['page'] = page
+    if page != 'login' and request.user.is_authenticated:
+        ctx.setdefault('caps', admin_caps(request.user))
     ctx.setdefault('page_heading', PAGE_TITLES.get(page, ''))
     return render(request, f'manage_sys/{PAGE_TEMPLATE[page]}.html', ctx, **kwargs)
 

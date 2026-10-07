@@ -1,4 +1,0 @@
-{# include with col href [q] tone icon num [of] label [active] [sm] #}
-<div class="{{ col }}"><a href="{{ href }}{{ q }}" class="card stat-card{% if sm %} sm{% endif %} h-100"><div class="card-body">
-    <div class="stat-icon bg-{{ tone }}-subtle text-{{ tone }}"><i class="fa-solid fa-{{ icon }}"></i></div>
-    <div><div class="stat-num">{{ num }}{% if of is not None %}<span class="fs-6 text-muted fw-normal"> / {{ of }}</span>{% endif %}</div><small class="text-muted">{{ label }}{% if active is not None %} ({{ active }} hoạt động){% endif %}</small></div></div></a></div>

@@ -21,7 +21,7 @@
         <option value="locked" {% if status == 'locked' %}selected{% endif %}>Đang bị khóa đăng nhập</option>
         <option value="admin" {% if status == 'admin' %}selected{% endif %}>Quản trị viên (Admin + Superuser)</option>
     </select>
-    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:users' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+    {% include 'manage_sys/_ui.html' with part="filter_btns" reset="manage_sys:users" %}
 </form>
 
 <div class="card">
@@ -111,31 +111,21 @@
                     <div class="dz-title mb-2"><i class="fa-solid fa-user-shield me-1"></i>Quyền quản trị</div>
                     {% if target_is_manager %}
                     <p class="small text-muted mb-2">Thu hồi sẽ gỡ <strong>toàn bộ</strong> cờ quản trị và cắt các phiên app di động của tài khoản này.</p>
-                    <form method="post" onsubmit="return confirm('Thu hồi TOÀN BỘ quyền quản trị của tài khoản này?')">
-                        {% csrf_token %}<input type="hidden" name="action" value="revoke_admin">
-                        <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Gõ lại email: {{ target.email }}" required autocomplete="off" autocapitalize="none">
-                        <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
-                        <button class="btn btn-danger btn-sm w-100"><i class="fa-solid fa-user-slash me-2"></i>Thu hồi quyền quản trị</button>
-                    </form>
+                    {% include 'manage_sys/_ui.html' with part="danger_form" action="revoke_admin" prompt="Gõ lại email" expect=target.email cap="none" msg="Thu hồi TOÀN BỘ quyền quản trị của tài khoản này?" btn="btn-danger" icon="user-slash" text="Thu hồi quyền quản trị" %}
                     {% else %}
                     {% if not target.is_active %}
                         <div class="alert alert-warning small py-2 mb-0">Cần kích hoạt tài khoản trước khi cấp quyền quản trị.</div>
                     {% elif owned_count %}
                         <div class="alert alert-warning small py-2 mb-0">Tài khoản đang là chủ của <strong>{{ owned_count }}</strong> khoá. Tài khoản quản trị không được làm chủ khoá, hãy gỡ chủ các khoá đó trước.</div>
                     {% else %}
-                    <p class="small text-muted mb-2">Admin xem và vận hành được hầu hết hệ thống, nhưng <strong>không</strong> được cấp/thu hồi quyền, xoay secret, gỡ chủ khoá hay đổi cài đặt.</p>
-                    <form method="post" onsubmit="return confirm('Cấp quyền quản trị cho tài khoản này?')">
-                        {% csrf_token %}<input type="hidden" name="action" value="grant_admin">
-                        <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Gõ lại email: {{ target.email }}" required autocomplete="off" autocapitalize="none">
-                        <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
-                        <button class="btn btn-primary btn-sm w-100"><i class="fa-solid fa-user-shield me-2"></i>Cấp quyền quản trị</button>
-                    </form>
+                    <p class="small text-muted mb-2">Cấp quyền sẽ đặt tài khoản này ở mức quản trị <strong>cao nhất</strong> (Admin + Staff + Superuser): làm được mọi thao tác, kể cả cấp/thu hồi quyền, xoay secret, gỡ chủ khoá và đổi cài đặt.</p>
+                    {% include 'manage_sys/_ui.html' with part="danger_form" action="grant_admin" prompt="Gõ lại email" expect=target.email cap="none" msg="Cấp quyền quản trị cho tài khoản này?" btn="btn-primary" icon="user-shield" text="Cấp quyền quản trị" %}
                     {% endif %}
                     {% endif %}
                     <div class="form-text mt-2">Nhập sai mật khẩu sẽ bị ghi log và tính vào bộ đếm khoá tài khoản của bạn.</div>
                 </div>
                 {% else %}
-                <div class="alert alert-secondary small mt-3 mb-0"><i class="fa-solid fa-lock me-1"></i>Cấp/thu hồi quyền quản trị cần quyền cao nhất (Superuser).</div>
+                <div class="alert alert-secondary small mt-3 mb-0"><i class="fa-solid fa-lock me-1"></i>Cấp/thu hồi quyền quản trị cần quyền quản trị cao nhất.</div>
                 {% endif %}
                 {% endif %}
             </div>

@@ -49,7 +49,7 @@
                     <small class="text-muted">{{ log.actor_user.email|default:log.username_attempt|default:"—" }}</small>
                 </div>
                 {% empty %}
-                <div class="list-group-item"><div class="empty-state py-4"><div class="ei"><i class="fa-solid fa-shield-check"></i></div><h6>Không có cảnh báo</h6></div></div>
+                <div class="list-group-item"><div class="empty-state py-4"><div class="ei"><i class="fa-solid fa-circle-check"></i></div><h6>Không có cảnh báo</h6></div></div>
                 {% endfor %}
             </div>
         </div>
@@ -74,7 +74,7 @@
         <option value="manage" {% if scope == 'manage' %}selected{% endif %}>Chỉ thao tác quản trị</option>
         <option value="mail" {% if scope == 'mail' %}selected{% endif %}>Chỉ email đã gửi (MAIL_*)</option>
     </select>
-    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:logs' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+    {% include 'manage_sys/_ui.html' with part="filter_btns" reset="manage_sys:logs" %}
 </form>
 
 <div class="card">
@@ -109,7 +109,7 @@
         <option value="ok" {% if status == 'ok' %}selected{% endif %}>Thành công</option>
         <option value="fail" {% if status == 'fail' %}selected{% endif %}>Thất bại</option>
     </select>
-    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:login-attempts' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+    {% include 'manage_sys/_ui.html' with part="filter_btns" reset="manage_sys:login-attempts" %}
 </form>
 
 <div class="card">
@@ -188,7 +188,7 @@
 </div>
 {% elif page == 'settings' %}
 {% if not can_edit %}
-<div class="alert alert-secondary small"><i class="fa-solid fa-lock me-1"></i>Cài đặt hệ thống là thao tác nhạy cảm: bạn chỉ được xem, chỉ Superuser mới được lưu thay đổi.</div>
+<div class="alert alert-secondary small"><i class="fa-solid fa-lock me-1"></i>Cài đặt hệ thống là thao tác nhạy cảm: bạn chỉ được xem, chỉ tài khoản quản trị cao nhất mới được lưu thay đổi.</div>
 {% endif %}
 <form method="post">
     {% csrf_token %}
@@ -213,7 +213,6 @@
                     <div class="mb-0">
                         <label class="form-label">Thời gian phiên đăng nhập của user (giờ)</label>
                         <input type="number" min="1" max="720" name="session_timeout_hours" class="form-control" value="{{ st.session_timeout_hours }}" required>
-                        <div class="form-text"></div>
                     </div>
                 </div>
             </div>
@@ -239,6 +238,21 @@
         {% if can_edit %}<button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>{% endif %}
     </div>
 </form>
+
+<div class="card mt-4">
+    <div class="card-header"><i class="fa-solid fa-user-shield me-2 text-muted"></i>Quyền quản trị {% if caps.admin_full_power %}<span class="badge text-bg-success ms-1">Admin = quyền cao nhất</span>{% else %}<span class="badge text-bg-secondary ms-1">Thao tác nhạy cảm: chỉ Superuser</span>{% endif %}</div>
+    <div class="table-responsive"><table class="table mb-0 align-middle">
+        <thead><tr><th>Thao tác</th><th class="text-center">Admin</th><th class="text-center">Superuser</th></tr></thead>
+        <tbody>
+            <tr><td>Xem toàn hệ thống, nhật ký, lượt đăng nhập</td><td class="text-center"><span class="text-success">✔</span></td><td class="text-center"><span class="text-success">✔</span></td></tr>
+            <tr><td>Vận hành: kích hoạt/vô hiệu, mở khóa, gửi link đặt lại mật khẩu, PING, bảo trì, thông báo, tạo thiết bị</td><td class="text-center"><span class="text-success">✔</span></td><td class="text-center"><span class="text-success">✔</span></td></tr>
+            <tr><td>Cấp / thu hồi quyền quản trị</td><td class="text-center">{% if caps.admin_full_power %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td><td class="text-center"><span class="text-success">✔</span></td></tr>
+            <tr><td>Gỡ chủ sở hữu khoá</td><td class="text-center">{% if caps.admin_full_power %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td><td class="text-center"><span class="text-success">✔</span></td></tr>
+            <tr><td>Xoay secret thiết bị</td><td class="text-center">{% if caps.admin_full_power %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td><td class="text-center"><span class="text-success">✔</span></td></tr>
+            <tr><td>Đổi cài đặt hệ thống</td><td class="text-center">{% if caps.admin_full_power %}<span class="text-success">✔</span>{% else %}<span class="text-danger">✘</span>{% endif %}</td><td class="text-center"><span class="text-success">✔</span></td></tr>
+        </tbody></table></div>
+    <div class="card-footer small text-muted">Lớp bảo vệ luôn bật cho mọi quản trị viên: nhập lại mật khẩu + gõ xác nhận ở thao tác nguy hiểm (sai mật khẩu bị ghi log và tính vào bộ đếm khóa); không tự thao tác lên chính mình; không thu hồi / vô hiệu hóa Superuser cuối cùng; thao tác nhạy cảm bị huỷ nếu không ghi được nhật ký; tài khoản quản trị không được làm chủ khoá.</div>
+</div>
 {% else %}{{ block.super }}{% endif %}
 {% endblock %}
 {% block page_actions %}

@@ -4,7 +4,11 @@
      part="empty_state" cols icon title [hint]
      part="pager"       (dùng page_obj, qs của trang)
      part="stat"        col href [q] tone icon num [of] label [active] [sm]
-   (Dấu ✔/✘ và nút Lọc/Xóa lọc được viết thẳng vào trang, không cần include.) {% endcomment %}
+     part="filter_btns" reset="manage_sys:<url-name>"          (nút Lọc + Xóa lọc của mọi bảng)
+     part="danger_form" action prompt expect msg btn icon text [label] [cap]
+                        (form nguy hiểm: gõ lại mã/email + nhập lại mật khẩu admin; dùng cho cấp/thu hồi
+                         quyền admin, gỡ chủ khoá, xoay secret — view phải kiểm tra lại cả 2 trường)
+   (Dấu ✔/✘ được viết thẳng vào trang, không cần include.) {% endcomment %}
 {% if part == 'empty_row' %}<tr><td colspan="{{ cols }}" class="text-center text-muted py-3">{{ text }}</td></tr>
 {% elif part == 'empty_state' %}<tr><td colspan="{{ cols }}"><div class="empty-state"><div class="ei"><i class="fa-solid fa-{{ icon }}"></i></div><h6>{{ title }}</h6>{% if hint %}<div class="small">{{ hint }}</div>{% endif %}</div></td></tr>
 {% elif part == 'pager' %}{% if page_obj.paginator.num_pages > 1 %}
@@ -25,4 +29,10 @@
 {% elif part == 'stat' %}<div class="{{ col }}"><a href="{{ href }}{{ q }}" class="card stat-card{% if sm %} sm{% endif %} h-100"><div class="card-body">
     <div class="stat-icon bg-{{ tone }}-subtle text-{{ tone }}"><i class="fa-solid fa-{{ icon }}"></i></div>
     <div><div class="stat-num">{{ num }}{% if of is not None %}<span class="fs-6 text-muted fw-normal"> / {{ of }}</span>{% endif %}</div><small class="text-muted">{{ label }}{% if active is not None %} ({{ active }} hoạt động){% endif %}</small></div></div></a></div>
+{% elif part == 'filter_btns' %}<div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url reset %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+{% elif part == 'danger_form' %}<form method="post" onsubmit="return confirm('{{ msg|escapejs }}')">{% csrf_token %}<input type="hidden" name="action" value="{{ action }}">
+    {% if label %}<label class="form-label small mb-1">{{ label }}</label>{% endif %}
+    <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="{{ prompt }}: {{ expect }}" required autocomplete="off"{% if cap %} autocapitalize="{{ cap }}"{% endif %}>
+    <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
+    <button class="btn {{ btn }} btn-sm w-100"><i class="fa-solid fa-{{ icon }} me-2"></i>{{ text }}</button></form>
 {% endif %}

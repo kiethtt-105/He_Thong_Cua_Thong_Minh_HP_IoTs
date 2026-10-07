@@ -26,7 +26,7 @@
         <option value="physical" {% if mode == 'physical' %}selected{% endif %}>Thiết bị thật</option>
         <option value="simulated" {% if mode == 'simulated' %}selected{% endif %}>Mô phỏng</option>
     </select>
-    <div class="d-flex gap-2"><button class="btn btn-primary"><i class="fa-solid fa-magnifying-glass me-1"></i> Lọc</button><a href="{% url 'manage_sys:devices' %}" class="btn btn-outline-secondary">Xóa lọc</a></div>
+    {% include 'manage_sys/_ui.html' with part="filter_btns" reset="manage_sys:devices" %}
 </form>
 
 <div class="card">
@@ -92,6 +92,7 @@
     </div>
 </div>
 {% elif page == 'device_created' %}
+{% if rotated %}<div class="alert alert-danger"><i class="fa-solid fa-key me-2"></i>Đã <strong>xoay secret</strong>: secret cũ mất hiệu lực, thiết bị phải nạp secret mới bên dưới.</div>{% endif %}
 <div class="alert alert-warning">
     <i class="fa-solid fa-triangle-exclamation me-2"></i>
     <strong>Secret chỉ hiển thị một lần</strong> (tải lại trang sẽ không còn). Hãy chép vào firmware / file cấu hình của thiết bị ngay. Nếu chưa kịp chép, vào trang chi tiết dùng <em>Xoay secret</em> để tạo secret mới.
@@ -106,7 +107,7 @@
             <dd><span class="mono text-break" id="sec">{{ secret }}</span>
                 <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
                     onclick="navigator.clipboard.writeText(document.getElementById('sec').textContent);this.textContent='Đã chép'">Chép</button></dd>
-            <dt>Chủ sở hữu</dt><dd>{{ device.owner.email|default:"— (chờ cấu hình)" }}</dd>
+            <dt>Chủ sở hữu</dt><dd>{{ device.owner.email|default:"— (chờ cấu hình)" }}{% if pending_owner and not device.owner %} <small class="text-muted">(dự kiến: {{ pending_owner.email }}, gán ở <a href="{{ claim_url }}">trang chi tiết</a> sau khi khoá kết nối)</small>{% endif %}</dd>
         </dl>
         <div class="small text-muted">Thiết bị kết nối MQTT broker với username = <span class="mono">{{ device.device_code }}</span>, password = secret ở trên; publish lên <span class="mono">smartlock/{{ device.device_code }}/status|ack|event</span> và subscribe <span class="mono">smartlock/{{ device.device_code }}/cmd</span>.</div>
     </div>
@@ -180,22 +181,14 @@
             <div class="card-body d-grid gap-3">
                 <div class="small text-muted"><i class="fa-solid fa-triangle-exclamation me-1 text-danger"></i>Cần gõ đúng mã thiết bị và nhập lại mật khẩu. Sai mật khẩu sẽ bị ghi log và tính vào bộ đếm khoá tài khoản.</div>
                 {% if device.owner %}
-                <form method="post" onsubmit="return confirm('Gỡ chủ và vô hiệu hóa MỌI quyền truy cập, thẻ, PIN, khuôn mặt của khoá này?')">{% csrf_token %}<input type="hidden" name="action" value="remove_owner">
-                    <label class="form-label small mb-1">Gỡ chủ sở hữu</label>
-                    <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Nhập mã: {{ device.device_code }}" required autocomplete="off">
-                    <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
-                    <button class="btn btn-outline-danger btn-sm w-100">Gỡ chủ</button></form>
+                {% include 'manage_sys/_ui.html' with part="danger_form" action="remove_owner" label="Gỡ chủ sở hữu" prompt="Nhập mã" expect=device.device_code msg="Gỡ chủ và vô hiệu hóa MỌI quyền truy cập, thẻ, PIN, khuôn mặt của khoá này?" btn="btn-outline-danger" icon="user-slash" text="Gỡ chủ" %}
                 {% endif %}
-                <form method="post" onsubmit="return confirm('Xoay secret? Thiết bị phải nạp lại secret mới, secret cũ mất hiệu lực.')">{% csrf_token %}<input type="hidden" name="action" value="rotate_secret">
-                    <label class="form-label small mb-1">Xoay secret kết nối</label>
-                    <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="Nhập mã: {{ device.device_code }}" required autocomplete="off">
-                    <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
-                    <button class="btn btn-outline-danger btn-sm w-100">Xoay secret</button></form>
+                {% include 'manage_sys/_ui.html' with part="danger_form" action="rotate_secret" label="Xoay secret kết nối" prompt="Nhập mã" expect=device.device_code msg="Xoay secret? Thiết bị phải nạp lại secret mới, secret cũ mất hiệu lực." btn="btn-outline-danger" icon="key" text="Xoay secret" %}
             </div>
         </div>
 
         {% else %}
-        <div class="alert alert-secondary small mb-4"><i class="fa-solid fa-lock me-1"></i>Gỡ chủ và xoay secret là thao tác nhạy cảm, chỉ Superuser được thực hiện.</div>
+        <div class="alert alert-secondary small mb-4"><i class="fa-solid fa-lock me-1"></i>Gỡ chủ và xoay secret là thao tác nhạy cảm, cần quyền quản trị cao nhất.</div>
         {% endif %}
 
         <div class="card">
