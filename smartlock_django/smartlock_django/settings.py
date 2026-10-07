@@ -128,7 +128,8 @@ INSTALLED_APPS = [
     'smartlock',
     'allauth',
     'allauth.account',
-    'manage_sys'
+    'manage_sys',
+    'corsheaders',
 ]
 if DEBUG:
     INSTALLED_APPS.append('django_extensions')   # chỉ dùng khi dev (shell_plus...)
@@ -136,6 +137,7 @@ if DEBUG:
 
 # ==================== MIDDLEWARE CONFIGURATION ====================
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'manage_sys.middleware.ManageSysSessionCookieMiddleware',   
@@ -381,6 +383,16 @@ if not DEBUG and SECURE_COOKIES:
     SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)   # Vercel đã tự redirect; bật nếu tự host
     SECURE_REDIRECT_EXEMPT = [r"api/mqtt/", r"api/webhooks/"]   # broker gọi webhook server-to-server, không bị 301
     SECURE_REFERRER_POLICY = "same-origin"
+
+
+# ==================== CORS (Flutter web / web khác origin gọi /api/app/) ====================
+# App Android/iOS không bị CORS. Chỉ trình duyệt mới cần. API dùng Bearer nên KHÔNG bật CORS_ALLOW_CREDENTIALS.
+# Production: CORS_ALLOWED_ORIGINS=https://ten-mien-web.com  (nhiều giá trị cách nhau bằng dấu phẩy)
+CORS_URLS_REGEX = r"^/api/app/.*$"                     # chỉ mở CORS cho API dùng chung, không mở manage-sys/mqtt
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
+# Dev: Flutter web chạy port ngẫu nhiên (localhost:53844...) -> cho phép mọi port localhost.
+if env_bool("CORS_ALLOW_LOCALHOST", DEBUG):
+    CORS_ALLOWED_ORIGIN_REGEXES = [r"^http://localhost:\d+$", r"^http://127\.0\.0\.1:\d+$"]
 
 
 # ==================== API (api/app dùng chung APP + WEB) ====================
