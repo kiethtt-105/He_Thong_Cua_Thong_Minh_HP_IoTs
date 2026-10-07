@@ -318,11 +318,7 @@ def revoke_all_sessions(user, exclude=None) -> int:
     qs = MobileSession.objects.filter(user=user, revoked_at__isnull=True)
     if exclude is not None:
         qs = qs.exclude(pk=exclude.pk)
-    n = 0
-    for m in qs:
-        m.revoke()
-        n += 1
-    return n
+    return qs.update(revoked_at=timezone.now(), fcm_token='')      # 1 câu UPDATE thay vì lặp từng phiên
 
 
 def rotate_refresh(request, refresh_token: str, fcm_token: str = ''):

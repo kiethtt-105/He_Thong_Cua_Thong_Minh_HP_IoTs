@@ -1,4 +1,12 @@
-"""Cài đặt 2FA (TOTP, email, passkey) - /api/app/me/two-factor/..."""
+"""Quản lý 2FA của tôi - /api/app/me/two-factor/...  (thay cho các view tf-* cũ trong views.py)
+
+Dùng chung WEB (session cookie + X-CSRFToken) và APP (Bearer). Riêng passkey chỉ có ý nghĩa trên web
+(cần RP/origin của trình duyệt). 2FA tự bật/tắt theo số phương thức đang có (models.sync_two_fa_flag):
+thêm phương thức đầu tiên -> tự bật; gỡ hết phương thức (có nhập lại mật khẩu) -> tự tắt. Không còn nút bật/tắt thủ công.
+
+Trạng thái thiết lập TOTP KHÔNG lưu trong session: `setup_token` là token đã ký (django.core.signing), nên app và
+web dùng chung được và không phụ thuộc cookie.
+"""
 import base64
 import io
 import json
@@ -8,25 +16,18 @@ import pyotp
 import qrcode
 import qrcode.image.svg
 from django.core import signing
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from webauthn import generate_registration_options, options_to_json, verify_registration_response
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.structs import (
-    AuthenticatorSelectionCriteria,
-    PublicKeyCredentialDescriptor,
-    ResidentKeyRequirement,
+    AuthenticatorSelectionCriteria, PublicKeyCredentialDescriptor, ResidentKeyRequirement,
     UserVerificationRequirement,
 )
 
 from smartlock import services, twofa
 from smartlock.api.common import api, ApiError, iso, ok, read_json, s
-from smartlock.models import AuditLog, Fido2Credential, sync_two_fa_flag, TwoFactorConfig
-
-
-# ======================================================================
-# two_factor.py - Quản lý 2FA của tôi - /api/app/me/two-factor/...  (thay cho các view tf-* cũ trong views.py)
-# ======================================================================
+from smartlock.models import AuditLog, Fido2Credential, TwoFactorConfig, sync_two_fa_flag
 
 _SETUP_SALT = 'smartlock.api.totp-setup.v1'
 SETUP_TTL_SECONDS = 10 * 60
@@ -81,19 +82,27 @@ def _after_added(request, user, method) -> dict:
 def _after_removed(request, user, method) -> dict:
     cfg = twofa.get_cfg(user)
     left = cfg.available_methods()
+    was = user.two_fa_enabled
     if cfg.preferred_method not in left:
         cfg.preferred_method = left[0] if left else ''
+    if not left:
+        cfg.enabled_at = None
     cfg.save()
     now = sync_two_fa_flag(user)
     services.audit(request, 'TWO_FACTOR_METHOD_REMOVED', target_user=user, severity='warning',
                    metadata={'method': method})
     services.notify(user, 'Đã gỡ phương thức 2FA', f'Phương thức {method.upper()} vừa được gỡ khỏi tài khoản.',
                     severity='warning', type_='SECURITY')
-    return {'two_fa_enabled': now, 'message': 'Đã gỡ phương thức xác thực.'}
-
-
-def _is_last_method(user, cfg, method) -> bool:
-    return user.two_fa_enabled and cfg.available_methods() == [method]
+    auto_off = was and not now
+    if auto_off:                                      # gỡ phương thức cuối -> 2FA tự tắt
+        services.audit(request, 'TWO_FACTOR_DISABLED', target_user=user, severity='warning',
+                       metadata={'method': method, 'auto': True})
+        services.notify(user, 'Đã tắt xác thực 2 lớp',
+                        'Tài khoản không còn phương thức 2FA nào nên xác thực 2 lớp đã được tắt.',
+                        severity='warning', type_='SECURITY')
+    return {'two_fa_enabled': now, 'auto_disabled': auto_off,
+            'message': ('Đã gỡ phương thức xác thực. Xác thực 2 lớp đã được tắt vì không còn phương thức nào.'
+                        if auto_off else 'Đã gỡ phương thức xác thực.')}
 
 
 def _web_only(request):
@@ -223,10 +232,14 @@ def passkey_register(request):
     if len(cred_id) > 512 or Fido2Credential.objects.filter(credential_id=cred_id).exists():
         raise ApiError('PASSKEY_EXISTS', 'Passkey này đã được đăng ký.', 409)
     transports = data.get('transports') if isinstance(data.get('transports'), list) else []
+    try:
+        with transaction.atomic():
+            Fido2Credential.objects.create(
+                user=user, credential_id=cred_id, public_key=v.credential_public_key, sign_count=v.sign_count,
+                transports=[str(t)[:20] for t in transports][:8], name=s(data, 'name', 100) or 'Passkey')
+    except IntegrityError:
+        raise ApiError('PASSKEY_EXISTS', 'Passkey này đã được đăng ký.', 409)
     with transaction.atomic():
-        Fido2Credential.objects.create(
-            user=user, credential_id=cred_id, public_key=v.credential_public_key, sign_count=v.sign_count,
-            transports=[str(t)[:20] for t in transports][:8], name=s(data, 'name', 100) or 'Passkey')
         cfg = twofa.get_cfg(user)
         if not cfg.preferred_method:
             cfg.preferred_method = TwoFactorConfig.METHOD_FIDO2
@@ -241,8 +254,6 @@ def passkey_remove(request, cred_id):
     cred = Fido2Credential.objects.filter(pk=services.parse_uuid(cred_id), user=user).first()
     if not cred:
         raise ApiError('NOT_FOUND', 'Không tìm thấy passkey.', 404)
-    if user.two_fa_enabled and len(cfg.available_methods()) == 1 and user.fido2_credentials.count() == 1:
-        raise ApiError('LAST_METHOD', 'Đây là phương thức 2FA cuối cùng. Hãy thêm phương thức khác trước khi gỡ.', 409)
     _require_password(request, data)
     cred.delete()
     return ok(_after_removed(request, user, 'fido2'))
@@ -258,8 +269,6 @@ def method_remove(request, method):
     active = cfg.totp_confirmed if method == 'totp' else cfg.email_otp_enabled
     if not active:
         raise ApiError('NOT_SET', 'Phương thức này chưa được thiết lập.', 409)
-    if _is_last_method(user, cfg, method):
-        raise ApiError('LAST_METHOD', 'Đây là phương thức 2FA cuối cùng. Hãy thêm phương thức khác trước khi gỡ.', 409)
     _require_password(request, data)
     if method == 'totp':
         cfg.totp_secret_encrypted = ''

@@ -79,6 +79,8 @@ def change_password(request):
     if not user.check_password(old):
         services.audit(request, 'PASSWORD_CHANGE_FAILED', success=False, severity='warning', target_user=user)
         raise ApiError('WRONG_PASSWORD', 'Mật khẩu hiện tại không đúng.', 400, field='old_password')
+    if old == new:
+        raise ApiError('SAME_PASSWORD', 'Mật khẩu mới phải khác mật khẩu hiện tại.', 400, field='new_password')
     try:
         validate_password(new, user)
     except ValidationError as e:

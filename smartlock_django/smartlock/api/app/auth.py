@@ -4,6 +4,7 @@ import math
 from datetime import timedelta
 
 from django.contrib.auth import authenticate, logout as django_logout
+from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
@@ -42,6 +43,17 @@ from smartlock.models import AuditLog, Fido2Credential, OneTimeCode, User
 # views.py - Đăng ký, đăng nhập, 2FA, làm mới token, đăng xuất, quên mật khẩu, xác thực email.
 # ======================================================================
 
+_DUMMY_HASH = None
+
+
+def _burn_password_check(password):
+    """Chống dò tài khoản qua thời gian phản hồi: user không tồn tại vẫn tốn 1 lần băm mật khẩu."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = make_password('smartlock-timing-dummy')
+    check_password(password, _DUMMY_HASH)
+
+
 def _2fa_methods(user, web=False) -> list:
     """App: chỉ totp + email (passkey cần RP/origin của trình duyệt). Web: thêm passkey (fido2)."""
     allowed = ('totp', 'email', 'fido2') if web else ('totp', 'email')
@@ -69,6 +81,7 @@ def _finish_login(request, user, info, method=None):
         return ok({'user': user_json(user), 'client': 'web', 'csrf_token': get_token(request),
                    'session_expires_in': services.user_session_seconds()})
     session, tokens = create_session(request, user, info)
+    User.objects.filter(pk=user.pk).update(last_login=timezone.now())   # web đã tự cập nhật qua django_login
     services.notify_login(request, user)          # PHẢI trước audit LOGIN (so với lịch sử IP cũ)
     services.audit(request, 'LOGIN', actor=user,
                    metadata={'channel': 'mobile', 'platform': info.get('platform'), 'two_factor': method})
@@ -102,6 +115,12 @@ def register(request):
                            success=False, severity='warning', username_attempt=email[:150])
             raise ApiError('EMAIL_EXISTS', 'Email này đã có tài khoản. Hãy đăng nhập hoặc dùng "Quên mật khẩu".',
                            409, field='email')
+        # Tài khoản chưa xác thực: người đăng ký MỚI NHẤT được quyền đặt mật khẩu/username (chống chiếm trước email).
+        existing.set_password(password)
+        existing.username = username.strip().lower()
+        if full_name:
+            existing.full_name = full_name
+        existing.save(update_fields=['password', 'username', 'full_name', 'updated_at'])
         recent = OneTimeCode.objects.filter(user=existing, purpose='EMAIL_VERIFY',
                                             created_at__gt=timezone.now() - timedelta(seconds=60)).exists()
         if not recent:
@@ -187,7 +206,11 @@ def login(request):
         raise ApiError('ACCOUNT_LOCKED', f'Tài khoản đang bị khóa tạm thời. Thử lại sau {remaining} phút.',
                        423, retry_after_minutes=remaining)
 
-    auth_user = authenticate(request, username=user.email, password=password) if user else None
+    if user:
+        auth_user = authenticate(request, username=user.email, password=password)
+    else:
+        _burn_password_check(password)
+        auth_user = None
 
     if auth_user and services.is_admin(auth_user):       # quản trị chỉ đăng nhập ở cổng riêng
         services.audit(request, 'LOGIN_ADMIN_REJECTED', actor=None, target_user=user, success=False,
@@ -212,6 +235,10 @@ def login(request):
         return _finish_login(request, auth_user, info)
 
     if user and not user.is_active and user.check_password(password):
+        if user.email_verified:                       # đã xác thực mà is_active=False => bị quản trị vô hiệu hóa
+            services.audit(request, 'LOGIN_DISABLED_ACCOUNT', actor=None, target_user=user, success=False,
+                           severity='warning', username_attempt=identifier[:150])
+            raise ApiError('ACCOUNT_DISABLED', 'Tài khoản đã bị vô hiệu hóa. Vui lòng liên hệ quản trị viên.', 403)
         raise ApiError('EMAIL_NOT_VERIFIED', 'Tài khoản chưa được kích hoạt. Vui lòng xác thực email.', 403)
     if user:
         locked = services.register_failure(user, ip)
@@ -235,6 +262,10 @@ def _challenge_user(data):
 @api('POST', auth=False)
 def two_factor_email_send(request):
     user, info = _challenge_user(read_json(request))
+    minutes = twofa.lock_minutes(user)
+    if minutes:
+        raise ApiError('ACCOUNT_LOCKED', f'Tài khoản đang bị khóa tạm thời. Thử lại sau {minutes} phút.', 423,
+                       retry_after_minutes=minutes)
     if 'email' not in _2fa_methods(user, _is_web(info)):
         raise ApiError('BAD_METHOD', 'Tài khoản chưa bật Email OTP.', 400)
     result = twofa.send_email_code(user, 'VERIFY')
@@ -395,9 +426,15 @@ def verify_email(request):
         services.audit(request, 'EMAIL_VERIFY_FAILED', actor=None, success=False, severity='warning')
         raise ApiError('TOKEN_INVALID', 'Link xác thực không hợp lệ hoặc đã hết hạn.', 400)
     user = vt.user
-    user.email_verified = True
-    user.is_active = True
-    user.save()
+    if user.email_verified:
+        # Đã xác thực từ trước: KHÔNG bật lại is_active (tránh mở khóa tài khoản đã bị quản trị vô hiệu hóa).
+        if user.is_active:
+            return ok({'verified': True, 'message': 'Tài khoản đã được kích hoạt trước đó.'})
+        services.audit(request, 'EMAIL_VERIFY_FAILED', actor=None, target_user=user, success=False,
+                       severity='warning', metadata={'reason': 'account_disabled'})
+        raise ApiError('TOKEN_INVALID', 'Link xác thực không hợp lệ hoặc đã hết hạn.', 400)
+    User.objects.filter(pk=user.pk).update(email_verified=True, is_active=True, updated_at=now)
+    user.email_verified = user.is_active = True
     services.audit(request, 'EMAIL_VERIFIED', actor=user, target_user=user)
     services.notify(user, 'Chào mừng đến Smart Lock', 'Tài khoản của bạn đã được kích hoạt.', type_='WELCOME')
     return ok({'verified': True, 'message': 'Tài khoản đã được kích hoạt thành công!'})

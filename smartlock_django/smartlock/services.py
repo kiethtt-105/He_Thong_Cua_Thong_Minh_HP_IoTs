@@ -43,6 +43,8 @@ logger = logging.getLogger('smartlock.services')
 # ============================================================================
 # 1. HELPER CHUNG
 # ============================================================================
+LOGIN_FAIL_WINDOW = timedelta(minutes=30)     # quá khoảng này kể từ lần sai gần nhất -> reset bộ đếm sai
+LOGIN_STAGE_RESET = timedelta(hours=24)       # quá khoảng này -> reset bậc khóa (5/10/30 phút)
 MAX_FAILED_ATTEMPTS = 5          # đăng nhập sai bao nhiêu lần thì khoá tài khoản tạm
 
 
@@ -500,6 +502,13 @@ def register_failure(user, ip):
     locked_minutes = None
     with transaction.atomic():
         lock = User.objects.select_for_update().get(pk=user.pk)
+        if lock.login_locked_until and lock.login_locked_until > now:
+            return None                       # đang khóa: request song song không được cộng dồn / leo thang
+        last = lock.login_last_failed_at
+        if last and now - last > LOGIN_FAIL_WINDOW:
+            lock.login_failed_attempts = 0    # yên lặng đủ lâu -> đếm lại từ đầu
+        if last and now - last > LOGIN_STAGE_RESET:
+            lock.login_lock_stage = 0         # lâu không sai -> hạ bậc khóa về mức đầu
         lock.login_failed_attempts += 1
         lock.login_last_failed_at = now
         lock.login_last_failed_ip = ip
