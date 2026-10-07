@@ -29,13 +29,16 @@
     {% include 'manage_sys/_ui.html' with part="filter_btns" reset="manage_sys:devices" %}
 </form>
 
+<form method="post" id="bulkForm">{% csrf_token %}<input type="hidden" name="action" value="ping_selected">
+<div class="d-flex justify-content-end mb-2"><button class="btn btn-outline-primary btn-sm"><i class="fa-solid fa-satellite-dish me-1"></i>PING thiết bị đã chọn (tối đa {{ max_bulk_ping }})</button></div>
 <div class="card">
     <div class="table-responsive">
         <table class="table table-hover mb-0">
-            <thead><tr><th>Mã thiết bị</th><th>Tên</th><th>Loại</th><th>Chủ sở hữu</th><th>Trạng thái</th><th>Pin</th><th>Thấy lần cuối</th><th class="text-end"></th></tr></thead>
+            <thead><tr><th style="width:1%"><input type="checkbox" class="form-check-input" onclick="document.querySelectorAll('#bulkForm .pick').forEach(function(c){c.checked=this.checked}.bind(this))" aria-label="Chọn tất cả"></th><th>Mã thiết bị</th><th>Tên</th><th>Loại</th><th>Chủ sở hữu</th><th>Trạng thái</th><th>Pin</th><th>Thấy lần cuối</th><th class="text-end"></th></tr></thead>
             <tbody>
             {% for d in page_obj %}
                 <tr>
+                    <td><input type="checkbox" class="form-check-input pick" name="device_ids" value="{{ d.id }}"></td>
                     <td class="mono fw-bold">{{ d.device_code }}</td>
                     <td>{{ d.name }}</td>
                     <td>{{ d.device_mode|vi }}</td>
@@ -46,12 +49,13 @@
                     <td class="text-end"><a href="{% url 'manage_sys:device-detail' d.id %}" class="btn btn-sm btn-outline-primary">Chi tiết</a></td>
                 </tr>
             {% empty %}
-                {% include 'manage_sys/_ui.html' with part="empty_state" cols=8 icon="plug" title="Không có thiết bị nào" hint="Thử đổi từ khóa hoặc bỏ bộ lọc." %}
+                {% include 'manage_sys/_ui.html' with part="empty_state" cols=9 icon="plug" title="Không có thiết bị nào" hint="Thử đổi từ khóa hoặc bỏ bộ lọc." %}
             {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
+</form>
 {% include 'manage_sys/_ui.html' with part="pager" %}
 {% elif page == 'device_create' %}
 <div class="row">
@@ -62,8 +66,8 @@
                 <form method="post">
                     {% csrf_token %}
                     <div class="mb-3">
-                        <label class="form-label">Mã thiết bị <span class="text-danger">*</span></label>
-                        <input type="text" name="device_code" class="form-control mono" value="{{ form.device_code }}" maxlength="50" required placeholder="LOCK-0001" autocapitalize="characters">
+                        <label class="form-label">Mã thiết bị (tùy chọn)</label>
+                        <input type="text" name="device_code" class="form-control mono" value="{{ form.device_code }}" maxlength="50" placeholder="Để trống để tự sinh (DEV-XXXXXXXX)" autocapitalize="characters">
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Tên thiết bị <span class="text-danger">*</span></label>
@@ -80,11 +84,11 @@
                         <label class="form-label">MAC (tùy chọn)</label>
                         <input type="text" name="mac_address" class="form-control mono" value="{{ form.mac_address }}" placeholder="AA:BB:CC:DD:EE:FF" maxlength="17">
                     </div>
-                    <div class="mb-4">
-                        <label class="form-label">Chủ sở hữu (email hoặc username)</label>
-                        <input type="text" name="owner_email" class="form-control" value="{{ form.owner_email }}" autocapitalize="none">
-                        <div class="form-text">Chỉ để ghi nhớ chủ dự kiến. Thiết bị luôn được tạo ở trạng thái "chờ cấu hình"; việc gán chủ làm ở trang chi tiết và chỉ được khi khoá đã kết nối thật.</div>
+                    <div class="mb-3">
+                        <label class="form-label">Vị trí (tùy chọn)</label>
+                        <input type="text" name="location" class="form-control" value="{{ form.location }}" maxlength="255">
                     </div>
+                    <div class="form-text mb-4">Thiết bị luôn được tạo ở trạng thái "chờ cấu hình"; việc gán chủ làm ở trang chi tiết và chỉ được khi khoá đã kết nối thật.</div>
                     <button class="btn btn-primary w-100"><i class="fa-solid fa-plus me-2"></i>Tạo thiết bị</button>
                 </form>
             </div>
@@ -160,6 +164,29 @@
             </div>
         </div>
 
+        <div class="card mb-4">
+            <div class="card-header">Chỉnh sửa thông tin</div>
+            <div class="card-body">
+                <form method="post">{% csrf_token %}<input type="hidden" name="action" value="edit">
+                    <label class="form-label small mb-1">Tên</label>
+                    <input type="text" name="name" class="form-control form-control-sm mb-2" value="{{ device.name }}" maxlength="100" required>
+                    <label class="form-label small mb-1">Vị trí</label>
+                    <input type="text" name="location" class="form-control form-control-sm mb-2" value="{{ device.location|default:'' }}" maxlength="255">
+                    <label class="form-label small mb-1">MAC</label>
+                    <input type="text" name="mac_address" class="form-control form-control-sm mono mb-2" value="{{ device.mac_address|default:'' }}" maxlength="17" placeholder="AA:BB:CC:DD:EE:FF">
+                    <label class="form-label small mb-1">Firmware</label>
+                    <input type="text" name="firmware_version" class="form-control form-control-sm mb-2" value="{{ device.firmware_version|default:'' }}" maxlength="30">
+                    <div class="d-flex gap-3 mb-3 small">
+                        <label class="form-check"><input class="form-check-input" type="checkbox" name="bluetooth_enabled" {% if device.bluetooth_enabled %}checked{% endif %}> Bluetooth</label>
+                        <label class="form-check"><input class="form-check-input" type="checkbox" name="wifi_enabled" {% if device.wifi_enabled %}checked{% endif %}> WiFi</label>
+                        <label class="form-check"><input class="form-check-input" type="checkbox" name="nfc_enabled" {% if device.nfc_enabled %}checked{% endif %}> NFC</label>
+                    </div>
+                    <button class="btn btn-primary btn-sm w-100"><i class="fa-solid fa-floppy-disk me-2"></i>Lưu thay đổi</button>
+                    <div class="form-text">Không sửa được mã, chủ sở hữu, trạng thái, pin.</div>
+                </form>
+            </div>
+        </div>
+
         {% if admin_can_claim %}
         <div class="card mb-4">
             <div class="card-header">Gán chủ sở hữu</div>
@@ -184,6 +211,9 @@
                 {% include 'manage_sys/_ui.html' with part="danger_form" action="remove_owner" label="Gỡ chủ sở hữu" prompt="Nhập mã" expect=device.device_code msg="Gỡ chủ và vô hiệu hóa MỌI quyền truy cập, thẻ, PIN, khuôn mặt của khoá này?" btn="btn-outline-danger" icon="user-slash" text="Gỡ chủ" %}
                 {% endif %}
                 {% include 'manage_sys/_ui.html' with part="danger_form" action="rotate_secret" label="Xoay secret kết nối" prompt="Nhập mã" expect=device.device_code msg="Xoay secret? Thiết bị phải nạp lại secret mới, secret cũ mất hiệu lực." btn="btn-outline-danger" icon="key" text="Xoay secret" %}
+                {% if can_delete %}
+                {% include 'manage_sys/_ui.html' with part="danger_form" action="delete_device" label="Xoá thiết bị" prompt="Nhập mã" expect=device.device_code msg="XOÁ VĨNH VIỄN thiết bị này cùng log ra vào và log trạng thái?" btn="btn-danger" icon="trash" text="Xoá thiết bị" %}
+                {% else %}<div class="small text-muted">Muốn xoá khoá, hãy gỡ chủ trước.</div>{% endif %}
             </div>
         </div>
 
@@ -191,20 +221,6 @@
         <div class="alert alert-secondary small mb-4"><i class="fa-solid fa-lock me-1"></i>Gỡ chủ và xoay secret là thao tác nhạy cảm, cần quyền quản trị cao nhất.</div>
         {% endif %}
 
-        <div class="card">
-            <div class="card-header">Thao tác</div>
-            <div class="card-body">
-                {% if not device.owner %}
-                    <div class="alert alert-secondary small mb-0">Thiết bị chưa có chủ sở hữu (đang chờ cấu hình) nên chưa thể đổi trạng thái.</div>
-                {% elif device.status == 'maintenance' %}
-                    <form method="post">{% csrf_token %}<input type="hidden" name="action" value="maintenance_off">
-                        <button class="btn btn-outline-success w-100"><i class="fa-solid fa-circle-check me-2"></i>Kết thúc bảo trì</button></form>
-                {% else %}
-                    <form method="post" onsubmit="return confirm('Đặt thiết bị vào chế độ bảo trì? Chủ sở hữu sẽ được thông báo.')">{% csrf_token %}<input type="hidden" name="action" value="maintenance_on">
-                        <button class="btn btn-outline-warning w-100"><i class="fa-solid fa-screwdriver-wrench me-2"></i>Đặt chế độ bảo trì</button></form>
-                {% endif %}
-            </div>
-        </div>
     </div>
 
     <div class="col-lg-8">

@@ -11,10 +11,9 @@
 </div>
 
 <div class="row g-3 mb-4">
-    {% url 'manage_sys:login-attempts' as logins_url %}{% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=logins_url q="?status=fail" tone="danger" icon="user-xmark" num=stats.failed_logins_24h label="Đăng nhập thất bại (24h)" %}
-    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=users_url q="?status=locked" tone="secondary" icon="user-lock" num=stats.locked_accounts label="Tài khoản đang bị khóa" %}
-    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=users_url q="?status=unverified" tone="info" icon="envelope-circle-check" num=stats.unverified_users label="Chưa xác thực email" %}
-    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-6 col-lg-3" href=devices_url q="?status=maintenance" tone="warning" icon="screwdriver-wrench" num=stats.maintenance_devices label="Thiết bị đang bảo trì" %}
+    {% url 'manage_sys:login-attempts' as logins_url %}{% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-12 col-sm-4" href=logins_url q="?status=fail" tone="danger" icon="user-xmark" num=stats.failed_logins_24h label="Đăng nhập thất bại (24h)" %}
+    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-12 col-sm-4" href=users_url q="?status=locked" tone="secondary" icon="user-lock" num=stats.locked_accounts label="Tài khoản đang bị khóa" %}
+    {% include 'manage_sys/_ui.html' with part="stat" sm=True col="col-12 col-sm-4" href=users_url q="?status=unverified" tone="info" icon="envelope-circle-check" num=stats.unverified_users label="Chưa xác thực email" %}
 </div>
 
 <div class="row g-4">

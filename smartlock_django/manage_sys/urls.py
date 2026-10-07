@@ -1,14 +1,11 @@
 # manage_sys/urls.py
-from django.urls import include, path
+from django.urls import path
 
 from . import views as v
 
 app_name = 'manage_sys'
 
 urlpatterns = [
-    # API JSON dùng chung cho web + app: <prefix>api/v1/...
-    path('api/v1/', include('manage_sys.api.urls')),
-
     path('', v.dashboard, name='dashboard'),
     path('login/', v.login_view, name='login'),
     path('logout/', v.logout_view, name='logout'),

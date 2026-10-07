@@ -19,7 +19,6 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404
 
 from manage_sys import views as mlegacy
-from manage_sys.api import serializers as S
 
 from .models import (AccessEvent, Announcement, AuditLog, CardDeviceAccess, ActivityLog, Device, DeviceAccess,
                      DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, MobileSession, NfcReader, User)
