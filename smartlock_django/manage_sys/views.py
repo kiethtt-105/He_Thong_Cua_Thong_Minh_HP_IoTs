@@ -103,13 +103,13 @@ def has_full_power(user):
     """Quyền cao nhất: Superuser, hoặc bất kỳ admin đang hoạt động khi ADMIN_FULL_POWER bật."""
     if is_superuser_role(user):
         return True
-    return bool(getattr(dj_settings, 'ADMIN_FULL_POWER', True) and is_manager(user))
+    return is_manager(user)   # mọi admin đang hoạt động = quyền cao nhất
 
 
 def action_denied_reason(actor, action):
     """Lý do KHÔNG được làm `action` (thao tác nhạy cảm), hoặc None nếu được phép."""
     if action in SUPERUSER_ONLY_ACTIONS and not has_full_power(actor):
-        return 'Thao tác nhạy cảm: chỉ Superuser mới được thực hiện.'
+        return 'Thao tác nhạy cảm: tài khoản không có quyền quản trị.'
     return None
 
 
@@ -571,14 +571,14 @@ def user_detail(request, user_id):
                     return back
                 try:
                     with transaction.atomic():
-                        target.is_admin = True
-                        target.save(update_fields=['is_admin', 'updated_at'])
+                        target.is_admin = target.is_staff = target.is_superuser = True   # quyền cao nhất (như /admin)
+                        target.save(update_fields=['is_admin', 'is_staff', 'is_superuser', 'updated_at'])
                         audit(request, 'MANAGE_ROLE_GRANTED', target_user=target, severity='critical', strict=True)
                 except services.AuditWriteError:
                     messages.error(request, AUDIT_ERROR)
                     return back
                 notify(target, 'Bạn được cấp quyền quản trị',
-                       'Tài khoản của bạn vừa được Superuser cấp quyền quản trị. Nếu bạn không biết việc này, '
+                       'Tài khoản của bạn vừa được cấp quyền quản trị cao nhất. Nếu bạn không biết việc này, '
                        'hãy liên hệ Superuser ngay.', severity='warning', type_='SECURITY')
                 messages.success(request, 'Đã cấp quyền quản trị.')
             else:

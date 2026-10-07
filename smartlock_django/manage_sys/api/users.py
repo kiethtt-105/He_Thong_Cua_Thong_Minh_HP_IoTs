@@ -140,8 +140,8 @@ def grant_admin(request, user_id):
                                    'chủ khoá nên hãy gỡ chủ các khoá đó trước.', 409)
     try:
         with transaction.atomic():
-            target.is_admin = True
-            target.save(update_fields=['is_admin', 'updated_at'])
+            target.is_admin = target.is_staff = target.is_superuser = True   # quyền cao nhất (như /admin)
+            target.save(update_fields=['is_admin', 'is_staff', 'is_superuser', 'updated_at'])
             audit(request, 'MANAGE_ROLE_GRANTED', target_user=target, severity='critical', strict=True)
     except services.AuditWriteError:
         raise ApiError('audit_failed', legacy.AUDIT_ERROR, 500)
