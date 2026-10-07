@@ -46,7 +46,7 @@ def device_detail(request, device_id):
                 if not isinstance(data[flag], bool):
                     raise ApiError('BAD_FIELD', f'"{flag}" phải là true/false.', 400, field=flag)
                 setattr(device, flag, data[flag])
-        device.save()
+        device.save(update_fields=[f for f in fields if before[f] != getattr(device, f)] + ['updated_at'])
         changes = {f: [before[f], getattr(device, f)] for f in fields if before[f] != getattr(device, f)}
         services.audit(request, 'DEVICE_UPDATED', device=device, metadata={'changes': changes} if changes else None)
 
@@ -196,7 +196,13 @@ def _ticket(request, device_id, kind):
         services.audit(request, f"{cfg['prefix']}_TICKET_DENIED", device=device, success=False, severity='warning')
         raise ApiError('FORBIDDEN', f"Bạn không có quyền mở khóa bằng {cfg['name']}.", 403,
                        permission=cfg['permission'])
-    ticket, exp = services.issue_phone_ticket(device, request.user, kind)
+    ttl = None
+    if device.owner_id != request.user.id:                 # vé không được sống lâu hơn thời hạn chia sẻ
+        share = (services._live_access(request.user, timezone.now())
+                 .filter(device=device, permissions__code=cfg['permission']).first())
+        if share and share.expires_at:
+            ttl = max(1, min(services.TICKET_TTL_SECONDS, int((share.expires_at - timezone.now()).total_seconds())))
+    ticket, exp = services.issue_phone_ticket(device, request.user, kind, ttl)
     services.audit(request, f"{cfg['prefix']}_TICKET_ISSUED", device=device, metadata={'expires_at': exp})
     from datetime import datetime, timezone as dtz
     return ok({'ticket': ticket, 'channel': kind, 'device_code': device.device_code, 'expires_at': exp,

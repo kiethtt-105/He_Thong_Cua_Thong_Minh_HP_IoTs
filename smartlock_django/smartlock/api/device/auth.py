@@ -70,9 +70,13 @@ def authenticate_device(request) -> Device:
                        retry_after_seconds=AUTH_FAIL_WINDOW)
     device = (Device.objects.select_related('owner').filter(device_code=code).first()
               or Device.objects.select_related('owner').filter(device_code=code.upper()).first())
-    if not device or not hmac.compare_digest(device.provisioning_secret_hash, services.hash_token(secret)):
-        cache.set(key, fails + 1, AUTH_FAIL_WINDOW)
-        if fails < 5:         # chỉ ghi log vài lần đầu, tránh bị spam đầy AuditLog
+    if not device or not services.safe_eq(device.provisioning_secret_hash, services.hash_token(secret)):
+        try:                                   # incr nguyên tử (không mất lượt khi nhiều request song song)
+            n = cache.incr(key)
+        except ValueError:
+            cache.set(key, 1, AUTH_FAIL_WINDOW)
+            n = 1
+        if n <= 5:            # chỉ ghi log vài lần đầu, tránh bị spam đầy AuditLog
             services.audit(request, 'DEVICE_API_AUTH_DENIED', actor=None, success=False, severity='warning',
                            username_attempt=code[:150])
         raise ApiError('DEVICE_AUTH_FAILED', 'Mã thiết bị hoặc secret không đúng.', 401)

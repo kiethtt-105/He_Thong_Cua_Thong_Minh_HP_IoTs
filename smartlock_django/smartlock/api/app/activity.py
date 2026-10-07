@@ -67,7 +67,10 @@ def notifications_read(request):
     if data.get('all') is True:
         pass
     else:
-        ids = [services.parse_uuid(i) for i in (data.get('ids') or []) if services.parse_uuid(i)]
+        raw_ids = data.get('ids')
+        if not isinstance(raw_ids, list):
+            raise ApiError('MISSING_FIELD', 'Cần "ids" (mảng UUID) hoặc "all": true.', 400)
+        ids = [services.parse_uuid(i) for i in raw_ids if services.parse_uuid(i)]
         if not ids:
             raise ApiError('MISSING_FIELD', 'Cần "ids" (mảng UUID) hoặc "all": true.', 400)
         qs = qs.filter(id__in=ids[:200])

@@ -81,7 +81,7 @@ def heartbeat(request):
     if device.owner_id:                                  # cảnh báo khi CHUYỂN trạng thái, không lặp mỗi nhịp
         if tamper and not (prev and prev.tamper_detected):
             raise_event(device, 'TAMPER', {'source': 'heartbeat'})
-        if battery is not None and battery <= LOW_BATTERY and (prev is None or prev.battery_level > LOW_BATTERY):
+        if battery is not None and battery <= LOW_BATTERY and (prev is None or prev.battery_level is None or prev.battery_level > LOW_BATTERY):
             raise_event(device, 'LOW_BATTERY', {'battery': battery})
 
     fresh = Device.objects.select_related('owner').get(pk=device.pk)
@@ -109,23 +109,29 @@ def ack(request):
     cmd = DeviceCommand.objects.select_related('device', 'issued_by').filter(pk=cid, device=device).first() if cid else None
     if not cmd:
         raise ApiError('COMMAND_NOT_FOUND', 'Không tìm thấy lệnh.', 404)
-    if not hmac.compare_digest(cmd.command_token_hash, str(data.get('token') or '')):
+    if not services.safe_eq(cmd.command_token_hash, str(data.get('token') or '')):
         services.audit(request, 'DEVICE_ACK_BAD_TOKEN', actor=None, device=device, success=False, severity='warning',
                        metadata={'command_id': str(cmd.id)})
         raise ApiError('BAD_TOKEN', 'Token lệnh không khớp.', 403)
 
     success = data.get('success') is not False
     services.touch_device(device)
-    lock_state = s(data, 'lock_state', 20).lower()
-    if lock_state in LOCK_STATES and lock_state != 'unknown':
-        DeviceStatusLog.objects.create(device=device, battery_level=device.battery_level, lock_state=lock_state)
 
     if cmd.status in ('acknowledged', 'failed'):                         # ack lặp (mạng chập chờn) -> idempotent
         return ok({'status': cmd.status, 'duplicate': True})
     was_expired = cmd.status == 'expired' or cmd.expires_at <= timezone.now()
-    cmd.status = 'acknowledged' if success else 'failed'
-    cmd.acknowledged_at = timezone.now()
-    cmd.save(update_fields=['status', 'acknowledged_at'])
+    new_status = 'acknowledged' if success else 'failed'
+    now = timezone.now()
+    # UPDATE có điều kiện: 2 ack song song chỉ 1 cái thắng (không bắn popup / ghi log 2 lần)
+    won = (DeviceCommand.objects.filter(pk=cmd.pk).exclude(status__in=('acknowledged', 'failed'))
+           .update(status=new_status, acknowledged_at=now))
+    if not won:
+        cur = DeviceCommand.objects.filter(pk=cmd.pk).values_list('status', flat=True).first()
+        return ok({'status': cur or cmd.status, 'duplicate': True})
+    cmd.status, cmd.acknowledged_at = new_status, now
+    lock_state = s(data, 'lock_state', 20).lower()
+    if lock_state in LOCK_STATES and lock_state != 'unknown':
+        DeviceStatusLog.objects.create(device=device, battery_level=device.battery_level, lock_state=lock_state)
     if not was_expired:                                                   # ack trễ: ghi nhận nhưng không bật popup
         try:
             services.announce_command_result(cmd, ok=success)

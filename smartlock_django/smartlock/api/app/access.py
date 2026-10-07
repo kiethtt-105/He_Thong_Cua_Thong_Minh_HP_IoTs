@@ -28,7 +28,7 @@ def _pin_json(p, owner_view=False) -> dict:
         'id': str(p.id), 'device_id': str(p.device_id), 'label': p.label or '', 'valid_from': iso(p.valid_from),
         'expires_at': iso(p.expires_at), 'max_uses': p.max_uses, 'use_count': p.use_count,
         'is_revoked': p.is_revoked, 'is_valid_now': p.is_valid_now(), 'created_at': iso(p.created_at),
-        'created_by': (p.created_by.full_name or p.created_by.username),
+        'created_by': ((p.created_by.full_name or p.created_by.username) if p.created_by_id else ''),
     }
 
 
@@ -144,6 +144,9 @@ def card_link(request, card_id, device_id):
     data = read_json(request)
     if not isinstance(data.get('is_active'), bool):
         raise ApiError('BAD_FIELD', 'Cần "is_active": true/false.', 400)
+    if data['is_active'] and link.device.owner_id != user.id:
+        # người được chia sẻ chỉ được TẮT thẻ của mình, không tự bật lại thẻ mà chủ khoá đã tắt
+        raise ApiError('OWNER_ONLY', 'Chỉ chủ khoá mới được bật lại thẻ trên khoá này.', 403)
     link.is_active = data['is_active']
     link.save(update_fields=['is_active'])
     services.audit(request, 'CARD_LINK_ENABLED' if link.is_active else 'CARD_LINK_DISABLED', device=link.device,
@@ -222,6 +225,9 @@ def reader_detail(request, reader_id):
     if not reader.device.nfc_enabled:
         raise ApiError('NFC_DISABLED', 'NFC của khoá đang tắt.', 409)
     data = read_json(request)
+    for flag in ('is_active', 'auto_register'):          # bool("false") == True -> phải kiểm kiểu thật
+        if flag in data and not isinstance(data[flag], bool):
+            raise ApiError('BAD_FIELD', f'"{flag}" phải là true/false.', 400, field=flag)
     audit_action = None
     if 'is_active' in data:
         reader.is_active = bool(data['is_active'])
@@ -301,6 +307,8 @@ def face_delete(request, profile_id):
         data = read_json(request)
         if not isinstance(data.get('is_active'), bool):
             raise ApiError('BAD_FIELD', '"is_active" phải là true/false.', 400, field='is_active')
+        if data['is_active'] and device.owner_id != request.user.id:
+            raise ApiError('OWNER_ONLY', 'Chỉ chủ khoá mới được bật lại hồ sơ khuôn mặt.', 403)
         profile.is_active = data['is_active']
         profile.save(update_fields=['is_active', 'updated_at'])
         services.audit(request, 'FACE_PROFILE_TOGGLED', device=device, target_user=owner_of_profile,
@@ -322,7 +330,7 @@ def _share_json(a) -> dict:
     return {
         'id': str(a.id), 'device_id': str(a.device_id), 'device_name': a.device.name,
         'user': {'id': str(a.user_id), 'username': a.user.username, 'full_name': a.user.full_name or ''},
-        'shared_by': a.created_by.full_name or a.created_by.username,
+        'shared_by': (a.created_by.full_name or a.created_by.username) if a.created_by_id else '',
         'permissions': sorted(p.code for p in a.permissions.all()),
         'valid_from': iso(a.valid_from), 'expires_at': iso(a.expires_at), 'created_at': iso(a.created_at),
     }
@@ -425,8 +433,10 @@ def share_detail(request, share_id):
     access.revoked_at = timezone.now()
     access.save(update_fields=['is_active', 'revoked_at'])
     cancelled = DeviceCommand.objects.filter(device=device, issued_by=access.user, status='pending').update(status='failed')
+    creds = services.revoke_user_credentials(device, access.user)     # thẻ / khuôn mặt / PIN của người đó mất hiệu lực
     services.audit(request, 'ACCESS_REVOKED', device=device, target_user=access.user, severity='warning',
-                   metadata={'access_id': str(access.id), 'cancelled_commands': cancelled})
+                   metadata={'access_id': str(access.id), 'cancelled_commands': cancelled,
+                             'revoked_credentials': creds})
     services.notify(access.user, 'Quyền truy cập bị thu hồi', f'Quyền của bạn trên "{device.name}" đã bị thu hồi.',
                     severity='warning', device=device, type_='SHARE')
     return ok()
@@ -441,8 +451,9 @@ def share_leave(request, share_id):
     access.is_active = False
     access.revoked_at = timezone.now()
     access.save(update_fields=['is_active', 'revoked_at'])
+    creds = services.revoke_user_credentials(access.device, request.user)
     services.audit(request, 'ACCESS_LEFT', device=access.device, target_user=access.device.owner,
-                   metadata={'access_id': str(access.id)})
+                   metadata={'access_id': str(access.id), 'revoked_credentials': creds})
     if access.device.owner_id:
         services.notify(access.device.owner, 'Người dùng đã rời khỏi khoá được chia sẻ',
                         f'{request.user.username} không còn dùng khoá "{access.device.name}" nữa.',

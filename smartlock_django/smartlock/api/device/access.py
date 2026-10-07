@@ -70,13 +70,13 @@ def access_phone(request):
     items = data.get('events') if isinstance(data.get('events'), list) else [data]
     if not items or len(items) > 50:
         raise ApiError('BAD_EVENTS', 'Cần 1-50 sự kiện.', 400)
+    items = [it for it in items if isinstance(it, dict)]
+    if not items or any(str(it.get('channel') or '').lower() not in services.PHONE_CHANNELS for it in items):
+        # kiểm tra TRƯỚC khi ghi bất kỳ sự kiện nào: tránh xử lý dở dang rồi khoá gửi lại -> ghi trùng
+        raise ApiError('BAD_CHANNEL', 'channel phải là "ble" hoặc "nfc".', 400)
     results = []
     for it in items:
-        if not isinstance(it, dict):
-            continue
         channel = str(it.get('channel') or '').lower()
-        if channel not in services.PHONE_CHANNELS:
-            raise ApiError('BAD_CHANNEL', 'channel phải là "ble" hoặc "nfc".', 400)
         recorder = services.record_ble_unlock if channel == 'ble' else services.record_nfc_phone_unlock
         event = recorder(device, ticket=str(it.get('ticket') or '')[:200], ok=it.get('ok') is not False,
                          reason=str(it.get('reason') or '')[:100] or None, at=it.get('at'))

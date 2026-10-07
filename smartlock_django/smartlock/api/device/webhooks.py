@@ -28,7 +28,7 @@ def webhook_authorized(request) -> bool:
             return True
         logger.error('MQTT_WEBHOOK_SECRET chưa được đặt: từ chối mọi webhook MQTT.')
         return False
-    return hmac.compare_digest(str(request.META.get('HTTP_X_WEBHOOK_SECRET', '')), str(secret))
+    return services.safe_eq(request.META.get('HTTP_X_WEBHOOK_SECRET', ''), secret)
 
 
 def webhook_api(fn):
@@ -62,14 +62,14 @@ def mqtt_auth(request):
     # Tài khoản server (publisher/subscriber của Django): so với MQTT_PUBLISHER_PASSWORD.
     if username in getattr(settings, 'MQTT_TRUSTED_USERNAMES', []):
         expected = services.MQTT_PUBLISHER_PASSWORD
-        if expected and hmac.compare_digest(password, expected):
+        if services.safe_eq(password, expected):
             return JsonResponse({'ok': True})
         services.audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
                        username_attempt=username[:150])
         return JsonResponse({'ok': False}, status=401)
 
     device = Device.objects.filter(device_code=username).first()
-    if not device or not hmac.compare_digest(device.provisioning_secret_hash, services.hash_token(password)):
+    if not device or not services.safe_eq(device.provisioning_secret_hash, services.hash_token(password)):
         services.audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
                        username_attempt=username[:150])
         return JsonResponse({'ok': False}, status=401)

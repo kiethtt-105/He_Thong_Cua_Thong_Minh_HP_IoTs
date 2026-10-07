@@ -76,6 +76,13 @@ def _send_mail_now(subject, plain, html, to, log_body=True) -> bool:
         return False
 
 
+def safe_eq(a, b) -> bool:
+    """So sánh hằng-thời-gian, KHÔNG ném lỗi với None / ký tự non-ASCII (hmac.compare_digest(str) sẽ ném TypeError)."""
+    if not a or not b:
+        return False
+    return hmac.compare_digest(str(a).encode('utf-8'), str(b).encode('utf-8'))
+
+
 def hash_token(token) -> str:
     return hashlib.sha256(str(token).encode()).hexdigest()
 
@@ -215,6 +222,28 @@ def accessible_devices(user):
         .values('device_id')
     )
     return Device.objects.filter(Q(owner=user) | Q(id__in=shared_ids))
+
+
+def user_has_live_access(user, device) -> bool:
+    """User còn quyền dùng khoá NGAY BÂY GIỜ: là chủ, hoặc có chia sẻ còn hiệu lực (chưa thu hồi / chưa hết hạn).
+    Dùng khi xác thực thẻ / khuôn mặt / PIN để thông tin xác thực của người đã mất quyền không còn mở được cửa."""
+    if user is None or not user.is_active:
+        return False
+    if device.owner_id == user.id:
+        return True
+    return _live_access(user, timezone.now()).filter(device=device).exists()
+
+
+def revoke_user_credentials(device, user) -> dict:
+    """Khi 1 người bị thu hồi / tự rời chia sẻ: vô hiệu thẻ NFC, hồ sơ khuôn mặt và PIN do người đó tạo trên khoá này."""
+    now = timezone.now()
+    return {
+        'cards': CardDeviceAccess.objects.filter(device=device, access_card__user=user, is_active=True)
+                 .update(is_active=False),
+        'faces': FaceProfile.objects.filter(device=device, user=user, is_active=True).update(is_active=False),
+        'pins': DoorPinCode.objects.filter(device=device, created_by=user, is_revoked=False)
+                .update(is_revoked=True, revoked_at=now),
+    }
 
 
 def has_permission(user, device, code) -> bool:
@@ -846,7 +875,7 @@ BURST_STAGE_WINDOW_SECONDS = 24 * 3600     # số lần khoá trong 24h quyết 
 BURST_NOTIFY_COOLDOWN_SECONDS = 600        # tối đa 1 thông báo ACCESS_BURST / 10 phút / thiết bị
 LOCKOUT_ACTION = 'ACCESS_BURST_LOCKOUT'
 # Không tính vào bộ đếm: bị chặn do đang khoá (nếu tính sẽ tự gia hạn khoá mãi) và lỗi MQTT.
-NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED', 'CARD_REGISTERED')
+NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED', 'CARD_REGISTERED', 'ACCESS_REVOKED')
 
 
 def normalize_uid(raw_uid: str) -> str:
@@ -1001,6 +1030,9 @@ def verify_rfid_tap(device, raw_uid: str, ip_address=None) -> AccessEvent:
                 return registered
             return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
                               reason='UNKNOWN_CARD', ip_address=ip_address)
+        if not user_has_live_access(card.user, device):      # chủ thẻ đã bị thu hồi / hết hạn chia sẻ
+            return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
+                              reason='ACCESS_REVOKED', user=card.user, access_card=card, ip_address=ip_address)
 
     cmd = dispatch_command(device, 'UNLOCK', source='rfid', extra={'card_id': str(card.id)})
     ok = cmd.status == 'sent'
@@ -1023,6 +1055,10 @@ def verify_door_pin(device, raw_pin: str, ip_address=None) -> AccessEvent:
         if not matched:
             return _log_event(device=device, method=AccessEvent.METHOD_PIN, success=False,
                               reason='INVALID_OR_EXPIRED_PIN', ip_address=ip_address)
+        if matched.created_by_id and not user_has_live_access(matched.created_by, device):
+            return _log_event(device=device, method=AccessEvent.METHOD_PIN, success=False,
+                              reason='ACCESS_REVOKED', door_pin=matched, user=matched.created_by,
+                              ip_address=ip_address)
         matched.register_use()
 
     cmd = dispatch_command(device, 'UNLOCK', source='pin', extra={'pin_id': str(matched.id)})
@@ -1096,6 +1132,11 @@ def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None
     if not best_profile or best_distance > limit:
         return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False,
                           reason='NO_MATCH', snapshot_url=snapshot_url, ip_address=ip_address)
+
+    if not user_has_live_access(best_profile.user, device):
+        return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False, reason='ACCESS_REVOKED',
+                          user=best_profile.user, face_profile=best_profile, snapshot_url=snapshot_url,
+                          ip_address=ip_address)
 
     confidence = max(0.0, 1 - (best_distance / limit))
     cmd = dispatch_command(device, 'UNLOCK', source='face', extra={'face_profile_id': str(best_profile.id)})
@@ -1495,7 +1536,7 @@ def user_claim_device(user, device_code: str, secret: str, request=None) -> Devi
         raise ClaimError('RATE_LIMITED', 'Bạn đã thử sai quá nhiều lần. Vui lòng thử lại sau ít phút.')
     code = (device_code or '').strip().upper()
     device = Device.objects.filter(device_code=code).first()
-    ok = bool(device and secret and hmac.compare_digest(device.provisioning_secret_hash, hash_token(secret)))
+    ok = bool(device and secret and safe_eq(device.provisioning_secret_hash, hash_token(secret)))
     if not ok:
         raise ClaimError('BAD_CREDENTIALS', 'Mã thiết bị hoặc secret không đúng.')   # không lộ cái nào sai
     return claim_device(device.pk, user, by_admin=False)
