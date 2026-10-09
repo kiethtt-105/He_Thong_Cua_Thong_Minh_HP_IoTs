@@ -74,7 +74,7 @@ def decorate_login_attempt(a):
 
 
 SENSITIVE_ACTIONS = frozenset({'grant_admin', 'revoke_admin', 'rotate_secret', 'remove_owner',
-                               'delete_device', 'update_settings'})
+                               'delete_device', 'delete_user', 'update_settings'})
 
 
 def has_manage_role(user):
@@ -449,6 +449,30 @@ def _revoke_admin(request, target):
     messages.success(request, f'Đã thu hồi quyền quản trị (thu hồi {revoked} phiên app).')
 
 
+def _delete_user(request, target):
+    owned = Device.objects.filter(owner=target).count()
+    if owned:
+        messages.error(request, f'Tài khoản đang là chủ của {owned} khoá. Hãy xoá hoặc gỡ chủ các khoá đó trước.')
+        return None
+    email = target.email
+    try:
+        with transaction.atomic():
+            if _would_orphan_superusers(target):
+                messages.error(request, 'Không thể xoá superuser cuối cùng của hệ thống.')
+                return None
+            audit(request, 'MANAGE_USER_DELETED', target_user=target, severity='critical', strict=True,
+                  metadata={'email': email, 'username': target.username})
+            target.delete()
+    except services.AuditWriteError:
+        messages.error(request, AUDIT_ERROR)
+        return None
+    except (ProtectedError, RestrictedError):
+        messages.error(request, 'Không xoá được vì còn dữ liệu liên quan bị ràng buộc. Hãy vô hiệu hóa tài khoản thay thế.')
+        return None
+    messages.success(request, f'Đã xoá tài khoản {email}.')
+    return redirect('manage_sys:users')
+
+
 def _toggle_active(request, target):
     with transaction.atomic():
         if target.is_active and _would_orphan_superusers(target):
@@ -493,9 +517,13 @@ def _user_actions(request, target):
         messages.error(request, reason)
     elif _deny_sensitive(request, action, target_user=target):
         pass
-    elif action in ('grant_admin', 'revoke_admin'):
+    elif action in ('grant_admin', 'revoke_admin', 'delete_user'):
         ok, err = confirm_sensitive(request, target.email)
-        if ok:
+        if ok and action == 'delete_user':
+            done = _delete_user(request, target)
+            if done:
+                return done
+        elif ok:
             (_grant_admin if action == 'grant_admin' else _revoke_admin)(request, target)
         else:
             _confirm_error(request, err, 'Nhập đúng email của tài khoản này vào ô xác nhận.')
@@ -747,13 +775,11 @@ def _device_rotate_secret(request, device):
 
 
 def _device_delete(request, device):
-    if device.owner_id:
-        messages.error(request, 'Khoá còn chủ sở hữu. Hãy gỡ chủ trước khi xoá.')
-        return None
     code = device.device_code
+    owner = device.owner
     try:
         with transaction.atomic():
-            audit(request, 'MANAGE_DEVICE_DELETED', device=device, severity='critical', strict=True,
+            audit(request, 'MANAGE_DEVICE_DELETED', device=device, target_user=owner, severity='critical', strict=True,
                   metadata={'device_code': code, 'name': device.name})
             device.delete()
     except services.AuditWriteError:
@@ -762,6 +788,9 @@ def _device_delete(request, device):
     except (ProtectedError, RestrictedError):
         messages.error(request, 'Không xoá được vì còn dữ liệu liên quan bị ràng buộc.')
         return None
+    if owner:
+        notify(owner, 'Khoá đã bị xoá khỏi hệ thống',
+               f'Quản trị viên đã xoá khoá {code} khỏi hệ thống.', severity='warning', type_='SECURITY')
     messages.success(request, f'Đã xoá thiết bị {code}.')
     return redirect('manage_sys:devices')
 
@@ -813,7 +842,6 @@ def device_detail(request, device_id):
         },
         'admin_can_claim': (not device.owner_id) and device.status == 'provisioning',
         'user_must_claim': (not device.owner_id) and device.status == 'revoked',
-        'can_delete': not device.owner_id,
         'can_sensitive': has_full_power(request.user),
         'last_log': DeviceStatusLog.objects.filter(device=device).order_by('-recorded_at').first(),
         'commands': (DeviceCommand.objects.filter(device=device).select_related('issued_by')

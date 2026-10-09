@@ -123,6 +123,14 @@
                     {% include 'manage_sys/_ui.html' with part="danger_form" action="grant_admin" prompt="Gõ lại email" expect=target.email cap="none" msg="Cấp quyền quản trị cho tài khoản này?" btn="btn-primary" icon="user-shield" text="Cấp quyền quản trị" %}
                     {% endif %}
                     {% endif %}
+                    <hr class="my-3">
+                    <div class="dz-title mb-2"><i class="fa-solid fa-trash me-1"></i>Xoá tài khoản</div>
+                    {% if owned_count %}
+                        <div class="alert alert-warning small py-2 mb-0">Tài khoản đang là chủ của <strong>{{ owned_count }}</strong> khoá. Hãy xoá hoặc gỡ chủ các khoá đó trước khi xoá tài khoản.</div>
+                    {% else %}
+                    <p class="small text-muted mb-2">Xoá vĩnh viễn tài khoản cùng phiên, quyền truy cập và dữ liệu gắn với tài khoản. Không thể hoàn tác.</p>
+                    {% include 'manage_sys/_ui.html' with part="danger_form" action="delete_user" prompt="Gõ lại email" expect=target.email cap="none" msg="XOÁ VĨNH VIỄN tài khoản này?" btn="btn-danger" icon="trash" text="Xoá tài khoản" %}
+                    {% endif %}
                     <div class="form-text mt-2">Nhập sai mật khẩu sẽ bị ghi log và tính vào bộ đếm khoá tài khoản của bạn.</div>
                 </div>
                 {% else %}

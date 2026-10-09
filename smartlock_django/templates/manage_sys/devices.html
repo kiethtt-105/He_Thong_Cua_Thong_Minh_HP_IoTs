@@ -216,9 +216,7 @@
                 {% include 'manage_sys/_ui.html' with part="danger_form" action="remove_owner" label="Gỡ chủ sở hữu" prompt="Nhập mã" expect=device.device_code msg="Gỡ chủ và vô hiệu hóa MỌI quyền truy cập, thẻ, PIN, khuôn mặt của khoá này?" btn="btn-outline-danger" icon="user-slash" text="Gỡ chủ" %}
                 {% endif %}
                 {% include 'manage_sys/_ui.html' with part="danger_form" action="rotate_secret" label="Xoay secret kết nối" prompt="Nhập mã" expect=device.device_code msg="Xoay secret? Thiết bị phải nạp lại secret mới, secret cũ mất hiệu lực." btn="btn-outline-danger" icon="key" text="Xoay secret" %}
-                {% if can_delete %}
-                {% include 'manage_sys/_ui.html' with part="danger_form" action="delete_device" label="Xoá thiết bị" prompt="Nhập mã" expect=device.device_code msg="XOÁ VĨNH VIỄN thiết bị này cùng log ra vào và log trạng thái?" btn="btn-danger" icon="trash" text="Xoá thiết bị" %}
-                {% else %}<div class="small text-muted">Muốn xoá khoá, hãy gỡ chủ trước.</div>{% endif %}
+                {% include 'manage_sys/_ui.html' with part="danger_form" action="delete_device" label="Xoá thiết bị" prompt="Nhập mã" expect=device.device_code msg="XOÁ VĨNH VIỄN thiết bị này (kể cả khi còn chủ sở hữu) cùng log ra vào và log trạng thái?" btn="btn-danger" icon="trash" text="Xoá thiết bị" %}
             </div>
         </div>
 
