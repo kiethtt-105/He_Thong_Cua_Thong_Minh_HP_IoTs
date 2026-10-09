@@ -1,10 +1,10 @@
 from django.urls import path
-from . import views,sysview
+from . import views
 
 app_name = 'smartlock'
 
 # Các view ở đây CHỈ render khung trang. Dữ liệu và thao tác (đăng nhập, đăng xuất, 2FA, thiết bị, thẻ, PIN,
-# chia sẻ, thông báo, hồ sơ...) đều đi qua API dùng chung web/app: smartlock/api/app/urls.py.
+# chia sẻ, thông báo, hồ sơ...) đều đi qua API dùng chung web/app: smartlock/api/urls.py.
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_view, name='login'),
@@ -30,17 +30,14 @@ urlpatterns = [
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
 
-    # MQTT (server-to-server, không phải route cho người dùng)
-    path('api/mqtt/auth/', views.mqtt_auth_webhook, name='mqtt-auth'),
-    path('api/mqtt/acl/', views.mqtt_acl_webhook, name='mqtt-acl'),
 
     # DEMO: log toàn hệ thống real-time, không cần đăng nhập. Chỉ bật khi settings.DEMO_LOGS_ENABLED; gỡ trước khi deploy thật.
     path('demo/system-logs/', views.public_system_logs, name='public-system-logs'),
-    path('demo/system-logs/data/', views.public_system_logs_api, name='public-system-logs-data'),  # giữ nếu còn dùng
-    path('demo/system-logs/overview/', sysview.overview_api, name='sysview-overview'),
-    path('demo/system-logs/events/', sysview.events_api, name='sysview-events'),
-    path('demo/system-logs/db/tables/', sysview.db_tables_api, name='sysview-db-tables'),
-    path('demo/system-logs/api/', sysview.api_api, name='sysview-api'),
-    path('demo/system-logs/channels/', sysview.channels_api, name='sysview-channels'),
-    path('demo/system-logs/db/rows/', sysview.db_rows_api, name='sysview-db-rows'),
+    path('demo/system-logs/data/', views.public_system_logs_api, name='public-system-logs-data'),
+    path('demo/system-logs/overview/', views.overview_api, name='sysview-overview'),
+    path('demo/system-logs/events/', views.events_api, name='sysview-events'),
+    path('demo/system-logs/db/tables/', views.db_tables_api, name='sysview-db-tables'),
+    path('demo/system-logs/api/', views.api_api, name='sysview-api'),
+    path('demo/system-logs/channels/', views.channels_api, name='sysview-channels'),
+    path('demo/system-logs/db/rows/', views.db_rows_api, name='sysview-db-rows'),
 ]

@@ -1,0 +1,21 @@
+{# LANE access: thẻ NFC, lịch sử ra vào, chia sẻ, thông báo, nhật ký #}
+<script>
+Object.assign(V,{
+cards(){const C=S.cards||[];return shell(`<div class="card">${C.map(c=>`<div class="row"><div class="lock ${c.is_active?'locked':''}" style="width:42px;height:42px;border-radius:13px">${ic('card')}</div><div class="f"><b>${esc(c.name||'Thẻ NFC')}</b><div class="sm mut">${c.devices.map(x=>esc(x.device_name)).join(', ')||'Chưa gán khóa'}${c.is_mine?'':' · '+esc(c.owner)}</div></div><button class="btn g s" data-a="cardTog" data-id="${c.id}" data-v="${c.is_active?0:1}">${c.is_active?'Tắt':'Bật'}</button><button class="btn d s" data-a="del" data-u="cards/${c.id}/" data-t="Xóa thẻ này?">Xóa</button></div>`).join('')||none('Chưa có thẻ NFC.')}</div>`,'Thẻ NFC',`<button class="btn" data-a="cardNew">+ Thêm thẻ</button>`)},
+history(){return shell(`<div class="card">${(S.history||[]).map(evRow).join('')||none('Chưa có lịch sử.')}</div>`,'Lịch sử ra vào')},
+shares(){const o=S.shares_out||[],i=S.shares_in||[];return shell(`<div class="grid g2"><div class="card"><h2>Tôi chia sẻ</h2>${o.map(s=>`<div class="row"><div class="f"><b>${esc(s.user.username)}</b><div class="sm mut">${esc(s.device_name)} · ${fdt(s.expires_at)}</div></div><button class="btn d s" data-a="del" data-u="shares/${s.id}/" data-t="Thu hồi?">Thu hồi</button></div>`).join('')||none('Trống.')}</div>
+ <div class="card"><h2>Được chia sẻ cho tôi</h2>${i.map(s=>`<div class="row"><div class="f"><b>${esc(s.device_name)}</b><div class="sm mut">Từ ${esc(s.shared_by)} · ${s.permissions.length} quyền</div></div><button class="btn g s" data-a="leave" data-id="${s.id}">Rời</button></div>`).join('')||none('Trống.')}</div></div>`,'Chia sẻ khóa')},
+notes(){const N=S.notifications||[];return shell(`<div class="card">${N.map(n=>`<div class="row" style="${n.is_read?'opacity:.6':''}"><span class="pill ${n.severity==='critical'?'bad':n.severity==='warning'?'warn':''}">${esc(n.severity||'info')}</span><div class="f"><b>${esc(n.title)}</b><div class="sm mut">${esc(n.message)}</div></div><span class="mut sm">${ago(n.created_at)}</span><button class="btn g s" data-a="del" data-u="notifications/${n.id}/" data-t="">✕</button></div>`).join('')||none('Không có thông báo.')}</div>`,'Thông báo',S.unread_count?`<button class="btn g" data-a="readAll">Đánh dấu đã đọc</button>`:'')},
+audit(){return shell(`<div class="card">${(S.audit||[]).map(a=>`<div class="row"><span class="pill ${a.success?'ok':'bad'}">${a.success?'OK':'Lỗi'}</span><div class="f"><b>${esc(a.action)}</b><div class="sm mut">${esc(a.device||'')} ${esc(a.ip_address||'')}</div></div><span class="mut sm">${ago(a.created_at)}</span></div>`).join('')||none('Trống.')}</div>`,'Nhật ký hoạt động')},
+});
+const devSel=()=>`<select name="device_id">${(S.devices||[]).filter(d=>d.is_owner).map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select>`;
+Object.assign(ACT,{
+async readAll(){await after(await api('POST','notifications/read/',{all:true}))},
+async leave(el){if(confirm('Rời khỏi chia sẻ này?'))await after(await api('POST',`shares/${el.dataset.id}/leave/`),'Đã rời')},
+async cardTog(el){await after(await api('PATCH',`cards/${el.dataset.id}/`,{is_active:el.dataset.v==='1'}))},
+cardNew(){mform('Thêm thẻ NFC',`<label>Khóa</label>${devSel()}<label>UID thẻ</label><input name="uid" required><label>Tên gợi nhớ</label><input name="name">`,'card')},
+});
+Object.assign(FORMS,{
+async card(b){await after(await api('POST',`devices/${b.device_id}/cards/`,{uid:b.uid,name:b.name}),'Đã thêm thẻ')},
+});
+</script>

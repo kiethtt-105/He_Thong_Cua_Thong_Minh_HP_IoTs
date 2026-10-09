@@ -3,17 +3,21 @@
 
 Chạy:  python manage.py mqtt_subscriber        (chạy 1 tiến trình duy nhất)
 
-Topic (khớp ACL trong api/webhooks/mqtt.py (mqtt_acl)):
+Topic (khớp ACL trong api/device.py -> mqtt_acl):
   smartlock/<device_code>/status   thiết bị -> server   trạng thái định kỳ + LWT
   smartlock/<device_code>/ack      thiết bị -> server   kết quả lệnh
-  smartlock/<device_code>/event    thiết bị -> server   quẹt thẻ / nhập PIN / mặt / BLE / NFC
+  smartlock/<device_code>/event    thiết bị -> server   quẹt thẻ / nhập PIN / mặt / BLE / NFC / cảnh báo
   smartlock/<device_code>/cmd      server  -> thiết bị  (do services.dispatch_command publish)
 
-Lưu ý: KHÔNG gọi services.register_face từ đây (docstring của nó chỉ cho phép từ giao diện app/web).
+Các kiểm tra ở đây GIỐNG HỆT đường HTTP (api/device.py): nfc_enabled, định dạng PIN, vector mặt hợp lệ,
+ack idempotent, cảnh báo TAMPER / FORCED_OPEN / DOOR_LEFT_OPEN / LOW_BATTERY qua services.raise_event.
+
+Lưu ý: KHÔNG gọi services.register_face từ đây (chỉ cho phép từ giao diện app/web).
 """
-import hmac
 import json
 import logging
+import math
+import re
 import threading
 import time
 import uuid
@@ -28,7 +32,7 @@ from smartlock.models import Device, DeviceCommand, DeviceStatusLog
 logger = logging.getLogger('smartlock.mqtt')
 
 MAX_PAYLOAD = 64 * 1024            # chặn payload quá lớn (embedding mặt 128 số ~ 3KB)
-STATUS_LOG_MIN_INTERVAL = 60       # ghi DeviceStatusLog tối đa 1 lần/phút/thiết bị (trừ khi đổi trạng thái)
+STATUS_LOG_MIN_INTERVAL = 300      # = LOG_MIN_INTERVAL của HTTP heartbeat (api/device.py)
 MAINTENANCE_EVERY = 30             # giây: đánh dấu offline + hết hạn lệnh
 LOCK_STATES = {'locked', 'unlocked', 'jammed', 'unknown'}
 
@@ -96,7 +100,8 @@ class _Subscriber:
             if not isinstance(data, dict):
                 return
             close_old_connections()
-            device = Device.objects.filter(device_code=code).first()
+            device = (Device.objects.filter(device_code=code).first()
+                      or Device.objects.filter(device_code=code.upper()).first())
             if not device:
                 return
             handler = {'status': self.on_status, 'ack': self.on_ack, 'event': self.on_event}.get(channel)
@@ -113,10 +118,23 @@ class _Subscriber:
         if d.get('state') == 'offline' or d.get('online') is False:
             Device.objects.filter(pk=device.pk, status='online').update(status='offline')
             return
+
+        old_battery = device.battery_level          # đọc TRƯỚC touch_device để bắt được lúc chuyển qua ngưỡng
         services.touch_device(device, firmware=d.get('firmware'), battery=d.get('battery'))
 
-        lock_state = d.get('lock_state') if d.get('lock_state') in LOCK_STATES else 'unknown'
-        tamper = bool(d.get('tamper'))
+        try:
+            battery = max(0, min(100, int(d.get('battery', device.battery_level))))
+        except (TypeError, ValueError):
+            battery = device.battery_level
+
+        # cảnh báo pin yếu khi CHUYỂN qua ngưỡng (giống heartbeat HTTP), không lặp mỗi bản tin
+        if (device.owner_id and battery <= services.LOW_BATTERY
+                and (old_battery is None or old_battery > services.LOW_BATTERY)):
+            services.raise_event(device, 'LOW_BATTERY', {'battery': battery, 'source': 'mqtt'})
+
+        lock_state = str(d.get('lock_state') or '').lower()
+        lock_state = lock_state if lock_state in LOCK_STATES else 'unknown'
+        tamper = d.get('tamper') is True
         now = time.monotonic()
         with self._lock:
             prev = self._last_log.get(device.pk)
@@ -125,18 +143,13 @@ class _Subscriber:
                 return
             self._last_log[device.pk] = (now, lock_state, tamper)
 
-        try:
-            battery = max(0, min(100, int(d.get('battery', device.battery_level))))
-        except (TypeError, ValueError):
-            battery = device.battery_level
         DeviceStatusLog.objects.create(
             device=device, battery_level=battery, lock_state=lock_state, tamper_detected=tamper,
             signal_strength=_int_or_none(d.get('rssi')), temperature=_dec_or_none(d.get('temperature')),
-            raw_payload=d)
+            raw_payload={k: v for k, v in list(d.items())[:30]
+                         if isinstance(v, (int, float, str, bool)) and len(str(v)) <= 100} or None)
         if tamper and (prev is None or not prev[2]) and device.owner_id:
-            services.notify(device.owner, 'Cảnh báo phá khoá',
-                            f'Khoá "{device.name}" phát hiện tác động bất thường.',
-                            severity='critical', device=device, type_='TAMPER')
+            services.raise_event(device, 'TAMPER', {'source': 'mqtt'})
 
     # ------------------------------------------------------------ ack
     def on_ack(self, device, d):
@@ -149,41 +162,71 @@ class _Subscriber:
                .filter(pk=cmd_id, device=device).first())
         if not cmd or cmd.status not in ('pending', 'sent'):
             return
-        # thiết bị phải gửi lại đúng token đã nhận trong lệnh
-        if not hmac.compare_digest(str(d.get('token', '')), cmd.command_token_hash):
+        # thiết bị phải gửi lại đúng token đã nhận trong lệnh (safe_eq: không nổ với ký tự non-ASCII)
+        if not services.safe_eq(cmd.command_token_hash, str(d.get('token', ''))):
             logger.warning('ack sai token: cmd=%s device=%s', cmd.pk, device.device_code)
             return
         if cmd.expires_at < timezone.now():
-            DeviceCommand.objects.filter(pk=cmd.pk).update(status='expired')
+            DeviceCommand.objects.filter(pk=cmd.pk, status__in=('pending', 'sent')).update(status='expired')
             return
-        ok = bool(d.get('ok', True))
+        # HTTP dùng "success", firmware cũ qua MQTT dùng "ok": nhận cả hai
+        ok = (d['success'] if 'success' in d else d.get('ok', True)) is not False
         new_status = 'acknowledged' if ok else 'failed'
-        DeviceCommand.objects.filter(pk=cmd.pk).update(status=new_status, acknowledged_at=timezone.now())
+        # UPDATE có điều kiện: ack MQTT + HTTP đến cùng lúc chỉ 1 bên thắng (không bắn popup 2 lần)
+        won = (DeviceCommand.objects.filter(pk=cmd.pk, status__in=('pending', 'sent'))
+               .update(status=new_status, acknowledged_at=timezone.now()))
+        if not won:
+            return
         cmd.status = new_status
+        ls = str(d.get('lock_state') or '').lower()
+        if ls in LOCK_STATES and ls != 'unknown':
+            DeviceStatusLog.objects.create(device=device, battery_level=device.battery_level, lock_state=ls)
         services.announce_command_result(cmd, ok=ok)
 
     # ------------------------------------------------------------ event
     def on_event(self, device, d):
         services.touch_device(device)
         kind = str(d.get('type', '')).lower()
-        if kind == 'boot':
-            services.touch_device(device, firmware=d.get('firmware'))
-        elif kind == 'rfid' and d.get('uid'):
+
+        if kind == 'rfid' and d.get('uid'):
+            if not device.owner_id or not device.nfc_enabled:      # như HTTP: NFC tắt thì không xét thẻ
+                return
             services.verify_rfid_tap(device, str(d['uid']))
+
         elif kind == 'pin' and d.get('pin'):
-            services.verify_door_pin(device, str(d['pin']))
-        elif kind == 'face' and isinstance(d.get('embedding'), list):
+            if not device.owner_id:
+                return
+            pin = re.sub(r'\D', '', str(d['pin']))[:16]
+            if 4 <= len(pin) <= 8:                                 # như HTTP: PIN 4-8 chữ số
+                services.verify_door_pin(device, pin)
+
+        elif kind == 'face':
+            emb = d.get('embedding')
+            if not device.owner_id or not isinstance(emb, list) or len(emb) != services.FACE_DIM:
+                return
             try:
-                emb = [float(x) for x in d['embedding'][:services.FACE_DIM]]
+                emb = [float(x) for x in emb]
             except (TypeError, ValueError):
                 return
-            services.verify_face(device, emb, snapshot_url=str(d.get('snapshot_url', ''))[:500])
-        elif kind == 'ble':
-            services.record_ble_unlock(device, ticket=str(d.get('ticket', '')),
-                                       ok=bool(d.get('ok', True)), reason=d.get('reason'), at=d.get('at'))
-        elif kind == 'nfc_phone':
-            services.record_nfc_phone_unlock(device, ticket=str(d.get('ticket', '')),
-                                             ok=bool(d.get('ok', True)), reason=d.get('reason'), at=d.get('at'))
+            if not all(math.isfinite(x) for x in emb):
+                return
+            services.verify_face(device, emb, snapshot_url=str(d.get('snapshot_url', ''))[:512])
+
+        elif kind in ('ble', 'nfc_phone'):
+            if not device.owner_id:
+                return
+            recorder = services.record_ble_unlock if kind == 'ble' else services.record_nfc_phone_unlock
+            recorder(device, ticket=str(d.get('ticket', ''))[:200], ok=d.get('ok') is not False,
+                     reason=(str(d['reason'])[:100] if d.get('reason') else None), at=d.get('at'))
+
+        elif kind.upper() in services.DEVICE_EVENTS:              # BOOT, TAMPER, FORCED_OPEN, DOOR_LEFT_OPEN, LOW_BATTERY
+            if kind == 'boot':
+                services.touch_device(device, firmware=d.get('firmware'))
+            meta = d.get('data') if isinstance(d.get('data'), dict) else {}
+            meta = {k: v for k, v in list(meta.items())[:20] if isinstance(v, (int, float, str, bool))}
+            meta['source'] = 'mqtt'
+            services.raise_event(device, kind.upper(), meta)
+
         else:
             logger.info('event không hỗ trợ từ %s: %s', device.device_code, kind)
 
@@ -211,6 +254,7 @@ def _int_or_none(v):
 
 def _dec_or_none(v):
     try:
-        return round(float(v), 1)
+        f = float(v)
+        return round(f, 1) if math.isfinite(f) else None
     except (TypeError, ValueError):
         return None

@@ -1,50 +1,49 @@
-"""Views của giao diện web (smartlock).
+"""Views của giao diện web (smartlock) - 100% dữ liệu và thao tác đi qua API dùng chung web/app (smartlock/api/).
 
-Từ bản này, các view CHỈ render "khung trang" (layout + form). Mọi dữ liệu của người dùng được trình duyệt lấy qua
-API dùng chung web/app (smartlock/api/app/...): đọc bằng GET /api/app/snapshot/ (cache sessionStorage, làm mới 3 giây),
-ghi bằng các endpoint /api/app/... (đăng nhập, đăng xuất, 2FA, thiết bị, thẻ, PIN, chia sẻ...).
-Còn lại ở đây: trang khung, webhook MQTT (server-to-server) và trang demo log công khai.
+Ở đây CHỈ còn:
+  * render "khung trang" account/app.html (JS tự gọi /api/app/... để đăng nhập, đọc snapshot, thao tác);
+  * decorator chặn tài khoản quản trị vào cổng người dùng;
+  * trang demo log công khai (khung) + hàm kiểm tra quyền dùng cho sysview.py.
+Không còn form POST, không truy vấn dữ liệu người dùng trong view.
 """
-import hmac
-import logging
-from datetime import timedelta
 from functools import wraps
 
 from django.conf import settings as dj_settings
 from django.contrib import messages
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
-from django.db.models import Avg, Count, OuterRef, Q, Subquery
-from django.db.models.functions import TruncMinute
-from django.http import Http404, JsonResponse
+from django.http import Http404
 from django.shortcuts import redirect, render
+
+from .services import audit as _audit, is_admin as _is_admin
+import os
+import re
+import time
+from datetime import timedelta
+
+from django.apps import apps
+from django.db import connection
+from django.db.models import Avg, Count, F, OuterRef, Q, Subquery
+from django.db.models.functions import TruncHour, TruncMinute
+from django.http import JsonResponse
+from django.urls import URLPattern, URLResolver, get_resolver
 from django.utils import timezone
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET
 
 from . import services
-from .models import (
-    AuditLog, Device, DeviceCommand, DeviceStatusLog, NfcLog, Notification, User,
-)
-from .services import (
-    audit as _audit, is_admin as _is_admin, system_settings as _settings,
-)
+from .models import (AccessEvent, Announcement, AuditLog, CardDeviceAccess, ActivityLog, Device, DeviceAccess,
+                     DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, MobileSession, NfcLog, NfcReader, User)
 
-logger = logging.getLogger('smartlock.views')
-
-# ====================== AUTH REQUIRED DECORATOR (đưa lên đầu) ======================
 _login_required = login_required(login_url='smartlock:login')
 
 
 def auth_required(view_func):
-    """Đăng nhập + KHÔNG phải tài khoản quản trị. Admin chỉ dùng cổng manage_sys; nếu một phiên user
-    được nâng quyền admin sau khi đăng nhập thì phiên đó bị huỷ ở request kế tiếp."""
+    """Phải đăng nhập và KHÔNG phải tài khoản quản trị (admin chỉ dùng cổng manage_sys)."""
     @_login_required
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
         if _is_admin(request.user):
-            _audit(request, 'USER_SITE_ADMIN_REJECTED', success=False, severity='warning',
-                   target_user=request.user)
+            _audit(request, 'USER_SITE_ADMIN_REJECTED', success=False, severity='warning', target_user=request.user)
             logout(request)
             messages.error(request, 'Tài khoản quản trị chỉ đăng nhập ở cổng quản trị.')
             return redirect('smartlock:login')
@@ -52,37 +51,12 @@ def auth_required(view_func):
     return wrapper
 
 
-
-# ====================== RENDER: mỗi nhóm trang gộp 1 template, chọn trang bằng biến `page` ======================
-PAGE_TEMPLATE = {
-    "login": "auth",
-    "register": "auth",
-    "reset_password": "auth",
-    "verify_email": "auth",
-    "devices_list": "devices",
-    "device_detail": "devices",
-    "device_claim": "devices",
-    "nfc_tags": "access",
-    "nfc_reader": "access",
-    "shares": "access",
-    "door_pins": "access",
-    "face_profiles": "access",
-    "access_history": "access",
-    "audit_logs": "admin",
-    "dashboard": "home",
-    "profile": "home",
-    "notifications": "home",
-}
+def _render(request, page, context=None):
+    """Mọi trang dùng chung account/app.html; `page` chỉ để chọn lane JS cần nạp (auth hay app)."""
+    return render(request, 'account/app.html', {**(context or {}), 'page': page})
 
 
-def _render(request, page, context=None, **kwargs):
-    """render('login') -> account/auth.html với page='login' (xem PAGE_TEMPLATE)."""
-    ctx = dict(context or {})
-    ctx['page'] = page
-    return render(request, f'account/{PAGE_TEMPLATE[page]}.html', ctx, **kwargs)
-
-
-# ====================== TRANG XÁC THỰC (khung; việc xử lý do JS gọi API /api/app/auth/...) ======================
+# ---------- trang công khai (chưa đăng nhập): khung; JS gọi /api/app/auth/... ----------
 def login_view(request):
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
@@ -90,37 +64,30 @@ def login_view(request):
 
 
 def register(request):
+    # đóng/mở đăng ký do API quyết định (auth/register/ trả REGISTRATION_DISABLED -> hiện trong form)
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
-    if not _settings().registration_enabled:
-        return _render(request, 'register', {'disabled': True})
     return _render(request, 'register')
 
 
 def verify_email(request, token):
-    """Link trong email: chỉ hiển thị trang; JS gọi POST /api/app/auth/verify-email/ kèm token."""
     return _render(request, 'verify_email', {'token': str(token)})
 
 
 def password_reset_request(request):
-    return _render(request, 'reset_password', {'mode': 'request'})
+    return _render(request, 'reset_password')
 
 
 def reset_password(request, uidb64, token):
-    """Link trong email: chỉ hiển thị khung; JS gọi POST /api/app/auth/password-reset/check/ rồi /confirm/."""
-    return _render(request, 'reset_password', {'mode': 'confirm', 'uid': uidb64, 'token': token})
+    return _render(request, 'reset_password', {'uid': uidb64, 'token': token})
 
 
 def logout_view(request):
-    """Dự phòng khi gặp link /logout/ cũ: đăng xuất session rồi về trang đăng nhập.
-    Nút Đăng xuất trên giao diện gọi thẳng API POST /api/app/auth/logout/."""
-    if request.user.is_authenticated:
-        _audit(request, 'LOGOUT')
-    logout(request)
-    return redirect('smartlock:login')
+    """Link /logout/ cũ: hiện khung, JS gọi POST /api/app/auth/logout/ rồi về trang đăng nhập."""
+    return _render(request, 'logout')
 
 
-# ====================== TRANG DỮ LIỆU (khung; dữ liệu vẽ từ SmartlockCache = API snapshot) ======================
+# ---------- trang sau đăng nhập: khung; dữ liệu = GET /api/app/snapshot/ ----------
 @auth_required
 def dashboard(request):
     return _render(request, 'dashboard')
@@ -138,6 +105,11 @@ def device_claim(request):
 
 @auth_required
 def device_detail(request, device_id):
+    return _render(request, 'device_detail', {'device_id': str(device_id)})
+
+
+@auth_required
+def live_page(request, device_id):
     return _render(request, 'device_detail', {'device_id': str(device_id)})
 
 
@@ -186,134 +158,313 @@ def audit_logs(request):
     return _render(request, 'audit_logs')
 
 
-@auth_required
-def live_page(request, device_id):
-    """Trang xem trực tiếp: chỉ render khung; JS poll API device-live (tên, mã, trạng thái, quyền truy cập do API kiểm tra)."""
-    return render(request, 'account/live.html', {'device_id': str(device_id)})
+# ---------- DEMO log hệ thống (công khai khi DEBUG): khung + guard; dữ liệu ở sysview.py ----------
+def _require_demo_logs(request):
+    """Chỉ bật khi settings.DEMO_LOGS_ENABLED; khi DEBUG=False chỉ admin đã đăng nhập xem được."""
+    if not getattr(dj_settings, 'DEMO_LOGS_ENABLED', False):
+        raise Http404()
+    if not dj_settings.DEBUG:
+        user = getattr(request, 'user', None)
+        if not (user and user.is_authenticated and _is_admin(user)):
+            raise Http404()
 
 
-# ====================== MQTT (server-to-server, không phải route cho người dùng) ======================
-def _mqtt_webhook_authorized(request) -> bool:
-    """Broker phải gửi header X-Webhook-Secret khớp settings.MQTT_WEBHOOK_SECRET.
-    Chưa cấu hình secret: chỉ bỏ qua kiểm tra khi DEBUG, còn lại từ chối (fail-closed)."""
-    secret = getattr(dj_settings, 'MQTT_WEBHOOK_SECRET', None)
-    if not secret:
-        # Fail-closed: chỉ cho qua khi DEBUG (dev/test). Production thiếu secret -> từ chối.
-        if dj_settings.DEBUG:
-            logger.warning('MQTT_WEBHOOK_SECRET chưa được đặt: webhook MQTT không được bảo vệ (DEBUG).')
-            return True
-        logger.error('MQTT_WEBHOOK_SECRET chưa được đặt: từ chối mọi webhook MQTT.')
-        return False
-    return services.safe_eq(request.META.get('HTTP_X_WEBHOOK_SECRET', ''), secret)
+def public_system_logs(request):
+    _require_demo_logs(request)
+    return render(request, 'public/system_logs.html', {})
 
 
-# ====================== MQTT: WEBHOOK XÁC THỰC THIẾT BỊ (gọi bởi plugin auth của broker) ======================
-@csrf_exempt
-@require_POST
-def mqtt_auth_webhook(request):
-    """
-    Endpoint cho plugin HTTP-auth của broker (vd. mosquitto-go-auth) gọi vào để kiểm
-    tra 1 thiết bị có được phép kết nối/publish/subscribe hay không.
-
-    Thiết bị connect vào broker với username=device_code, password=provisioning_secret
-    (secret gốc thiết bị đã lưu lúc provisioning - KHÔNG lưu thêm secret riêng cho MQTT,
-    tái dùng đúng Device.provisioning_secret_hash đã có).
-
-    Trả 200 = cho phép, 401/403 = từ chối. KHÔNG dùng @auth_required (đây không phải
-    người dùng đăng nhập) và bỏ qua CSRF (broker gọi server-to-server, không có session).
-    Cần chặn endpoint này ở tầng mạng/tường lửa chỉ cho phép broker gọi vào, không public.
-    """
-    if not _mqtt_webhook_authorized(request):
-        return JsonResponse({'ok': False}, status=403)
-    username = (request.POST.get('username') or '').strip()
-    password = request.POST.get('password') or ''
-    if not username or not password:
-        return JsonResponse({'ok': False}, status=401)
-
-    # Tài khoản server (publisher/subscriber của Django): so với MQTT_PUBLISHER_PASSWORD.
-    if username in getattr(dj_settings, 'MQTT_TRUSTED_USERNAMES', []):
-        expected = services.MQTT_PUBLISHER_PASSWORD
-        if services.safe_eq(password, expected):
-            return JsonResponse({'ok': True})
-        _audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
-               username_attempt=username[:150])
-        return JsonResponse({'ok': False}, status=401)
-
-    device = Device.objects.filter(device_code=username).first()
-    if not device or not services.safe_eq(device.provisioning_secret_hash, services.hash_token(password)):
-        _audit(request, 'MQTT_AUTH_DENIED', success=False, severity='warning',
-               username_attempt=username[:150])
-        return JsonResponse({'ok': False}, status=401)
-
-    return JsonResponse({'ok': True})
+# ====================== API xem hệ thống (demo, chỉ GET) - gộp từ sysview.py ======================
+SECRET_RE = re.compile(r'(hash|secret|password|token|embedding|public_key|fcm|pepper|key_enc|encrypted)', re.I)
+ENV_KEYS = ['DJANGO_SECRET_KEY', 'FERNET_KEY', 'SHARE_CODE_PEPPER', 'MQTT_HOST', 'MQTT_WEBHOOK_SECRET',
+            'EMAIL_HOST_USER', 'WEBAUTHN_RP_ID', 'SUPABASE_URI']   # chỉ báo "đã cấu hình hay chưa", không lộ giá trị
 
 
-@csrf_exempt
-@require_POST
-def mqtt_acl_webhook(request):
-    """ACL cho broker (mosquitto-go-auth: acc 1=read, 2=write, 3=readwrite, 4=subscribe).
-    Thiết bị chỉ được: đọc/subscribe smartlock/<device_code>/cmd và ghi vào
-    smartlock/<device_code>/{status,ack,event}. Không được đụng topic của thiết bị khác.
-    Các tài khoản tin cậy (publisher/subscriber của server) khai báo trong MQTT_TRUSTED_USERNAMES."""
-    if not _mqtt_webhook_authorized(request):
-        return JsonResponse({'ok': False}, status=403)
-    username = (request.POST.get('username') or '').strip()
-    topic = (request.POST.get('topic') or '').strip()
+def _iso(v):
+    return v.isoformat() if v else None
+
+
+def _int(v, d, lo=1, hi=500):
     try:
-        acc = int(request.POST.get('acc') or 0)
-    except ValueError:
-        acc = 0
-    if not username or not topic:
-        return JsonResponse({'ok': False}, status=403)
-
-    if username in getattr(dj_settings, 'MQTT_TRUSTED_USERNAMES', []):
-        return JsonResponse({'ok': True})
-
-    if not Device.objects.filter(device_code=username).exists():
-        return JsonResponse({'ok': False}, status=403)
-
-    parts = topic.split('/')
-    if len(parts) != 3 or parts[0] != 'smartlock' or parts[1] != username:
-        return JsonResponse({'ok': False}, status=403)
-    channel = parts[2]
-    can_read = acc in (1, 3, 4) and channel == 'cmd'
-    can_write = acc in (2, 3) and channel in ('status', 'ack', 'event')
-    if (acc in (1, 4) and can_read) or (acc == 2 and can_write):
-        return JsonResponse({'ok': True})
-    return JsonResponse({'ok': False}, status=403)
+        return max(lo, min(hi, int(v)))
+    except (TypeError, ValueError):
+        return d
 
 
+def _guard(view):
+    def wrapper(request, *a, **kw):
+        _require_demo_logs(request)
+        return view(request, *a, **kw)
+    wrapper.__name__ = view.__name__
+    return require_GET(wrapper)
 
 
+def _channel(a):
+    ua = (a.user_agent or '').lower()
+    if a.kind in ('STATUS', 'NFC') or a.reader_id:
+        return 'thiết bị'
+    if any(x in ua for x in ('okhttp', 'dart', 'android', 'cfnetwork')):
+        return 'app'
+    return 'web' if ua else 'hệ thống'
 
 
+@_guard
+def overview_api(request):
+    now = timezone.now()
+    t0 = time.perf_counter()
+    with connection.cursor() as c:
+        c.execute('SELECT 1')
+    latency = round((time.perf_counter() - t0) * 1000, 1)
+    d24 = now - timedelta(hours=24)
+
+    latest = {}
+    for s in (ActivityLog.objects.filter(kind='STATUS').order_by('device_id', '-recorded_at')
+              .distinct('device_id') if connection.vendor == 'postgresql' else []):
+        latest[s.device_id] = s
+    devices = []
+    for d in Device.objects.select_related('owner').order_by('name'):
+        s = latest.get(d.id)
+        if s is None and connection.vendor != 'postgresql':
+            s = (ActivityLog.objects.filter(kind='STATUS', device=d).order_by('-recorded_at').first())
+        age = (now - d.last_seen_at).total_seconds() if d.last_seen_at else None
+        devices.append({
+            'id': str(d.id), 'name': d.name, 'code': d.device_code, 'mode': d.device_mode, 'status': d.status,
+            'owner': d.owner.username if d.owner else None, 'battery': d.battery_level,
+            'fw': d.firmware_version, 'mac': d.mac_address, 'location': d.location,
+            'lock': s.lock_state if s else None, 'tamper': bool(s and s.tamper_detected),
+            'temp': str(s.temperature) if s and s.temperature is not None else None,
+            'signal': s.signal_strength if s else None, 'last_seen': _iso(d.last_seen_at),
+            'stale': age is None or age > services.OFFLINE_AFTER_SECONDS,
+            'radio': [n for n, f in (('BLE', d.bluetooth_enabled), ('WiFi', d.wifi_enabled),
+                                      ('NFC', d.nfc_enabled)) if f],
+        })
+
+    kinds = dict(ActivityLog.objects.values_list('kind').annotate(n=Count('id')))
+    kinds24 = dict(ActivityLog.objects.filter(created_at__gte=d24).values_list('kind').annotate(n=Count('id')))
+    fail24 = dict(ActivityLog.objects.filter(created_at__gte=d24, success=False)
+                  .values_list('kind').annotate(n=Count('id')))
+    hourly = {}
+    for r in (ActivityLog.objects.filter(created_at__gte=d24).annotate(h=TruncHour('created_at'))
+              .values('h', 'kind').annotate(n=Count('id'))):
+        hourly.setdefault(r['kind'], {})[r['h']] = r['n']
+    hour0 = now.replace(minute=0, second=0, microsecond=0)
+    hours = [hour0 - timedelta(hours=i) for i in range(23, -1, -1)]
+    series = {k: [v.get(h, 0) for h in hours] for k, v in hourly.items()}
+
+    users = {
+        'total': User.objects.count(), 'active': User.objects.filter(is_active=True).count(),
+        'admin': User.objects.filter(is_admin=True).count(),
+        'two_fa': User.objects.filter(two_fa_enabled=True).count(),
+        'unverified': User.objects.filter(email_verified=False).count(),
+        'locked': User.objects.filter(login_locked_until__gt=now).count(),
+        'sessions_active': MobileSession.objects.filter(revoked_at__isnull=True, expires_at__gt=now).count(),
+    }
+    return JsonResponse({
+        'server_time': now.isoformat(),
+        'db': {'vendor': connection.vendor, 'name': connection.settings_dict.get('NAME') and
+               os.path.basename(str(connection.settings_dict['NAME'])), 'latency_ms': latency,
+               'tables': len([m for m in apps.get_models() if not m._meta.proxy])},
+        'config': {k: bool(os.environ.get(k)) for k in ENV_KEYS},
+        'devices': devices, 'users': users,
+        'commands': dict(DeviceCommand.objects.values_list('status').annotate(n=Count('id'))),
+        'commands24': DeviceCommand.objects.filter(created_at__gte=d24).count(),
+        'kinds': kinds, 'kinds24': kinds24, 'fail24': fail24,
+        'hours': [h.strftime('%H:00') for h in hours], 'series': series,
+    })
 
 
+@_guard
+def events_api(request):
+    g = request.GET
+    qs = ActivityLog.objects.select_related('device', 'actor_user', 'target_user', 'user')
+    if g.get('kind') in ('AUDIT', 'NFC', 'ACCESS', 'STATUS'):
+        qs = qs.filter(kind=g['kind'])
+    if g.get('severity'):
+        qs = qs.filter(severity=g['severity'])
+    if g.get('ok') in ('0', '1'):
+        qs = qs.filter(success=g['ok'] == '1')
+    if g.get('device'):
+        qs = qs.filter(device_id=g['device'])
+    if g.get('method'):
+        qs = qs.filter(method=g['method'])
+    if g.get('hours'):
+        qs = qs.filter(created_at__gte=timezone.now() - timedelta(hours=_int(g['hours'], 24, 1, 24 * 365)))
+    if g.get('q'):
+        q = g['q'].strip()[:80]
+        qs = qs.filter(Q(action__icontains=q) | Q(username_attempt__icontains=q) | Q(reason__icontains=q)
+                       | Q(event_type__icontains=q) | Q(ip_address__startswith=q) | Q(device__name__icontains=q)
+                       | Q(actor_user__username__icontains=q) | Q(target_user__username__icontains=q)
+                       | Q(user__username__icontains=q))
+    total = qs.count()
+    size, page = _int(g.get('size'), 50, 10, 200), _int(g.get('page'), 1, 1, 100000)
+    rows = []
+    for a in qs.order_by('-created_at')[(page - 1) * size: page * size]:
+        who = a.actor_user or a.user or a.target_user
+        detail = a.metadata or a.raw_payload
+        rows.append({
+            'id': str(a.id), 'time': _iso(a.created_at), 'kind': a.kind, 'ok': a.success, 'sev': a.severity,
+            'who': who.username if who else (a.username_attempt or None),
+            'device': a.device.name if a.device else None, 'ip': a.ip_address, 'channel': _channel(a),
+            'what': a.action or a.event_type or a.method or a.lock_state or '',
+            'reason': a.reason, 'ua': (a.user_agent or '')[:160], 'detail': detail,
+        })
+    return JsonResponse({'total': total, 'page': page, 'size': size, 'rows': rows})
 
 
+# ------------------------------------------------------------------------------------ trình duyệt database
+def _models():
+    return {m._meta.db_table: m for m in apps.get_models() if not m._meta.proxy}
 
 
+def _cell(name, v):
+    if v is None:
+        return None
+    if SECRET_RE.search(name):
+        return '‹đã che›'
+    if isinstance(v, (bytes, memoryview)):
+        return '‹binary›'
+    if hasattr(v, 'isoformat'):
+        return v.isoformat()
+    return v if isinstance(v, (int, float, bool, dict, list)) else str(v)[:500]
 
 
+@_guard
+def db_tables_api(request):
+    out = []
+    for t, m in sorted(_models().items()):
+        out.append({'table': t, 'model': m._meta.label, 'rows': m._base_manager.count(),
+                    'cols': len(m._meta.concrete_fields)})
+    return JsonResponse({'tables': out})
 
 
+OPS = {'eq': 'exact', 'contains': 'icontains', 'gt': 'gt', 'lt': 'lt', 'starts': 'istartswith'}
 
 
+@_guard
+def db_rows_api(request):
+    g = request.GET
+    m = _models().get(g.get('table'))
+    if not m:
+        return JsonResponse({'error': 'Bảng không tồn tại'}, status=404)
+    fields = {f.attname: f for f in m._meta.concrete_fields}
+    cols = list(fields)
+    qs = m._base_manager.all()
+    errors = []
+    for spec in g.getlist('f')[:8]:                       # f=cột:phép:giá trị
+        col, _, rest = spec.partition(':')
+        op, _, val = rest.partition(':')
+        f = fields.get(col)
+        if not f or SECRET_RE.search(col):
+            errors.append(f'Bỏ qua bộ lọc {col}')
+            continue
+        try:
+            if op == 'null':
+                qs = qs.filter(**{f.name + '__isnull': True})
+            elif op == 'notnull':
+                qs = qs.filter(**{f.name + '__isnull': False})
+            elif op in OPS:
+                qs = qs.filter(**{f'{f.name}__{OPS[op]}': val})
+        except Exception:
+            errors.append(f'Giá trị không hợp lệ cho {col}')
+    q = (g.get('q') or '').strip()[:80]
+    if q:
+        text = [f.name for f in m._meta.concrete_fields if f.get_internal_type() in ('CharField', 'TextField', 'EmailField')
+                and not SECRET_RE.search(f.name)]
+        cond = Q()
+        for n in text:
+            cond |= Q(**{n + '__icontains': q})
+        qs = qs.filter(cond) if text else qs.none()
+    order = g.get('order') or ''
+    desc = order.startswith('-')
+    if order.lstrip('-') in fields:
+        qs = qs.order_by(('-' if desc else '') + fields[order.lstrip('-')].name)
+    else:
+        qs = qs.order_by(m._meta.pk.name)
+    total = qs.count()
+    size, page = _int(g.get('size'), 50, 10, 200), _int(g.get('page'), 1, 1, 1000000)
+    try:
+        data = list(qs.values_list(*cols)[(page - 1) * size: page * size])
+    except Exception as e:
+        return JsonResponse({'error': str(e)[:200]}, status=400)
+    return JsonResponse({
+        'table': g['table'], 'columns': [{'name': c, 'type': fields[c].get_internal_type(),
+                                          'secret': bool(SECRET_RE.search(c))} for c in cols],
+        'rows': [[_cell(c, v) for c, v in zip(cols, r)] for r in data],
+        'total': total, 'page': page, 'size': size, 'warnings': errors})
 
 
+# ------------------------------------------------------------------------------------ API / MQTT / phiên
+def _walk(patterns, prefix=''):
+    for p in patterns:
+        if isinstance(p, URLResolver):
+            yield from _walk(p.url_patterns, prefix + str(p.pattern))
+        elif isinstance(p, URLPattern):
+            cb = p.callback
+            wrapped = getattr(cb, '__wrapped__', cb)
+            doc = (wrapped.__doc__ or '').strip().split('\n')[0][:140]
+            yield '/' + prefix + str(p.pattern), p.name or '', getattr(wrapped, '__module__', ''), doc
 
 
+@_guard
+def api_api(request):
+    """Danh mục endpoint /api/** lấy từ URL resolver (luôn khớp code thật) + health."""
+    groups = {}
+    for path, name, mod, doc in _walk(get_resolver().url_patterns):
+        if not path.startswith('/api/'):
+            continue
+        seg = path.split('/')[2] if path.count('/') > 2 else 'khác'
+        groups.setdefault(seg, []).append({'path': path.replace('^', '').replace('$', ''), 'name': name,
+                                           'module': mod.replace('smartlock.api.', ''), 'doc': doc})
+    kinds = {'app': 'App + Web (Bearer / cookie + CSRF)', 'device': 'Thiết bị (X-Device-Code + Secret)',
+             'webhooks': 'Broker MQTT gọi vào', 'system': 'Công khai (health, config)'}
+    since = timezone.now() - timedelta(hours=24)
+    health = None
+    try:
+        t0 = time.perf_counter()
+        with connection.cursor() as c:
+            c.execute('SELECT 1')
+        health = {'status': 'up', 'ms': round((time.perf_counter() - t0) * 1000, 1)}
+    except Exception as e:
+        health = {'status': 'down', 'error': str(e)[:120]}
+    top = (ActivityLog.objects.filter(kind='AUDIT', created_at__gte=since).values('action')
+           .annotate(n=Count('id'), bad=Count('id', filter=Q(success=False))).order_by('-n')[:15])
+    return JsonResponse({'groups': [{'key': k, 'label': kinds.get(k, k), 'routes': sorted(v, key=lambda r: r['path'])}
+                                    for k, v in sorted(groups.items())],
+                         'health': health, 'top_actions_24h': list(top)})
 
-# ====================== PUBLIC DEMO: SYSTEM LOGS REAL-TIME (KHÔNG YÊU CẦU ĐĂNG NHẬP) ======================
-# CẢNH BÁO BẢO MẬT: view này show TOÀN BỘ log của TOÀN HỆ THỐNG (mọi user, mọi thiết bị),
-# cho bất kỳ ai có URL - KHÔNG cần đăng nhập, KHÔNG lọc theo owner. Chỉ dùng khi demo/bảo
-# vệ đồ án trên máy local.
-#
-# "Real-time" ở đây = JS phía client fetch() JSON endpoint bên dưới mỗi 2 giây rồi tự vẽ
-# lại DOM/biểu đồ (KHÔNG F5 trang) - không dùng WebSocket/Django Channels vì project đang
-# chạy WSGI (runserver bình thường), không cần đổi sang ASGI + thêm Redis chỉ để demo.
-# Polling 2s là đủ "độ trễ thấp" cho mục đích trình bày, không cần hạ tầng phức tạp hơn.
 
+@_guard
+def channels_api(request):
+    """Lệnh MQTT/điều khiển, vòng ping hai chiều và phiên đăng nhập app."""
+    now = timezone.now()
+    since = now - timedelta(hours=24)
+    cmds = DeviceCommand.objects.filter(created_at__gte=since)
+    by = [{'type': r['command_type'], 'status': r['status'], 'n': r['n']}
+          for r in cmds.values('command_type', 'status').annotate(n=Count('id'))]
+    lat = (DeviceCommand.objects.filter(acknowledged_at__isnull=False, created_at__gte=since)
+           .annotate(d=F('acknowledged_at') - F('created_at')).aggregate(a=Avg('d'))['a'])
+    recent = [{'time': _iso(c.created_at), 'device': c.device.name, 'type': c.command_type, 'status': c.status,
+               'by': c.issued_by.username, 'ack': _iso(c.acknowledged_at), 'expires': _iso(c.expires_at),
+               'payload': c.payload}
+              for c in DeviceCommand.objects.select_related('device', 'issued_by').order_by('-created_at')[:60]]
+    sessions = [{'user': s.user.username, 'platform': s.platform, 'app': s.app_version, 'device_name': s.device_name,
+                 'ip': s.ip_address, 'push': bool(s.fcm_token) and s.push_enabled, 'last_used': _iso(s.last_used_at),
+                 'expires': _iso(s.expires_at), 'revoked': bool(s.revoked_at)}
+                for s in MobileSession.objects.select_related('user').order_by('-last_used_at')[:60]]
+    return JsonResponse({
+        'mqtt': {'host_set': bool(os.environ.get('MQTT_HOST')), 'webhook_secret_set': bool(os.environ.get('MQTT_WEBHOOK_SECRET')),
+                 'topic_prefix': os.environ.get('MQTT_TOPIC_PREFIX') or None},
+        'fcm_set': bool(os.environ.get('FIREBASE_CREDENTIALS_JSON') or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')),
+        'offline_after_s': services.OFFLINE_AFTER_SECONDS,
+        'ack_latency_s': round(lat.total_seconds(), 2) if lat else None,
+        'by': by, 'recent': recent, 'sessions': sessions})
+
+
+# ------------------------------------------------------------------------------------ chức năng quản trị (chỉ đọc)
+# Dùng lại serializer của manage_sys nên không bao giờ lộ mật khẩu / hash PIN / UID thẻ / embedding / secret.
+
+
+# ====================== API log demo (chuyển từ views.py sang đây: view không còn xử lý dữ liệu) ======================
 def _bucketed_counts(queryset, dt_field, minutes=20):
     """Đếm số bản ghi theo từng phút trong `minutes` phút gần nhất, KHÔNG bị hụt phút nào
     (phút không có dữ liệu vẫn trả về 0) - dùng để vẽ biểu đồ đường theo thời gian."""
@@ -352,25 +503,6 @@ def _bucketed_avg(queryset, dt_field, value_field, minutes=20):
         v = avgs.get(m)
         data.append(round(v, 1) if v is not None else None)
     return labels, data
-
-
-def _require_demo_logs(request):
-    """Trang log công khai chỉ bật khi settings.DEMO_LOGS_ENABLED = True (mặc định = DEBUG).
-    Khi DEBUG=False (production) mà vẫn bật cờ này thì chỉ quản trị viên đã đăng nhập mới xem được,
-    tránh lộ log toàn hệ thống cho người lạ."""
-    if not getattr(dj_settings, 'DEMO_LOGS_ENABLED', False):
-        raise Http404()
-    if not dj_settings.DEBUG:
-        user = getattr(request, 'user', None)
-        if not (user and user.is_authenticated and _is_admin(user)):
-            raise Http404()
-
-
-def public_system_logs(request):
-    """Trang khung (shell) - không truyền dữ liệu log qua context. Toàn bộ số liệu/log/
-    biểu đồ được JS nạp qua public_system_logs_api() và tự làm mới liên tục."""
-    _require_demo_logs(request)
-    return render(request, 'public/system_logs.html', {})
 
 
 _LOGIN_OK_ACTIONS = ('LOGIN',)

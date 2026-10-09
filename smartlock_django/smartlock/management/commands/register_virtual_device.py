@@ -7,7 +7,8 @@ giống 1 khoá mới xuất xưởng. Sau đó user claim bằng Device code + 
     python manage.py register_virtual_device --all          # đăng ký mọi thiết bị trong virtual_device/devices
     python manage.py register_virtual_device --list
 
-Chạy lại được: nếu khoá đã có chủ thì CHỈ cập nhật thông tin phần cứng (không đụng owner/status).
+Chạy lại được: nếu khoá đã có chủ thì CHỈ cập nhật MAC/firmware (KHÔNG đụng owner/status/secret/mode).
+Khoá chưa có chủ thì cập nhật cả secret để nạp lại identity mới.
 Chỉ chạy khi DEBUG=True (file identity chứa secret dạng thô).
 """
 import json
@@ -31,7 +32,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opts):
         if opts['list']:
-            for d in Device.objects.filter(device_mode='simulated').order_by('created_at'):
+            for d in Device.objects.filter(device_mode='simulated').select_related('owner').order_by('created_at'):
                 self.stdout.write(f'{d.device_code}  {d.status:12} owner={d.owner.email if d.owner_id else "-"}  {d.name}')
             return
         if not settings.DEBUG:
@@ -63,8 +64,15 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(
                 f'Đã đăng ký {code} (provisioning). Chạy thiết bị ảo rồi claim bằng secret trong device_info.txt.'))
             return
+        if device.owner_id:     # đã có chủ: không đè secret chủ đã xoay, không đổi chế độ khoá thật
+            hw.pop('provisioning_secret_hash')
+            hw.pop('device_mode')
         for k, v in hw.items():
             setattr(device, k, v)
         device.save(update_fields=list(hw) + ['updated_at'])
-        state = f'owner={device.owner.email}' if device.owner_id else f'status={device.status}'
-        self.stdout.write(self.style.WARNING(f'{code} đã tồn tại ({state}): chỉ cập nhật secret/MAC/firmware.'))
+        if device.owner_id:
+            self.stdout.write(self.style.WARNING(
+                f'{code} đã có chủ ({device.owner.email}): chỉ cập nhật MAC/firmware.'))
+        else:
+            self.stdout.write(self.style.WARNING(
+                f'{code} đã tồn tại (status={device.status}): cập nhật secret/MAC/firmware.'))

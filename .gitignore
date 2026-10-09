@@ -17,5 +17,6 @@ env/
 *.log
 .DS_Store
 db.sqlite3
+replica.sqlite3
 
 # staticfiles/ được commit để Vercel phục vụ (whitenoise), nên không ignore

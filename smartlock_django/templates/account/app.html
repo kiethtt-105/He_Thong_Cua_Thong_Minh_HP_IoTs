@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="csrf-token" content="{{ csrf_token }}">
+<title>Smart Lock</title>
+<style>
+:root{--bg:#f4f6fb;--card:#fff;--ink:#0f172a;--mut:#64748b;--line:#e5e9f2;--a:#6366f1;--b:#06b6d4;--ok:#10b981;--bad:#ef4444;--warn:#f59e0b;--r:18px;--sh:0 8px 30px rgba(15,23,42,.07)}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1020;--card:#131a2e;--ink:#e8ecf8;--mut:#8b97b5;--line:#222c47;--sh:0 8px 30px rgba(0,0,0,.35)}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;height:100%}
+body{font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);padding:env(safe-area-inset-top) 0 0}
+a{color:var(--a);text-decoration:none}h1{font-size:22px;margin:0}h2{font-size:16px;margin:0 0 12px}.mut{color:var(--mut)}.sm{font-size:13px}
+.shell{display:flex;min-height:100%}.side{width:240px;padding:20px 14px;border-right:1px solid var(--line);position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;padding:4px 10px 18px}
+.logo{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,var(--a),var(--b));display:grid;place-items:center;color:#fff}
+.nav a{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:12px;color:var(--mut);font-weight:600}
+.nav a.on,.nav a:hover{background:linear-gradient(135deg,rgba(99,102,241,.16),rgba(6,182,212,.12));color:var(--ink)}
+.badge{margin-left:auto;background:var(--bad);color:#fff;border-radius:99px;font-size:11px;padding:1px 7px}
+main{flex:1;min-width:0;padding:26px clamp(14px,3vw,36px) 100px;max-width:1180px;margin:0 auto;width:100%}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+.grid{display:grid;gap:14px}.g2{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}.g4{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:var(--sh)}
+.stat b{display:block;font-size:28px;line-height:1.1}.stat span{color:var(--mut);font-size:13px}
+.btn{border:0;border-radius:12px;padding:10px 16px;font:600 14px inherit;cursor:pointer;background:linear-gradient(135deg,var(--a),var(--b));color:#fff;display:inline-flex;align-items:center;gap:8px;transition:.15s}
+.btn:hover{filter:brightness(1.08);transform:translateY(-1px)}.btn:disabled{opacity:.5;pointer-events:none}
+.btn.g{background:transparent;color:var(--ink);border:1px solid var(--line)}.btn.d{background:var(--bad)}.btn.s{padding:6px 11px;font-size:13px}
+input,select{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;margin:5px 0 12px;outline:0}
+input:focus,select:focus{border-color:var(--a);box-shadow:0 0 0 3px rgba(99,102,241,.2)}label{font-size:13px;font-weight:600;color:var(--mut)}
+.row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}.row:last-child{border:0}.row>.f{flex:1;min-width:0}
+.pill{font-size:12px;font-weight:700;padding:3px 10px;border-radius:99px;background:rgba(100,116,139,.15);color:var(--mut)}
+.pill.ok{background:rgba(16,185,129,.15);color:var(--ok)}.pill.bad{background:rgba(239,68,68,.15);color:var(--bad)}.pill.warn{background:rgba(245,158,11,.18);color:var(--warn)}
+.lock{width:64px;height:64px;border-radius:20px;display:grid;place-items:center;background:rgba(100,116,139,.14)}.lock.locked{background:rgba(16,185,129,.16);color:var(--ok)}.lock.unlocked{background:rgba(245,158,11,.18);color:var(--warn)}
+.tabs{display:flex;gap:6px;overflow-x:auto;margin-bottom:16px;padding-bottom:2px}.tabs a{padding:8px 15px;border-radius:99px;border:1px solid var(--line);color:var(--mut);font-weight:600;white-space:nowrap;cursor:pointer}.tabs a.on{background:var(--a);color:#fff;border-color:var(--a)}
+.bars{display:flex;align-items:flex-end;gap:10px;height:110px}.bars i{flex:1;border-radius:8px 8px 3px 3px;background:linear-gradient(var(--a),var(--b));min-height:4px;position:relative}.bars i em{position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);font-size:11px;color:var(--mut);font-style:normal}
+.auth{min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(900px 500px at 10% -10%,rgba(99,102,241,.35),transparent),radial-gradient(800px 500px at 100% 110%,rgba(6,182,212,.3),transparent),var(--bg)}
+.auth .card{width:min(420px,100%);padding:28px}.auth h1{margin:14px 0 4px}.err{background:rgba(239,68,68,.12);color:var(--bad);padding:10px 13px;border-radius:12px;margin-bottom:12px;font-size:14px}
+.modal{position:fixed;inset:0;background:rgba(5,8,20,.55);backdrop-filter:blur(4px);display:grid;place-items:center;padding:16px;z-index:50}.modal .card{width:min(460px,100%);max-height:90vh;overflow:auto}
+#toast{position:fixed;left:50%;bottom:calc(86px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:60;display:grid;gap:8px}
+#toast div{background:#111827;color:#fff;padding:11px 18px;border-radius:14px;box-shadow:var(--sh);animation:up .25s}#toast .e{background:var(--bad)}@keyframes up{from{opacity:0;transform:translateY(10px)}}
+.empty{text-align:center;color:var(--mut);padding:30px 10px}.pin{font:800 34px ui-monospace,monospace;letter-spacing:8px;text-align:center;padding:16px;background:var(--bg);border-radius:14px}
+.bottom{display:none}
+@media(max-width:820px){.side{display:none}main{padding-bottom:110px}.bottom{display:flex;position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom));z-index:40;justify-content:space-around}
+.bottom a{display:grid;justify-items:center;font-size:11px;gap:2px;color:var(--mut);padding:5px 10px;border-radius:12px;font-weight:600;position:relative}.bottom a.on{color:var(--a)}.bottom .badge{position:absolute;top:0;right:2px;margin:0}}
+</style>
+</head>
+<body>
+<div id="app"></div><div id="toast"></div>
+<script>
+const BOOT={page:"{{ page|default:''|escapejs }}",token:"{{ token|default:''|escapejs }}",uid:"{{ uid|default:''|escapejs }}",next:"{{ next|default:''|escapejs }}",disabled:{{ disabled|yesno:"true,false" }}};
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const IC={home:'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',lock:'M6 10V7a6 6 0 0 1 12 0v3M5 10h14v11H5z',card:'M3 6h18v12H3zM3 10h18',bell:'M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8M10 20a2 2 0 0 0 4 0',user:'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21a8 8 0 0 1 16 0',clock:'M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18',shield:'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z',open:'M6 10V7a6 6 0 0 1 11-3M5 10h14v11H5z'};
+const ic=(n,s=20)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${IC[n]||IC.home}"/></svg>`;
+const CSRF=$('meta[name=csrf-token]').content;
+async function api(m,u,b){const o={method:m,credentials:'same-origin',headers:{'X-CSRFToken':CSRF,Accept:'application/json'}};if(b!==undefined){o.headers['Content-Type']='application/json';o.body=JSON.stringify(b)}
+ try{const r=await fetch('/api/app/'+u,o);if(r.status===304)return{ok:true,status:304,d:{}};const d=await r.json().catch(()=>({}));if(r.status===401&&S.user){location='/login/';}return{ok:!!d.ok,status:r.status,d,r}}catch(e){return{ok:false,d:{error:{message:'Không kết nối được máy chủ.'}}}}}
+const em=r=>r.d?.error?.message||'Không thực hiện được.';
+function toast(m,e){const t=document.createElement('div');t.textContent=m;if(e)t.className='e';$('#toast').append(t);setTimeout(()=>t.remove(),3800)}
+function modal(html){closeModal();const m=document.createElement('div');m.className='modal';m.innerHTML=`<div class="card">${html}</div>`;m.onclick=e=>{if(e.target===m)closeModal()};document.body.append(m);const i=m.querySelector('input');i&&i.focus()}
+const closeModal=()=>document.querySelectorAll('.modal').forEach(x=>x.remove());
+const ago=t=>{if(!t)return'—';const s=(Date.now()-new Date(t))/1e3;return s<60?'vừa xong':s<3600?Math.floor(s/60)+' phút trước':s<86400?Math.floor(s/3600)+' giờ trước':new Date(t).toLocaleDateString('vi-VN')};
+const fdt=t=>t?new Date(t).toLocaleString('vi-VN'):'Không giới hạn';
+let S={},ETAG=null,ROUTE={},TAB='control',LIVE=null,CAT=null;
+const dev=id=>(S.devices||[]).find(d=>d.id===id);
+const lockTxt={locked:'Đã khóa',unlocked:'Đã mở',unknown:'Chưa rõ'};
+const MTH={nfc:'Thẻ NFC',pin:'Mã PIN',face:'Khuôn mặt',phone:'Điện thoại',app:'Ứng dụng',ble:'Bluetooth',remote:'Từ xa'};
+
+/* ---------- router ---------- */
+const AUTH={'/login/':'login','/register/':'register','/password-reset/':'reset','/logout/':'logout'};
+function match(p){if(AUTH[p])return{page:AUTH[p]};let m;
+ if(m=p.match(/^\/reset-password\/([^/]+)\/([^/]+)\/$/))return{page:'confirm',uid:m[1],token:m[2]};
+ if(m=p.match(/^\/verify-email\/([^/]+)\/$/))return{page:'verify',token:m[1]};
+ if(m=p.match(/^\/devices\/([0-9a-f-]{36})\/(live\/)?$/))return{page:'device',id:m[1],live:!!m[2]};
+ const T={'/':'home','/devices/':'devices','/devices/claim/':'devices','/nfc/tags/':'cards','/nfc/reader/':'cards','/access/door-pins/':'devices','/access/face-profiles/':'devices','/access/history/':'history','/shares/':'shares','/notifications/':'notes','/profile/':'profile','/audit/logs/':'audit'};
+ return{page:T[p]||'home',claim:p==='/devices/claim/'}}
+function go(u,replace){history[replace?'replaceState':'pushState'](0,'',u);route()}
+document.addEventListener('click',e=>{const a=e.target.closest('a[data-l]');if(a){e.preventDefault();go(a.getAttribute('href'))}});
+addEventListener('popstate',route);
+async function route(){ROUTE=match(location.pathname);closeModal();if(!AUTH[location.pathname]&&!ROUTE.token&&!S.user){const ok=await load(true);if(!ok){return location.replace('/login/?next='+encodeURIComponent(location.pathname))}}
+ if(S.user&&(AUTH[location.pathname]))return location.replace('/');
+ TAB=ROUTE.live?'control':TAB;clearInterval(LIVE);render();if(ROUTE.claim)claimModal();if(ROUTE.page==='device')startLive();scrollTo(0,0)}
+
+/* ---------- data ---------- */
+async function load(force){const o={method:'GET',credentials:'same-origin',headers:{Accept:'application/json'}};if(ETAG&&!force)o.headers['If-None-Match']=ETAG;
+ try{const r=await fetch('/api/app/snapshot/',o);if(r.status===304)return true;if(!r.ok)return false;const d=await r.json();if(!d.ok)return false;ETAG=r.headers.get('ETag');S=d;return true}catch(e){return false}}
+setInterval(async()=>{if(!S.user||document.hidden||document.querySelector('.modal')||document.activeElement?.matches('input,select'))return;const old=ETAG;if(await load()&&ETAG!==old)render()},3000);
+
+/* ---------- views ---------- */
+const NAV=[['/','home','Tổng quan','home'],['/devices/','devices','Khóa của tôi','lock'],['/nfc/tags/','cards','Thẻ NFC','card'],['/access/history/','history','Lịch sử','clock'],['/notifications/','notes','Thông báo','bell'],['/profile/','profile','Tài khoản','user']];
+function shell(body,title,right=''){const k=ROUTE.page;const nav=NAV.map(([h,p,t,i])=>`<a data-l href="${h}" class="${k===p||(p==='devices'&&k==='device')?'on':''}">${ic(i)}<span>${t}</span>${p==='notes'&&S.unread_count?`<b class="badge">${S.unread_count}</b>`:''}</a>`).join('');
+ const bn=NAV.filter(n=>n[1]!=='cards').map(([h,p,t,i])=>`<a data-l href="${h}" class="${k===p?'on':''}">${ic(i,22)}${t.split(' ')[0]}${p==='notes'&&S.unread_count?`<b class="badge">${S.unread_count}</b>`:''}</a>`).join('');
+ return`<div class="shell"><aside class="side"><div class="brand"><div class="logo">${ic('lock')}</div>Smart Lock</div><nav class="nav">${nav}<a data-l href="/shares/">${ic('shield')}<span>Chia sẻ</span></a><a data-l href="/audit/logs/">${ic('clock')}<span>Nhật ký</span></a></nav></aside>
+ <main><div class="top"><h1>${title}</h1><div>${right}</div></div>${body}</main></div><nav class="bottom">${bn}</nav>`}
+const none=t=>`<div class="empty">${t}</div>`;
+const lockBtns=d=>d.permissions.includes('LOCK')||d.is_owner||d.permissions.includes('UNLOCK')?`<button class="btn s" data-a="cmd" data-id="${d.id}" data-c="LOCK">Khóa</button> <button class="btn s g" data-a="cmd" data-id="${d.id}" data-c="UNLOCK">Mở</button>`:'';
+const devCard=d=>`<div class="card"><div class="row" style="border:0;padding:0 0 12px"><div class="lock ${d.lock_state}">${ic(d.lock_state==='unlocked'?'open':'lock',28)}</div><div class="f"><a data-l href="/devices/${d.id}/"><b>${esc(d.name)}</b></a><div class="mut sm">${esc(d.location||d.device_code)}</div></div><span class="pill ${d.status==='online'?'ok':'bad'}">${d.status==='online'?'Online':'Offline'}</span></div>
+ <div class="sm mut" style="margin-bottom:12px">${lockTxt[d.lock_state]||'Chưa rõ'} · Pin ${d.battery_level??'—'}% · ${ago(d.last_seen_at)}</div>${lockBtns(d)}</div>`;
+const evRow=e=>`<div class="row"><span class="pill ${e.success?'ok':'bad'}">${e.success?'OK':'Từ chối'}</span><div class="f"><b>${esc(e.who||'Không xác định')}</b> <span class="mut sm">· ${MTH[e.method]||esc(e.method)} · ${esc(e.device_name)}</span>${e.reason?`<div class="sm mut">${esc(e.reason)}</div>`:''}</div><span class="mut sm">${ago(e.created_at)}</span></div>`;
+
+
+/* ---------- khung dùng chung: view/lane đăng ký vào V, A, ACT, FORMS ---------- */
+const V={},A={},FORMS={};
+function render(){const p=ROUTE.page;if(A[p]){$('#app').innerHTML=`<div class="auth">${A[p]()}</div>`;if(p==='verify')doVerify();return}
+ const f=document.activeElement;$('#app').innerHTML=V[p]?V[p]():V.home()}
+const mform=(t,body,f,id='')=>modal(`<form data-f="${f}" data-id="${id}"><h2>${t}</h2><div id="err"></div>${body}<div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn g" data-a="close">Hủy</button><button class="btn">OK</button></div></form>`);
+async function after(r,msg,fn){if(r.ok){msg&&toast(msg);closeModal();await load(true);fn&&fn();render();return true}toast(em(r),1);const e=$('#err');if(e)e.innerHTML=`<div class="err">${esc(em(r))}</div>`;return false}
+const ACT={
+close:closeModal,tab(el){TAB=el.dataset.k;render()},
+async del(el){if(el.dataset.t&&!confirm(el.dataset.t))return;const r=await api('DELETE',el.dataset.u);await after(r,'Đã thực hiện',()=>{if(el.dataset.go)go(el.dataset.go)})}
+};
+document.addEventListener('click',e=>{const el=e.target.closest('[data-a]');if(el&&ACT[el.dataset.a]){e.preventDefault();ACT[el.dataset.a](el)}});
+document.addEventListener('submit',async e=>{const f=e.target.closest('[data-f]');if(!f||!FORMS[f.dataset.f])return;e.preventDefault();const btn=f.querySelector('.btn:not(.g)');btn&&(btn.disabled=true);
+ const b=Object.fromEntries(new FormData(f));try{await FORMS[f.dataset.f](b,f.querySelector('#err')||{},f.dataset.id,f)}finally{btn&&(btn.disabled=false)}});
+const b2b=s=>{s=s.replace(/-/g,'+').replace(/_/g,'/');s+='='.repeat((4-s.length%4)%4);const x=atob(s),a=new Uint8Array(x.length);for(let i=0;i<x.length;i++)a[i]=x.charCodeAt(i);return a.buffer};
+const b2s=b=>{let s='';new Uint8Array(b).forEach(c=>s+=String.fromCharCode(c));return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')};
+</script>
+{# Mỗi "lane" là 1 file: auth (chưa đăng nhập) | devices (tổng quan + khóa + PIN + khuôn mặt + NFC) | access (thẻ, lịch sử, chia sẻ, thông báo, nhật ký) | account (hồ sơ + bảo mật) #}
+{% if page == 'login' or page == 'register' or page == 'reset_password' or page == 'verify_email' or page == 'logout' %}
+{% include 'account/lane_auth.html' %}
+{% else %}
+{% include 'account/lane_devices.html' %}
+{% include 'account/lane_access.html' %}
+{% include 'account/lane_account.html' %}
+{% endif %}
+<script>route();</script>
+</body>
+</html>
