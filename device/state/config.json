@@ -1,0 +1,17 @@
+{
+  "hardware": {
+    "mac": "A4:CF:12:2A:52:C2"
+  },
+  "wifi": {
+    "ssid": "MindX Space",
+    "password": ""
+  },
+  "server": {
+    "active": "tunnel",
+    "urls": {
+      "tunnel": "https://d81h6zk7-8000.asse.devtunnels.ms"
+    }
+  },
+  "device_code": "DEV-4C123DBB",
+  "secret": "3q1Z6Vqk0L6XQlCgDkoXpp_m_MWjDq-K"
+}

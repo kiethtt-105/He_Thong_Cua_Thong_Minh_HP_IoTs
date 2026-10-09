@@ -1,4 +1,4 @@
-"""Bộ điều khiển khoá - mô phỏng firmware ESP32: boot, heartbeat, nhận lệnh (HTTP + MQTT), mở khoá theo phán quyết server,
+"""Bộ điều khiển khoá - mô phỏng firmware ESP32: boot, heartbeat, nhận lệnh (HTTP polling + MQTT tuỳ chọn), mở khoá theo phán quyết server,
 kiểm vé offline, hàng đợi sự kiện offline, cảnh báo (TAMPER / FORCED_OPEN / DOOR_LEFT_OPEN), OTA, tự khoá lại."""
 import json
 import random
@@ -6,7 +6,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 
-from . import store, tickets
+from . import netinfo, store, tickets
 from .api import ApiError, DeviceApi, NetError
 from .hal import SimHAL
 from .mqttlink import MqttLink
@@ -23,21 +23,25 @@ class Controller:
         self._stop = threading.Event()
         self._threads = []
         self.mqtt = None
+        self.wifi_live = {}
         self.cfg = store.load_config()
+        self._ensure_mac()
         self.hal = SimHAL(self.cfg['hardware'])
         self.hal.on_door_change = self._on_door
         self.api = DeviceApi(self._creds)
+        self.api.timeout = float(self.cfg['network'].get('http_timeout_seconds') or 10)
         self._runtime_reset()
 
     # ------------------------------------------------------------------ tiện ích
     def _runtime_reset(self):
-        self.sc = {}                      # cấu hình server gửi về (build_config)
+        rt = store.load(store.RUNTIME_PATH, {})
+        self.sc = rt.get('sc') or {}      # cấu hình server gửi về - nạp lại từ flash để sau reboot/mất mạng vẫn biết cờ BLE/NFC...
         self.online, self.auth_failed = False, False
         self.wifi_up = True               # công tắc "Wi-Fi" mô phỏng
         self.offset = 0.0                 # lệch giờ so với server
         self.backoff_until = 0.0
-        self.seen = OrderedDict()
-        self.locked_out = False
+        self.seen = OrderedDict((k, time.time()) for k in (rt.get('seen') or []))   # command_id đã xử lý (sống qua reboot)
+        self.locked_out = bool(rt.get('locked_out'))
         self.last_hb = 0.0
         self.last_error = ''
         self.last_access = None
@@ -69,6 +73,18 @@ class Controller:
         s = self.cfg.get('server') or {}
         return (s.get('urls') or {}).get(s.get('active'), '')
 
+    def _ensure_mac(self):
+        hw = self.cfg['hardware']
+        if not hw.get('mac'):
+            hw['mac'] = 'A4:CF:12:%02X:%02X:%02X' % tuple(random.randint(0, 255) for _ in range(3))
+            store.save_overrides({'hardware': {'mac': hw['mac']}})      # MAC cố định qua các lần chạy (như eFuse)
+
+    def _reload_cfg(self):
+        self.cfg = store.load_config()
+        self._ensure_mac()
+        self.hal.hw = self.cfg['hardware']
+        self.api.timeout = float(self.cfg['network'].get('http_timeout_seconds') or 10)
+
     def _creds(self):
         return self.server_url(), self.cfg.get('device_code', ''), self.cfg.get('secret', '')
 
@@ -88,7 +104,7 @@ class Controller:
         if m.get('enabled'):
             self.mqtt = MqttLink(self)
             self.mqtt.start(m, self.cfg['device_code'], self.cfg['secret'])
-        for fn in (self._hb_loop, self._poll_loop, self._tick_loop):
+        for fn in (self._hb_loop, self._poll_loop, self._tick_loop, self._wifi_loop):
             t = threading.Thread(target=fn, args=(self._stop,), daemon=True)
             t.start()
             self._threads.append(t)
@@ -108,15 +124,18 @@ class Controller:
         self.log('REBOOT...', 'warn')
         self.shutdown()
         time.sleep(1.0)
-        self.cfg = store.load_config()
+        self._reload_cfg()
         self.boot()
 
     def factory_reset(self):
         self.log('FACTORY RESET: xoá cấu hình + hàng đợi -> về chế độ SETUP', 'warn')
         self.shutdown()
-        store.clear_config()
-        self.cfg = store.load_config()
+        store.clear_config()                 # chỉ xoá state/; config.json của bạn được giữ nguyên
+        self._reload_cfg()
         self._runtime_reset()
+        if self.configured():
+            self.log('config.json đã đủ thông tin -> khởi động lại luôn', 'warn')
+            self.boot()
 
     # ------------------------------------------------------------------ setup / provisioning
     def provision(self, d):
@@ -125,46 +144,40 @@ class Controller:
         url = (d.get('server') or '').strip().rstrip('/')
         if url.endswith('/api/device'):
             url = url[:-len('/api/device')]
-        if not ssid:
-            return False, 'Chưa chọn Wi-Fi.'
-        known = {n: sec for n, _, sec in SCAN}
-        if known.get(ssid, True) and len(pw) < 8:
-            return False, f'Không kết nối được Wi-Fi "{ssid}": mật khẩu WPA2 phải từ 8 ký tự.'
+        if self.wifi_host():
+            cur = (netinfo.status(True).get('connected') or {}).get('ssid', '')
+            if cur and ssid and ssid != cur:
+                return False, (f'Giả lập dùng Wi-Fi THẬT của máy, mà máy đang nối "{cur}". Hãy chọn đúng mạng đó '
+                               f'(hoặc đổi Wi-Fi của máy rồi bấm quét lại).')
+            ssid, pw = ssid or cur or 'Ethernet', ''
+        else:
+            if not ssid:
+                return False, 'Chưa chọn Wi-Fi.'
+            known = {n: sec for n, _, sec in SCAN}
+            if known.get(ssid, True) and len(pw) < 8:
+                return False, f'Không kết nối được Wi-Fi "{ssid}": mật khẩu WPA2 phải từ 8 ký tự.'
         if not (url.startswith('http://') or url.startswith('https://')):
             return False, 'Server phải bắt đầu bằng http:// hoặc https://'
         if not code or not secret:
             return False, 'Thiếu mã thiết bị hoặc secret.'
-        old = self.cfg
-        hw = dict(store.DEFAULT_HW)
-        hw.update(old.get('hardware') or {})
-        if not hw.get('mac'):
-            hw['mac'] = 'A4:CF:12:%02X:%02X:%02X' % tuple(random.randint(0, 255) for _ in range(3))
         name = 'vercel' if 'vercel.app' in url else ('tunnel' if 'devtunnels' in url else ('local' if '127.0.0.1' in url or 'localhost' in url else 'server'))
-        mq = d.get('mqtt') or {}
-        cfg = {
-            'wifi': {'ssid': ssid, 'password': pw},
-            'server': {'active': name, 'urls': {name: url}},
-            'device_code': code, 'secret': secret,
-            'mqtt': {'enabled': bool(mq.get('enabled')), 'host': mq.get('host') or 'localhost', 'port': int(mq.get('port') or 8883),
-                     'tls': mq.get('tls', True) is not False, 'tls_insecure': bool(mq.get('tls_insecure')),
-                     'ca_file': mq.get('ca_file') or '', 'publish_telemetry': False},
-            'hardware': hw,
-        }
-        store.save_config(cfg)
-        self.cfg = cfg
+        store.save_overrides({'wifi': {'ssid': ssid, 'password': pw}, 'server': {'active': name, 'urls': {name: url}},
+                              'device_code': code, 'secret': secret})
+        self._reload_cfg()
         self.shutdown()
         self.log(f'Đã lưu cấu hình, kết nối Wi-Fi "{ssid}" OK -> khởi động', 'ok')
         self.boot()
         return True, 'Đã lưu. Khoá đang khởi động và kết nối server...'
 
     def switch_server(self, name, url=None):
-        s = self.cfg.setdefault('server', {'active': '', 'urls': {}})
+        urls = dict((self.cfg.get('server') or {}).get('urls') or {})
         if url:
-            s['urls'][name] = url.rstrip('/')
-        if name not in s['urls']:
+            urls[name] = url.rstrip('/')
+        if name not in urls:
             return False, 'Không có server tên đó.'
-        s['active'] = name
-        store.save_config(self.cfg)
+        store.save_overrides({'server': {'active': name, 'urls': urls}})
+        self._reload_cfg()
+        s = self.cfg['server']
         self.log(f'Đổi server -> {name}: {s["urls"][name]}', 'warn')
         self.auth_failed, self.backoff_until = False, 0
         self._hb_wake.set()
@@ -200,6 +213,10 @@ class Controller:
             self.offset = float(res['unix_time']) - time.time()
         return res
 
+    def _save_runtime(self):
+        with self._mtx:
+            store.save(store.RUNTIME_PATH, {'sc': self.sc, 'locked_out': self.locked_out, 'seen': list(self.seen)[-100:]})
+
     def _apply_config(self, r):
         for k in ('status', 'has_owner', 'wifi_enabled', 'bluetooth_enabled', 'nfc_enabled', 'intervals', 'ticket_ttl_seconds',
                   'face', 'ota', 'nfc_auto_register'):
@@ -207,6 +224,7 @@ class Controller:
                 self.sc[k] = r[k]
         if 'locked_out' in r:
             self.locked_out = bool(r['locked_out'])
+        self._save_runtime()
         ota = r.get('ota') or {}
         if ota.get('available') and self.cfg['hardware'].get('auto_ota'):
             threading.Thread(target=self.do_ota, args=(ota,), daemon=True).start()
@@ -234,8 +252,10 @@ class Controller:
     def _hb_loop(self, stop):
         self.heartbeat()
         while not stop.is_set():
-            iv = float((self.sc.get('intervals') or {}).get('heartbeat_seconds', 60))
-            iv = float(self.overrides.get('heartbeat') or iv)
+            iv = float(self.overrides.get('heartbeat') or self.cfg['network'].get('heartbeat_seconds')
+                       or (self.sc.get('intervals') or {}).get('heartbeat_seconds', 60))
+            if not self.online or self.last_error:
+                iv = min(iv, 10.0)                 # chưa tới được server: thử lại sớm
             self._hb_wake.wait(iv)
             if stop.is_set():
                 return
@@ -248,8 +268,8 @@ class Controller:
 
     def _poll_loop(self, stop):
         while not stop.is_set():
-            iv = float((self.sc.get('intervals') or {}).get('command_poll_seconds', 3))
-            iv = float(self.overrides.get('poll') or iv)
+            iv = float(self.overrides.get('poll') or self.cfg['network'].get('poll_seconds')
+                       or (self.sc.get('intervals') or {}).get('command_poll_seconds', 3))
             stop.wait(30 if self.auth_failed else iv)
             if stop.is_set() or not self.sc:          # chưa heartbeat được lần nào thì chưa poll
                 continue
@@ -279,6 +299,30 @@ class Controller:
                     and now - self._door_since >= float(hw.get('door_left_open_seconds', 60)):
                 self._door_warned = True
                 self.raise_event('DOOR_LEFT_OPEN', {'seconds': int(now - self._door_since)})
+
+    def wifi_host(self):
+        return (self.cfg.get('wifi') or {}).get('source', 'host') == 'host'
+
+    def _wifi_loop(self, stop):
+        """Chế độ host: lấy SSID + RSSI thật của máy mỗi 10s (RSSI thật đi vào heartbeat)."""
+        while not stop.is_set():
+            if self.wifi_host():
+                try:
+                    self.wifi_live = netinfo.status(force=True)
+                    c = self.wifi_live.get('connected')
+                    if c and c.get('rssi') is not None:
+                        self.hal.signal = c['rssi']
+                except Exception as e:
+                    self.wifi_live = {'error': str(e)}
+            stop.wait(10)
+
+    def wifi_scan(self):
+        if not self.wifi_host():
+            return {'source': 'simulated', 'current': '', 'error': '',
+                    'networks': [{'ssid': s, 'rssi': r, 'secured': sec, 'connected': False} for s, r, sec in SCAN]}
+        st = netinfo.status(force=True)
+        return {'source': 'host', 'platform': st['platform'], 'current': (st['connected'] or {}).get('ssid', ''),
+                'networks': st['networks'], 'error': st['error']}
 
     def _wake(self):
         self._hb_wake.set()
@@ -322,7 +366,7 @@ class Controller:
         with self._mtx:
             q = self.queue.setdefault(kind, [])
             q.append(item)
-            del q[:-200]
+            del q[:-int(self.cfg['network'].get('offline_queue_max') or 200)]
             store.save(store.QUEUE_PATH, self.queue)
         self.log(f'Offline: xếp hàng {kind} ({len(self.queue[kind])} đang chờ)', 'warn')
 
@@ -351,7 +395,7 @@ class Controller:
         if not cid:
             return
         with self._mtx:
-            if cid in self.seen:                       # cùng 1 lệnh có thể đến cả MQTT lẫn HTTP
+            if cid in self.seen:                       # cùng 1 lệnh có thể được trả lại nhiều lần (heartbeat + poll)
                 return
             exp_in = c.get('expires_in')
             if exp_in is None and c.get('expires_at'):
@@ -359,6 +403,7 @@ class Controller:
             self.seen[cid] = time.time()
             while len(self.seen) > 200:
                 self.seen.popitem(last=False)
+        self._save_runtime()
         if exp_in is not None and exp_in <= 0:
             self.log(f'Bỏ lệnh {name} đã hết hạn ({via})', 'warn')
             return
@@ -428,7 +473,7 @@ class Controller:
             self._call('ota', {'status': 'started', 'version': ver})
             time.sleep(3)
             self.cfg['hardware']['firmware'] = ver
-            store.save_config(self.cfg)
+            store.save_overrides({'hardware': {'firmware': ver}})
             self._call('ota', {'status': 'success', 'version': ver})
             self.log(f'OTA xong, firmware {ver}', 'ok')
         except (ApiError, NetError) as e:
@@ -518,13 +563,18 @@ class Controller:
         self._wake()
 
     # ------------------------------------------------------------------ cho web UI
+    def _wifi_name(self):
+        live = ((self.wifi_live or {}).get('connected') or {}).get('ssid')
+        return live or (self.cfg.get('wifi') or {}).get('ssid', '') or ('Ethernet / không rõ' if self.wifi_host() else '')
+
     def snapshot(self, since=0):
         h, c = self.hal, self.cfg
         with self._mtx:
             logs = [l for l in self.logs if l['id'] > since]
         return {
             'configured': self.configured(), 'device_code': c.get('device_code', ''), 'mac': c['hardware'].get('mac', ''),
-            'firmware': c['hardware'].get('firmware', ''), 'wifi': {'ssid': (c.get('wifi') or {}).get('ssid', ''), 'up': self.wifi_up},
+            'firmware': c['hardware'].get('firmware', ''), 'wifi': {'ssid': self._wifi_name(), 'up': self.wifi_up, 'source': 'host' if self.wifi_host() else 'simulated',
+                     'real': bool((self.wifi_live or {}).get('connected')), 'error': (self.wifi_live or {}).get('error', '')},
             'server': {'active': (c.get('server') or {}).get('active', ''), 'urls': (c.get('server') or {}).get('urls', {}),
                        'override': self.overrides.get('server', '')},
             'online': self.online, 'auth_failed': self.auth_failed, 'last_error': self.last_error,
@@ -534,8 +584,9 @@ class Controller:
             'server_cfg': {k: self.sc.get(k) for k in ('status', 'has_owner', 'wifi_enabled', 'bluetooth_enabled', 'nfc_enabled',
                                                       'nfc_auto_register', 'ota', 'intervals')},
             'mqtt': {'enabled': bool((c.get('mqtt') or {}).get('enabled')), 'connected': bool(self.mqtt and self.mqtt.connected),
-                     'error': self.mqtt.error if self.mqtt else '', 'host': (c.get('mqtt') or {}).get('host', ''),
-                     'port': (c.get('mqtt') or {}).get('port', '')},
+                     'error': self.mqtt.error if self.mqtt else '', 'target': self.mqtt.target if self.mqtt else ''},
+            'prefill': {'server': self.server_url(), 'device_code': c.get('device_code', ''), 'ssid': (c.get('wifi') or {}).get('ssid', ''),
+                        'has_secret': bool(c.get('secret'))},
             'queue': {k: len(v) for k, v in self.queue.items()}, 'last_access': self.last_access,
             'uptime': int(time.time() - self.booted_at), 'logs': logs, 'seq': self._seq,
         }
@@ -547,12 +598,27 @@ class Controller:
         if a == 'face':
             if d.get('vector'):
                 vec = d['vector']
-                store.save(store.FACE_PATH, {'vector': vec})
+                if not d.get('nosave'):
+                    store.save(store.FACE_PATH, {'vector': vec})
             elif d.get('saved'):
                 vec = store.load(store.FACE_PATH, {}).get('vector', [])
             else:
                 vec = [round(random.uniform(-0.2, 0.2), 6) for _ in range(128)]
             return self.scan_face(vec)
+        if a == 'save_face':
+            vec = d.get('vector')
+            if not isinstance(vec, list) or len(vec) != 128:
+                return {'ok': False, 'message': 'embedding phải có 128 số'}
+            store.save(store.FACE_PATH, {'vector': [float(x) for x in vec]})
+            self.log('Đã lưu embedding khuôn mặt mẫu vào bộ nhớ khoá', 'ok')
+            return {'ok': True}
+        if a == 'make_ticket':
+            kind = d.get('kind', 'ble')
+            uh = ''.join(ch for ch in str(d.get('user_hex') or '01') if ch in '0123456789abcdefABCDEF').lower() or '01'
+            ttl = max(10, min(int(d.get('ttl') or 120), 3600))
+            if kind not in tickets.LABELS:
+                return {'ok': False, 'message': 'kind phải là ble|nfc'}
+            return {'ok': True, 'ticket': tickets.make(self.cfg['secret'], self.cfg['device_code'], kind, uh, int(self.now()) + ttl), 'expires_in': ttl}
         if a == 'phone':       return self.phone_unlock(d.get('kind', 'ble'), str(d.get('ticket', '')))
         if a == 'door':        self.hal.set_door(bool(d.get('open'))); return {'ok': True}
         if a == 'tamper':      self.set_tamper(bool(d.get('on'))); return {'ok': True}

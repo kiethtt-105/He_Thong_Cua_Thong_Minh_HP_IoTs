@@ -31,13 +31,14 @@ textarea{font-family:ui-monospace,Consolas,monospace;font-size:12px}label{displa
  <div class="card" style="grid-column:1/-1;max-width:640px;margin:auto">
   <h2>Chế độ cài đặt (như AP "SmartLock-Setup" của ESP32 thật)</h2>
   <label>Dán nhanh từ trang admin “Thông tin kết nối” (bôi đen cả bảng rồi dán)</label>
-  <textarea id="paste" rows="5" placeholder="Server  https://....&#10;Mã thiết bị  DEV-XXXXXXXX&#10;MQTT broker  localhost : 8883 TLS&#10;Secret  ..."></textarea>
+  <textarea id="paste" rows="5" placeholder="Server  https://....&#10;Mã thiết bị  DEV-XXXXXXXX&#10;Secret  ..."></textarea>
   <div class="row"><button onclick="parsePaste()">Điền tự động</button><span class="hint">hoặc nhập tay bên dưới</span></div>
-  <label>Wi-Fi</label><div class="row"><select id="ssid"></select><input id="wpw" type="password" placeholder="Mật khẩu Wi-Fi"></div>
+  <label>Wi-Fi <span id="wifiMode" class="hint"></span></label>
+  <div class="row"><select id="ssid"></select><input id="ssidManual" class="hide" placeholder="Tên Wi-Fi (nhập tay)"><input id="wpw" type="password" placeholder="Mật khẩu Wi-Fi"><button onclick="loadWifi()">⟳ Quét</button></div>
+  <div id="wifiNote" class="hint"></div>
   <label>Server (không kèm /api/device)</label><input id="server" placeholder="http://127.0.0.1:8000 hoặc https://xxx.vercel.app">
   <div class="row"><div><label>Mã thiết bị</label><input id="code" placeholder="DEV-XXXXXXXX"></div><div><label>Secret</label><input id="secret"></div></div>
-  <label><input type="checkbox" id="mqttOn" style="width:auto"> Dùng MQTT (tuỳ chọn, HTTP vẫn chạy song song)</label>
-  <div class="row"><input id="mhost" placeholder="host" value="localhost"><input id="mport" placeholder="port" value="8883"><label style="margin:0"><input type="checkbox" id="mtls" checked style="width:auto"> TLS</label><label style="margin:0"><input type="checkbox" id="minsec" style="width:auto"> bỏ kiểm cert</label></div>
+  <p class="hint">MQTT (tuỳ chọn) cấu hình trong <b>config.json</b> → <b>mqtt</b>, xem docs/MQTT.md.</p>
   <p><button class="pri" onclick="saveSetup()">Lưu & khởi động</button> <span id="setupMsg"></span></p>
  </div>
 </main>
@@ -54,13 +55,20 @@ textarea{font-family:ui-monospace,Consolas,monospace;font-size:12px}label{displa
   <div id="res"></div></div>
 
  <div class="card"><h2>Thẻ NFC · Khuôn mặt · Điện thoại</h2>
-  <label>UID thẻ (hex)</label><div class="row"><input id="uid" value="04A1B2C3D4"><button onclick="act({action:'tap_card',uid:v('uid')})">Quẹt thẻ</button></div>
-  <label>Khuôn mặt (embedding 128 số, JSON; để trống = ngẫu nhiên → sẽ bị từ chối)</label>
-  <textarea id="face" rows="2" placeholder="[0.01, -0.02, ...]"></textarea>
-  <div class="row"><button onclick="face()">Quét mặt</button><button onclick="act({action:'face',saved:true})">Dùng embedding đã lưu</button></div>
+  <label>UID thẻ (hex) - dùng đầu đọc USB kiểu bàn phím: bấm vào ô này rồi quẹt thẻ</label>
+  <div class="row"><input id="uid" value="04A1B2C3D4" onkeydown="if(event.key==='Enter')tapCard()"><button onclick="tapCard()">Quẹt thẻ</button></div>
+  <label>Khuôn mặt (camera thật của máy)</label>
+  <div id="camBox" class="hide"><video id="cam" autoplay muted playsinline style="width:100%;max-width:320px;border-radius:8px;transform:scaleX(-1)"></video></div>
+  <div class="row"><button onclick="camStart()">📷 Mở camera</button><button onclick="camScan()">🙂 Quét mặt</button><button onclick="camEnroll()">💾 Lưu làm mặt mẫu</button></div>
+  <div id="camMsg" class="hint"></div>
+  <details style="margin-top:6px"><summary class="hint">Nhập embedding thủ công (128 số)</summary>
+   <textarea id="face" rows="2" placeholder="[0.01, -0.02, ...]"></textarea>
+   <div class="row"><button onclick="face()">Quét mặt (JSON)</button><button onclick="act({action:'face',saved:true})">Dùng embedding đã lưu</button><button onclick="copyFace()">Chép embedding</button></div></details>
   <label>Vé điện thoại (từ app: /devices/&lt;id&gt;/ble-ticket hoặc nfc-ticket)</label>
   <textarea id="ticket" rows="2" placeholder="userhex.exp.sig"></textarea>
-  <div class="row"><button onclick="act({action:'phone',kind:'ble',ticket:v('ticket')})">Bluetooth</button><button onclick="act({action:'phone',kind:'nfc',ticket:v('ticket')})">NFC điện thoại</button></div></div>
+  <div class="row"><button onclick="act({action:'phone',kind:'ble',ticket:v('ticket')})">Bluetooth</button><button onclick="act({action:'phone',kind:'nfc',ticket:v('ticket')})">NFC điện thoại</button></div>
+  <div class="row" style="margin-top:6px"><input id="uh" value="01" style="max-width:80px" title="user_hex trong vé"><button onclick="mkTicket('ble')">🧪 Tạo vé thử BLE</button><button onclick="mkTicket('nfc')">🧪 Tạo vé thử NFC</button></div>
+  <div class="hint">Vé thử ký bằng secret của khoá (hiệu lực 2 phút) để demo kiểm vé offline khi chưa có app điện thoại.</div></div>
 
  <div class="card"><h2>Phần cứng & mạng</h2>
   <div class="kv"><b>Pin</b><span><input type="range" id="bat" min="0" max="100" oninput="act({action:'battery',value:this.value})"> <span id="batT"></span></span>
@@ -83,31 +91,58 @@ async function act(b){const r=await api('/api/action',b);if(r&&r.method)showRes(
 function showRes(r){const e=$('res');e.textContent=(r.granted?'✅ ':'⛔ ')+r.method+(r.reason?' · '+r.reason:' · CHO PHÉP');e.style.color=r.granted?'var(--ok)':'var(--err)'}
 function k(x){if(x==='C')pin=pin.slice(0,-1);else if(x==='OK'){act({action:'pin',pin});pin=''}else if(pin.length<8)pin+=x;$('pinbox').textContent='•'.repeat(pin.length)}
 function toggleDoor(){act({action:'door',open:!st.door_open})}function toggleWifi(){act({action:'wifi',up:!st.wifi.up})}
+function tapCard(){act({action:'tap_card',uid:v('uid')})}
+async function mkTicket(kind){const r=await api('/api/action',{action:'make_ticket',kind,user_hex:v('uh')});if(r.ticket){$('ticket').value=r.ticket}else alert(r.message||'Lỗi')}
+function copyFace(){const t=v('face');if(!t)return alert('Chưa có embedding');navigator.clipboard.writeText(t).then(()=>camMsg('Đã chép embedding'))}
+const FACEAPI='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7/dist/face-api.js',FACEMODEL='https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7/model/';
+let camStream=null,faceReady=null;
+function camMsg(t,err){const e=$('camMsg');e.textContent=t;e.style.color=err?'var(--err)':''}
+function loadScript(src){return new Promise((ok,ko)=>{const x=document.createElement('script');x.src=src;x.onload=ok;x.onerror=()=>ko(new Error('Không tải được thư viện nhận diện (cần Internet): '+src));document.head.appendChild(x)})}
+function faceInit(){if(!faceReady){faceReady=(async()=>{camMsg('Đang tải mô hình nhận diện (vài MB, chỉ lần đầu)...');await loadScript(FACEAPI);
+  await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(FACEMODEL),faceapi.nets.faceLandmark68Net.loadFromUri(FACEMODEL),faceapi.nets.faceRecognitionNet.loadFromUri(FACEMODEL)])})();faceReady.catch(()=>{faceReady=null})}return faceReady}
+async function camStart(){try{if(!navigator.mediaDevices)throw new Error('Trình duyệt không cho dùng camera (mở bằng http://127.0.0.1:8080 hoặc https)');
+  if(!camStream){camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:640,height:480}});$('cam').srcObject=camStream;$('camBox').classList.remove('hide')}
+  await faceInit();camMsg('Camera sẵn sàng - nhìn thẳng vào camera rồi bấm Quét mặt')}catch(e){camMsg(e.message||String(e),1)}}
+async function camEmb(){await camStart();if(!faceReady)throw new Error('Mô hình nhận diện chưa tải được');await faceReady;
+  const d=await faceapi.detectSingleFace($('cam'),new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:0.5})).withFaceLandmarks().withFaceDescriptor();
+  if(!d)throw new Error('Không thấy khuôn mặt - nhìn thẳng, đủ sáng, rồi thử lại');return Array.from(d.descriptor).map(x=>+x.toFixed(6))}
+async function camScan(){try{const e=await camEmb();$('face').value=JSON.stringify(e);camMsg('Đã lấy embedding, gửi server...');await act({action:'face',vector:e,nosave:true})}catch(x){camMsg(x.message||String(x),1)}}
+async function camEnroll(){try{const e=await camEmb();$('face').value=JSON.stringify(e);const r=await api('/api/action',{action:'save_face',vector:e});camMsg(r.ok?'Đã lưu làm mặt mẫu (dùng nút "Dùng embedding đã lưu"; hoặc Chép embedding để đăng ký lên server)':(r.message||'Lỗi'),!r.ok)}catch(x){camMsg(x.message||String(x),1)}}
 function face(){let t=v('face').trim();if(!t)return act({action:'face'});try{act({action:'face',vector:JSON.parse(t)})}catch(e){alert('JSON không hợp lệ')}}
 function switchSrv(){act({action:'switch_server',name:v('srvSel')})}
 function addSrv(){if(v('newName')&&v('newUrl'))act({action:'switch_server',name:v('newName'),url:v('newUrl')})}
 function parsePaste(){const t=v('paste');const g=(re)=>(t.match(re)||[])[1]||'';
  let s=g(/^\s*Server\s+(https?:\/\/\S+)/mi)||g(/(https?:\/\/\S+)/);$('server').value=s.replace(/\/api\/device\/?$/,'');
- $('code').value=g(/(DEV-[A-Z0-9_-]+)/i).toUpperCase();$('secret').value=g(/Secret\s+(\S+)/i);
- const m=t.match(/MQTT[^\n]*?\n?\s*([\w.\-]+)\s*:\s*(\d+)/i);if(m){$('mhost').value=m[1];$('mport').value=m[2];$('mtls').checked=/TLS/i.test(t)||m[2]=='8883'}}
-async function saveSetup(){const r=await api('/api/setup',{ssid:v('ssid'),password:v('wpw'),server:v('server'),device_code:v('code'),secret:v('secret'),
- mqtt:{enabled:$('mqttOn').checked,host:v('mhost'),port:v('mport'),tls:$('mtls').checked,tls_insecure:$('minsec').checked}});
+ $('code').value=g(/(DEV-[A-Z0-9_-]+)/i).toUpperCase();$('secret').value=g(/^\s*Secret\s+([A-Za-z0-9_\-]{16,})/mi);
+}
+async function saveSetup(){const r=await api('/api/setup',{ssid:ssidVal(),password:v('wpw'),server:v('server'),device_code:v('code'),secret:v('secret')});
  $('setupMsg').textContent=r.message;$('setupMsg').style.color=r.ok?'var(--ok)':'var(--err)'}
-async function loadWifi(){const l=await api('/api/wifi-scan');$('ssid').innerHTML=l.map(w=>`<option>${w.ssid}</option>`).join('')+'<option>(mạng ẩn - gõ tên ở ô mật khẩu không hỗ trợ)</option>'}
+const esc=x=>String(x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));let wifiInfo=null;
+function ssidVal(){return $('ssidManual').classList.contains('hide')?v('ssid'):v('ssidManual')}
+function prefill(p){if(!p)return;if(p.server&&!v('server'))$('server').value=p.server;if(p.device_code&&!v('code'))$('code').value=p.device_code;
+ if(p.ssid&&wifiInfo&&wifiInfo.source!=='host')[...$('ssid').options].forEach(o=>{if(o.value===p.ssid)o.selected=true})}
+async function loadWifi(){const w=await api('/api/wifi-scan');wifiInfo=w;const host=w.source==='host';
+ $('wpw').classList.toggle('hide',host);
+ $('wifiMode').textContent=host?'· dùng Wi-Fi THẬT của máy này (không cần mật khẩu)':'· Wi-Fi giả lập';
+ const none=!w.networks.length;
+ $('ssid').innerHTML=w.networks.map(n=>`<option value="${esc(n.ssid)}" ${n.connected?'selected':''}>${esc(n.ssid)}${n.connected?' (đang nối)':''}${n.rssi!=null?'  '+n.rssi+' dBm':''}${n.secured?' 🔒':''}</option>`).join('');
+ $('ssid').classList.toggle('hide',none);$('ssidManual').classList.toggle('hide',!none);
+ $('wifiNote').textContent=w.error||(host&&w.current?'Máy đang nối: '+w.current:'')}
 const LOCK={locked:['🔒','ĐÃ KHOÁ'],unlocked:['🔓','ĐANG MỞ'],jammed:['⚠️','KẸT CHỐT']};
 function render(s){st=s;
- if(wasConf!==s.configured){wasConf=s.configured;$('setup').classList.toggle('hide',s.configured);$('app').classList.toggle('hide',!s.configured);if(!s.configured)loadWifi();if(s.configured)seq=0,$('log').innerHTML=''}
+ if(wasConf!==s.configured){wasConf=s.configured;$('setup').classList.toggle('hide',s.configured);$('app').classList.toggle('hide',!s.configured);if(!s.configured){loadWifi().then(()=>prefill(s.prefill))};if(s.configured)seq=0,$('log').innerHTML=''}
  if(!s.configured)return;
  const c=$('pConn');let t='Offline',cl='err';if(s.auth_failed){t='Sai secret';cl='err'}else if(s.online){t='Online';cl='ok'}else if(!s.wifi.up){t='Wi-Fi tắt';cl='warn'}c.textContent='● '+t+' · '+s.device_code;c.className='pill '+cl;
- const m=$('pMqtt');m.classList.toggle('hide',!s.mqtt.enabled);m.textContent='MQTT '+(s.mqtt.connected?'✔':'✖');m.className='pill '+(s.mqtt.connected?'ok':'warn');
+
  const o=$('pOwner'),sc=s.server_cfg;o.textContent=sc.has_owner?'Đã gán chủ':(s.online?'Chờ gán chủ':'—');o.className='pill '+(sc.has_owner?'ok':'warn');
  $('bolt').className='bolt '+s.lock_state;$('bolt').textContent=LOCK[s.lock_state][0];$('lockTxt').textContent=LOCK[s.lock_state][1];
  $('doorTxt').textContent=s.door_open?'MỞ':'đóng';$('bDoor').textContent=s.door_open?'🚪 Đóng cửa':'🚪 Mở cửa';$('led').className='led '+(s.led==='green'?'green':s.led==='red'?'red':'');
  $('alerts').innerHTML=(s.tamper?'<span class="pill err">⚠ TAMPER</span> ':'')+(s.locked_out?'<span class="pill err">🚫 BỊ KHOÁ TẠM (nhập sai nhiều lần)</span> ':'')+(s.battery<=15?'<span class="pill warn">🔋 Pin yếu</span>':'');
- if(document.activeElement!==$('bat'))$('bat').value=s.battery;$('batT').textContent=s.battery+'%';if(document.activeElement!==$('sig'))$('sig').value=s.signal;$('sigT').textContent=s.signal+' dBm';
+ if(document.activeElement!==$('bat'))$('bat').value=s.battery;$('batT').textContent=s.battery+'%';if(document.activeElement!==$('sig'))$('sig').value=s.signal;{const real=s.wifi.source==='host'&&s.wifi.real;$('sig').disabled=real;$('sigT').textContent=s.signal+' dBm'+(real?' (thật)':'')}
  $('bWifi').textContent='📶 Wi-Fi: '+(s.wifi.up?'BẬT':'TẮT');
  const fl=x=>x===false?'tắt':'bật';
- $('kv').innerHTML=`<b>Server</b><span class=mono>${s.server.override||s.server.urls[s.server.active]||''}</span><b>Wi-Fi</b><span>${s.wifi.ssid}</span><b>MAC</b><span class=mono>${s.mac}</span><b>Firmware</b><span>${s.firmware}${sc.ota&&sc.ota.available?' → '+sc.ota.version+' có sẵn':''}</span><b>Trạng thái server</b><span>${sc.status||'—'}</span><b>Wi-Fi/BLE/NFC</b><span>${fl(sc.wifi_enabled)} / ${fl(sc.bluetooth_enabled)} / ${fl(sc.nfc_enabled)}</span><b>Heartbeat cuối</b><span>${s.last_hb_ago==null?'—':s.last_hb_ago+'s trước'}</span><b>Hàng đợi offline</b><span>${(s.queue.events||0)} sự kiện, ${(s.queue.phone||0)} vé ĐT</span><b>MQTT</b><span>${s.mqtt.enabled?(s.mqtt.host+':'+s.mqtt.port+(s.mqtt.connected?' ✔':' ✖ '+s.mqtt.error)):'tắt (dùng HTTP)'}</span>${s.last_error?'<b>Lỗi</b><span style="color:var(--err)">'+s.last_error+'</span>':''}`;
+ {const m=$('pMqtt');m.classList.toggle('hide',!s.mqtt.enabled);m.textContent='MQTT '+(s.mqtt.connected?'✔':'✖');m.className='pill '+(s.mqtt.connected?'ok':'warn')}
+ $('kv').innerHTML=`<b>Server</b><span class=mono>${s.server.override||s.server.urls[s.server.active]||''}</span><b>Wi-Fi</b><span>${esc(s.wifi.ssid)}${s.wifi.source==='host'?(s.wifi.real?' · thật':' · máy không nối Wi-Fi'):' · giả lập'}</span><b>MAC</b><span class=mono>${s.mac}</span><b>Firmware</b><span>${s.firmware}${sc.ota&&sc.ota.available?' → '+sc.ota.version+' có sẵn':''}</span><b>Trạng thái server</b><span>${sc.status||'—'}</span><b>Wi-Fi/BLE/NFC</b><span>${fl(sc.wifi_enabled)} / ${fl(sc.bluetooth_enabled)} / ${fl(sc.nfc_enabled)}</span><b>Heartbeat cuối</b><span>${s.last_hb_ago==null?'—':s.last_hb_ago+'s trước'}</span><b>Hàng đợi offline</b><span>${(s.queue.events||0)} sự kiện, ${(s.queue.phone||0)} vé ĐT</span><b>MQTT</b><span>${s.mqtt.enabled?(s.mqtt.target+(s.mqtt.connected?' ✔':' ✖ '+(s.mqtt.error||'đang nối...'))):'tắt (dùng HTTP) - bật trong config.json'}</span>${s.last_error?'<b>Lỗi</b><span style="color:var(--err)">'+s.last_error+'</span>':''}`;
  const sel=$('srvSel');const keys=Object.keys(s.server.urls);if(sel.dataset.k!==keys.join()+s.server.active){sel.dataset.k=keys.join()+s.server.active;sel.innerHTML=keys.map(n=>`<option ${n===s.server.active?'selected':''}>${n}</option>`).join('')}
  const lg=$('log');for(const l of s.logs){if(l.id<=seq)continue;seq=l.id;const d=document.createElement('div');d.className='l-'+l.lvl;d.textContent=l.t+'  '+l.m;lg.appendChild(d)}lg.scrollTop=lg.scrollHeight}
 async function tick(){try{render(await api('/api/state?since='+seq))}catch(e){}setTimeout(tick,1000)}tick();

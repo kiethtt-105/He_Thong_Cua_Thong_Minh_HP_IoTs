@@ -1,0 +1,48 @@
+{
+  "_doc": "File cấu hình khoá. Khoá bắt đầu bằng _ là ghi chú. Mô tả từng thông số: xem README.md mục 'config.json'. Đổi xong chỉ cần chạy lại: python run.py",
+
+  "device_code": "DEV-4940959A",
+  "secret": "",
+  "_secret_note": "Dán secret từ trang admin vào đây (hoặc đặt biến môi trường DEVICE_SECRET, hoặc nhập ở trang SETUP). Đừng commit/gửi file này khi đã có secret.",
+
+  "server": {
+    "active": "tunnel",
+    "urls": {
+      "tunnel": "https://d81h6zk7-8000.asse.devtunnels.ms"
+    }
+  },
+
+  "wifi": { "ssid": "Home_WiFi_2.4G", "password": "" },
+
+  "network": {
+    "http_timeout_seconds": 10,
+    "heartbeat_seconds": null,
+    "poll_seconds": null,
+    "offline_queue_max": 200
+  },
+
+  "mqtt": {
+    "enabled": false,
+    "url": "wss://d81h6zk7-9001.asse.devtunnels.ms",
+    "transport": "websockets",
+    "keepalive": 30,
+    "publish_telemetry": false,
+    "tls_insecure": false,
+    "ca_file": "",
+    "headers": {}
+  },
+
+  "hardware": {
+    "firmware": "1.0.0",
+    "mac": "",
+    "battery": 100,
+    "signal": -55,
+    "temperature": 27.0,
+    "auto_lock_seconds": 5,
+    "door_left_open_seconds": 60,
+    "battery_drain_minutes": 5,
+    "servo_seconds": 0.6,
+    "jam_chance": 0.0,
+    "auto_ota": false
+  }
+}

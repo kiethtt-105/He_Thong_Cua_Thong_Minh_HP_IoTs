@@ -17,8 +17,9 @@ class ApiError(Exception):
 class DeviceApi:
     def __init__(self, creds):
         self._creds = creds          # callable -> (base_url, device_code, secret)
+        self.timeout = 10
 
-    def _req(self, method, path, body=None, timeout=10):
+    def _req(self, method, path, body=None, timeout=None):
         base, code, secret = self._creds()
         if not base or not code or not secret:
             raise NetError('Chưa cấu hình server / mã thiết bị / secret')
@@ -33,7 +34,7 @@ class DeviceApi:
             'X-Tunnel-Skip-AntiPhishing-Page': 'true',     # dev tunnel của VS Code bỏ trang cảnh báo
         })
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
                 raw = resp.read().decode('utf-8', 'replace')
         except urllib.error.HTTPError as e:
             raw = e.read().decode('utf-8', 'replace')

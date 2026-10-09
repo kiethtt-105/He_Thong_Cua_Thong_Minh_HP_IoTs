@@ -1,0 +1,27 @@
+{
+  "sc": {
+    "status": "online",
+    "has_owner": true,
+    "wifi_enabled": true,
+    "bluetooth_enabled": true,
+    "nfc_enabled": true,
+    "intervals": {
+      "heartbeat_seconds": 60,
+      "command_poll_seconds": 3
+    },
+    "ticket_ttl_seconds": 3600,
+    "face": {
+      "dim": 128,
+      "max_threshold": 0.5
+    },
+    "ota": {
+      "available": false
+    },
+    "nfc_auto_register": {
+      "active": false,
+      "seconds_left": 0
+    }
+  },
+  "locked_out": false,
+  "seen": []
+}

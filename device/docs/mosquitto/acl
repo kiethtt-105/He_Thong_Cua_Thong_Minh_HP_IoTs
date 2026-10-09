@@ -1,0 +1,12 @@
+# Server Django (user "django"): publish lệnh cho mọi khoá, đọc status/ack/event nếu bật publish_telemetry
+user django
+topic write smartlock/+/cmd
+topic read  smartlock/+/status
+topic read  smartlock/+/ack
+topic read  smartlock/+/event
+
+# Mỗi khoá (username = mã thiết bị) chỉ được đọc lệnh của CHÍNH nó và ghi status/ack/event của chính nó. %u = username.
+pattern read  smartlock/%u/cmd
+pattern write smartlock/%u/status
+pattern write smartlock/%u/ack
+pattern write smartlock/%u/event

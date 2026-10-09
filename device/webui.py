@@ -3,7 +3,6 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from lockcore.controller import SCAN
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
 
@@ -28,7 +27,7 @@ def make_server(ctl, host, port):
                 since = int(qs.split('since=')[1].split('&')[0]) if 'since=' in qs else 0
                 return self._json(ctl.snapshot(since))
             if path == '/api/wifi-scan':
-                return self._json([{'ssid': s, 'rssi': r, 'secured': sec} for s, r, sec in SCAN])
+                return self._json(ctl.wifi_scan())
             if path in ('/', '/index.html'):
                 b = open(os.path.join(STATIC, 'index.html'), 'rb').read()
                 self.send_response(200)

@@ -12,9 +12,9 @@ class SimHAL:
         self.lock_state = 'locked'      # locked | unlocked | jammed
         self.door_open = False
         self.tamper = False
-        self.battery = 100.0
-        self.signal = -55
-        self.base_temp = 27.0
+        self.battery = float(hw.get('battery', 100))
+        self.signal = int(hw.get('signal', -55))
+        self.base_temp = float(hw.get('temperature', 27.0))
         self.led = 'idle'
         self.on_door_change = None      # callback(open: bool)
 
