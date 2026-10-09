@@ -34,7 +34,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from smartlock import services, twofa
+from smartlock import services
 from smartlock.api.common import (
     api,
     ApiError,
@@ -55,7 +55,7 @@ from smartlock.api.common import (
     uuid_or_404,
     web_login,
 )
-from smartlock.constants import RESET_NEUTRAL_MSG
+from smartlock.services import RESET_NEUTRAL_MSG
 from smartlock.models import (
     AccessCard,
     AuditLog,
@@ -93,7 +93,7 @@ def _burn_password_check(password):
 def _2fa_methods(user, web=False) -> list:
     """App: chỉ totp + email (passkey cần RP/origin của trình duyệt). Web: thêm passkey (fido2)."""
     allowed = ('totp', 'email', 'fido2') if web else ('totp', 'email')
-    return [m for m in twofa.get_cfg(user).available_methods() if m in allowed]
+    return [m for m in services.get_cfg(user).available_methods() if m in allowed]
 
 
 def _is_web(info) -> bool:
@@ -260,7 +260,7 @@ def login(request):
                 raise ApiError('TWO_FACTOR_UNSUPPORTED',
                                'Tài khoản chỉ bật Passkey. Hãy thêm Google Authenticator hoặc Email OTP '
                                'trên web để đăng nhập bằng app.', 403)
-            cfg = twofa.get_cfg(auth_user)
+            cfg = services.get_cfg(auth_user)
             services.audit(request, 'LOGIN_2FA_REQUIRED', actor=None, target_user=auth_user,
                            metadata={'channel': 'web' if _is_web(info) else 'mobile'})
             return ok({'two_factor_required': True,
@@ -298,20 +298,20 @@ def _challenge_user(data):
 @api('POST', auth=False)
 def two_factor_email_send(request):
     user, info = _challenge_user(read_json(request))
-    minutes = twofa.lock_minutes(user)
+    minutes = services.lock_minutes(user)
     if minutes:
         raise ApiError('ACCOUNT_LOCKED', f'Tài khoản đang bị khóa tạm thời. Thử lại sau {minutes} phút.', 423,
                        retry_after_minutes=minutes)
     if 'email' not in _2fa_methods(user, _is_web(info)):
         raise ApiError('BAD_METHOD', 'Tài khoản chưa bật Email OTP.', 400)
-    result = twofa.send_email_code(user, 'VERIFY')
+    result = services.send_email_code(user, 'VERIFY')
     if result == 'cooldown':
-        raise ApiError('COOLDOWN', f'Vui lòng đợi {twofa.EMAIL_CODE_COOLDOWN} giây trước khi gửi lại.', 429,
-                       retry_after_seconds=twofa.EMAIL_CODE_COOLDOWN)
+        raise ApiError('COOLDOWN', f'Vui lòng đợi {services.EMAIL_CODE_COOLDOWN} giây trước khi gửi lại.', 429,
+                       retry_after_seconds=services.EMAIL_CODE_COOLDOWN)
     if result != 'sent':
         raise ApiError('MAIL_FAILED', 'Không gửi được email. Vui lòng thử lại.', 502)
     return ok({'sent': True, 'masked_email': services.mask_email(user.email),
-               'expires_in': twofa.EMAIL_CODE_TTL_MIN * 60})
+               'expires_in': services.EMAIL_CODE_TTL_MIN * 60})
 
 
 @api('POST', auth=False)
@@ -320,7 +320,7 @@ def two_factor_verify(request):
     user, info = _challenge_user(data)
     if _is_web(info):
         check_csrf(request)                           # bước này tạo session cookie => phải qua CSRF
-    minutes = twofa.lock_minutes(user)
+    minutes = services.lock_minutes(user)
     if minutes:
         raise ApiError('ACCOUNT_LOCKED', f'Tài khoản đang bị khóa tạm thời. Thử lại sau {minutes} phút.', 423,
                        retry_after_minutes=minutes)
@@ -328,8 +328,8 @@ def two_factor_verify(request):
     code = s(data, 'code', 20)
     if method not in ('totp', 'email') or method not in _2fa_methods(user, _is_web(info)):
         raise ApiError('BAD_METHOD', 'Phương thức xác thực không hợp lệ.', 400)
-    good = (twofa.verify_totp(twofa.get_cfg(user), code) if method == 'totp'
-            else twofa.verify_email_code(user, code, 'VERIFY'))
+    good = (services.verify_totp(services.get_cfg(user), code) if method == 'totp'
+            else services.verify_email_code(user, code, 'VERIFY'))
     if not good:
         locked = services.register_failure(user, services.client_ip(request))
         services.audit(request, 'TWO_FACTOR_FAILED', actor=None, target_user=user, success=False,
@@ -356,7 +356,7 @@ def two_factor_passkey_options(request):
              for c in Fido2Credential.objects.filter(user=user)]
     if not creds:
         raise ApiError('NO_PASSKEY', 'Tài khoản chưa đăng ký passkey.', 400)
-    rp_id, _origin, _name = twofa.webauthn_rp(request)
+    rp_id, _origin, _name = services.webauthn_rp(request)
     options = generate_authentication_options(rp_id=rp_id, allow_credentials=creds,
                                               user_verification=UserVerificationRequirement.PREFERRED)
     request.session['webauthn_auth'] = {'challenge': bytes_to_base64url(options.challenge),
@@ -372,19 +372,19 @@ def two_factor_passkey_finish(request):
     if not _is_web(info):
         raise ApiError('WEB_ONLY', 'Passkey chỉ dùng được trên web.', 400)
     check_csrf(request)
-    minutes = twofa.lock_minutes(user)
+    minutes = services.lock_minutes(user)
     if minutes:
         raise ApiError('ACCOUNT_LOCKED', f'Tài khoản đang bị khóa tạm thời. Thử lại sau {minutes} phút.', 423,
                        retry_after_minutes=minutes)
     state = request.session.pop('webauthn_auth', None)
     now_ts = int(timezone.now().timestamp())
     if (not state or state.get('uid') != str(user.id)
-            or now_ts - int(state.get('ts', 0)) > twofa.WEBAUTHN_TTL):
+            or now_ts - int(state.get('ts', 0)) > services.WEBAUTHN_TTL):
         raise ApiError('PASSKEY_EXPIRED', 'Yêu cầu passkey đã hết hạn. Hãy thử lại.', 400)
     credential = data.get('credential')
     credential = credential if isinstance(credential, dict) else {}
     cred = Fido2Credential.objects.filter(user=user, credential_id=credential.get('id') or '').first()
-    rp_id, origin, _name = twofa.webauthn_rp(request)
+    rp_id, origin, _name = services.webauthn_rp(request)
     good = False
     if cred:
         try:
@@ -703,7 +703,7 @@ def _after_added(request, user, method) -> dict:
     now = sync_two_fa_flag(user)
     auto = now and not was
     if auto:
-        cfg = twofa.get_cfg(user)
+        cfg = services.get_cfg(user)
         cfg.enabled_at = timezone.now()
         cfg.save(update_fields=['enabled_at', 'updated_at'])
         services.audit(request, 'TWO_FACTOR_ENABLED', target_user=user, severity='warning',
@@ -714,7 +714,7 @@ def _after_added(request, user, method) -> dict:
 
 
 def _after_removed(request, user, method) -> dict:
-    cfg = twofa.get_cfg(user)
+    cfg = services.get_cfg(user)
     left = cfg.available_methods()
     was = user.two_fa_enabled
     if cfg.preferred_method not in left:
@@ -749,10 +749,10 @@ def _web_only(request):
 def totp_begin(request):
     """Bắt đầu thiết lập Google Authenticator: trả secret + QR + setup_token (đã ký, hạn 10 phút)."""
     user = request.user
-    if twofa.get_cfg(user).totp_confirmed:
+    if services.get_cfg(user).totp_confirmed:
         raise ApiError('ALREADY_SET', 'Google Authenticator đã được thiết lập. Hãy gỡ trước nếu muốn cài lại.', 409)
     secret = pyotp.random_base32()
-    uri = pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name=twofa.TOTP_ISSUER)
+    uri = pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name=services.TOTP_ISSUER)
     token = signing.dumps({'uid': str(user.id), 'secret': secret}, salt=_SETUP_SALT)
     return ok({'setup_token': token, 'qr': _qr_data_uri(uri), 'otpauth_uri': uri,
                'secret': ' '.join(secret[i:i + 4] for i in range(0, len(secret), 4)),
@@ -774,12 +774,12 @@ def totp_confirm(request):
     if st.get('uid') != str(user.id):
         raise ApiError('SETUP_INVALID', 'Phiên thiết lập không hợp lệ. Hãy bắt đầu lại.', 400)
 
-    code = twofa.digits(s(data, 'code', 20))
+    code = services.digits(s(data, 'code', 20))
     totp = pyotp.TOTP(st['secret'])
     step_now = int(timezone.now().timestamp() // totp.interval)
     matched = None
     for offset in (-1, 0, 1):
-        if len(code) == 6 and twofa.hmac.compare_digest(totp.at((step_now + offset) * totp.interval), code):
+        if len(code) == 6 and services.hmac.compare_digest(totp.at((step_now + offset) * totp.interval), code):
             matched = step_now + offset
     if matched is None:
         services.audit(request, 'TWO_FACTOR_SETUP_FAILED', success=False, severity='warning', target_user=user)
@@ -802,21 +802,21 @@ def email_send(request):
     user = request.user
     if not user.email_verified:
         raise ApiError('EMAIL_NOT_VERIFIED', 'Email chưa được xác thực.', 400)
-    res = twofa.send_email_code(user, 'SETUP')
+    res = services.send_email_code(user, 'SETUP')
     if res == 'cooldown':
-        raise ApiError('COOLDOWN', f'Vui lòng đợi {twofa.EMAIL_CODE_COOLDOWN} giây trước khi gửi lại.', 429,
-                       retry_after_seconds=twofa.EMAIL_CODE_COOLDOWN)
+        raise ApiError('COOLDOWN', f'Vui lòng đợi {services.EMAIL_CODE_COOLDOWN} giây trước khi gửi lại.', 429,
+                       retry_after_seconds=services.EMAIL_CODE_COOLDOWN)
     if res != 'sent':
         raise ApiError('MAIL_FAILED', 'Không gửi được email. Vui lòng thử lại sau.', 502)
     return ok({'sent': True, 'masked_email': services.mask_email(user.email),
-               'expires_in': twofa.EMAIL_CODE_TTL_MIN * 60,
+               'expires_in': services.EMAIL_CODE_TTL_MIN * 60,
                'message': f'Đã gửi mã đến {services.mask_email(user.email)}.'})
 
 
 @api('POST', auth='any')
 def email_confirm(request):
     user, data = request.user, read_json(request)
-    if not twofa.verify_email_code(user, s(data, 'code', 20), 'SETUP'):
+    if not services.verify_email_code(user, s(data, 'code', 20), 'SETUP'):
         raise ApiError('TWO_FACTOR_INVALID', 'Mã không đúng hoặc đã hết hạn.', 400)
     with transaction.atomic():
         cfg = TwoFactorConfig.objects.select_for_update().get_or_create(user=user)[0]
@@ -832,7 +832,7 @@ def email_confirm(request):
 def passkey_options(request):
     _web_only(request)
     user = request.user
-    rp_id, _origin, rp_name = twofa.webauthn_rp(request)
+    rp_id, _origin, rp_name = services.webauthn_rp(request)
     options = generate_registration_options(
         rp_id=rp_id, rp_name=rp_name, user_id=user.pk.bytes, user_name=user.email,
         user_display_name=user.full_name or user.username,
@@ -851,10 +851,10 @@ def passkey_register(request):
     _web_only(request)
     user, data = request.user, read_json(request)
     state = request.session.pop('webauthn_reg', None)
-    if not state or int(timezone.now().timestamp()) - int(state.get('ts', 0)) > twofa.WEBAUTHN_TTL:
+    if not state or int(timezone.now().timestamp()) - int(state.get('ts', 0)) > services.WEBAUTHN_TTL:
         raise ApiError('PASSKEY_EXPIRED', 'Yêu cầu không hợp lệ hoặc đã hết hạn. Hãy thử lại.', 400)
     credential = data.get('credential') if isinstance(data.get('credential'), dict) else {}
-    rp_id, origin, _name = twofa.webauthn_rp(request)
+    rp_id, origin, _name = services.webauthn_rp(request)
     try:
         v = verify_registration_response(credential=credential,
                                          expected_challenge=base64url_to_bytes(state['challenge']),
@@ -874,7 +874,7 @@ def passkey_register(request):
     except IntegrityError:
         raise ApiError('PASSKEY_EXISTS', 'Passkey này đã được đăng ký.', 409)
     with transaction.atomic():
-        cfg = twofa.get_cfg(user)
+        cfg = services.get_cfg(user)
         if not cfg.preferred_method:
             cfg.preferred_method = TwoFactorConfig.METHOD_FIDO2
             cfg.save(update_fields=['preferred_method', 'updated_at'])
@@ -884,7 +884,7 @@ def passkey_register(request):
 @api('POST', auth='any')
 def passkey_remove(request, cred_id):
     user, data = request.user, read_json(request)
-    cfg = twofa.get_cfg(user)
+    cfg = services.get_cfg(user)
     cred = Fido2Credential.objects.filter(pk=services.parse_uuid(cred_id), user=user).first()
     if not cred:
         raise ApiError('NOT_FOUND', 'Không tìm thấy passkey.', 404)
@@ -897,7 +897,7 @@ def passkey_remove(request, cred_id):
 @api('POST', auth='any')
 def method_remove(request, method):
     user, data = request.user, read_json(request)
-    cfg = twofa.get_cfg(user)
+    cfg = services.get_cfg(user)
     if method not in ('totp', 'email'):
         raise ApiError('BAD_METHOD', 'Phương thức không hợp lệ.', 400)
     active = cfg.totp_confirmed if method == 'totp' else cfg.email_otp_enabled

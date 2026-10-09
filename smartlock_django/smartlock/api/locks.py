@@ -31,7 +31,7 @@ from smartlock.api.common import (
     user_json,
     uuid_or_404,
 )
-from smartlock.constants import (
+from smartlock.services import (
     ALLOWED_COMMANDS,
     COMMAND_LABELS,
     COMMAND_TTL_SECONDS,
@@ -242,7 +242,8 @@ def device_command(request, device_id):
                        metadata={'reason': 'duplicate_pending'})
         raise ApiError('DUPLICATE', 'Lệnh này vừa được gửi, vui lòng chờ vài giây.', 429)
 
-    cmd = services.dispatch_command(device, command, source=request.client_type, issued_by=user, ttl=COMMAND_TTL_SECONDS)
+    cmd = services.dispatch_command(device, command, source=request.client_type, issued_by=user,
+                                    ttl=services.command_ttl(command))
     if cmd.status != 'sent':
         services.audit(request, f'CMD_{command}_FAILED', device=device, success=False,
                        metadata={'reason': 'mqtt_publish_failed', 'error': getattr(cmd, 'publish_error', '')})
@@ -339,6 +340,8 @@ def device_pins(request, device_id):
             max_uses = max(0, int(data.get('max_uses') if data.get('max_uses') is not None else 1))
         except (TypeError, ValueError):
             raise ApiError('BAD_FIELD', 'Thời hạn hoặc số lần dùng không hợp lệ.', 400)
+        if max_uses == 0:                       # PIN không giới hạn lượt: tối đa 7 ngày (khách dài ngày cấp lại)
+            ttl = min(ttl, 7 * 24 * 60)
         label = s(data, 'label', 100)
         try:
             pin, plain = services.issue_unique_door_pin(device=device, created_by=user, ttl_minutes=ttl,

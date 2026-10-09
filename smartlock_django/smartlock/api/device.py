@@ -206,6 +206,8 @@ def heartbeat(request):
             temperature=temperature, raw_payload=raw or None)
 
     services.touch_device(device, firmware=firmware, battery=battery)
+    if cache.add('smartlock:offline-sweep', 1, 30):      # khoá chỉ dùng HTTP (không có subscriber MQTT) vẫn được đánh dấu offline
+        services.mark_offline_devices()
 
     mac = s(data, 'mac', 17).upper()
     if mac and MAC_RE.match(mac) and device.mac_address != mac:
@@ -333,6 +335,11 @@ def event(request):
 # access.py - POST /device/access/* - quẹt thẻ / PIN / khuôn mặt / điện thoại: server phán quyết, khoá CHỈ mở khi granted == true.
 # ======================================================================
 
+# Kênh HTTP: khoá tự mở khi granted=true => mặc định KHÔNG gửi thêm lệnh UNLOCK (tránh mở 2 lần). Firmware cũ cần lệnh thì đặt
+# HTTP_ACCESS_PUSH_UNLOCK=True trong settings.
+_HTTP_PUSH = bool(getattr(settings, 'HTTP_ACCESS_PUSH_UNLOCK', False))
+
+
 def _verdict(event, device):
     return ok({'granted': bool(event.success), 'reason': event.reason or None,
                'locked_out': services.in_lockout(device), 'event_id': str(event.id)})
@@ -348,7 +355,8 @@ def access_rfid(request):
     if not device.nfc_enabled:
         return ok({'granted': False, 'reason': 'NFC_DISABLED', 'locked_out': services.in_lockout(device)})
     services.touch_device(device)
-    return _verdict(services.verify_rfid_tap(device, uid, ip_address=services.client_ip(request)), device)
+    return _verdict(services.verify_rfid_tap(device, uid, ip_address=services.client_ip(request),
+                                             push=_HTTP_PUSH), device)
 
 
 @device_api('POST')
@@ -359,7 +367,8 @@ def access_pin(request):
     if not (4 <= len(pin) <= 8):
         raise ApiError('BAD_PIN', 'PIN phải gồm 4-8 chữ số.', 400, field='pin')
     services.touch_device(device)
-    return _verdict(services.verify_door_pin(device, pin, ip_address=services.client_ip(request)), device)
+    return _verdict(services.verify_door_pin(device, pin, ip_address=services.client_ip(request),
+                                             push=_HTTP_PUSH), device)
 
 
 @device_api('POST')
@@ -378,7 +387,7 @@ def access_face(request):
         raise ApiError('BAD_EMBEDDING', 'embedding chứa giá trị không hợp lệ.', 400, field='embedding')
     services.touch_device(device)
     event = services.verify_face(device, emb, snapshot_url=s(data, 'snapshot_url', 512),
-                                 ip_address=services.client_ip(request))
+                                 ip_address=services.client_ip(request), push=_HTTP_PUSH)
     return _verdict(event, device)
 
 

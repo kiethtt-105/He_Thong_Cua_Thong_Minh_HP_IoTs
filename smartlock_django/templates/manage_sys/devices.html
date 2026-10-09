@@ -106,13 +106,16 @@
     <div class="card-body">
         <dl class="kv">
             <dt>Server</dt><dd class="mono text-break">{{ api_base }}</dd>
+            <dt>API khoá (HTTP)</dt><dd class="mono text-break">{{ device_api }}</dd>
             <dt>Mã thiết bị</dt><dd class="mono">{{ device.device_code }}</dd>
+            <dt>MQTT broker</dt><dd class="mono text-break">{{ mqtt.host }} : {{ mqtt.port }}{% if mqtt.tls %} <span class="badge text-bg-success">TLS</span>{% endif %}</dd>
             <dt>Secret</dt>
             <dd><span class="mono text-break" id="sec">{{ secret }}</span>
                 <button type="button" class="btn btn-sm btn-outline-secondary ms-2"
                     onclick="navigator.clipboard.writeText(document.getElementById('sec').textContent);this.textContent='Đã chép'">Chép</button></dd>
             <dt>Chủ sở hữu</dt><dd>{{ device.owner.email|default:"— (chờ cấu hình)" }}{% if pending_owner and not device.owner %} <small class="text-muted">(dự kiến: {{ pending_owner.email }}, gán ở <a href="{{ claim_url }}">trang chi tiết</a> sau khi khoá kết nối)</small>{% endif %}</dd>
         </dl>
+        <div class="small text-muted mb-2">Sau khi nạp xong: cấp nguồn + mạng cho khoá, vào <a href="{{ claim_url }}">trang chi tiết</a> chờ chỉ báo <strong>đã kết nối</strong> (khoá phải gửi được tin tới hệ thống trong 2 phút) rồi mới gán chủ.</div>
         <div class="small text-muted">Thiết bị kết nối MQTT broker với username = <span class="mono">{{ device.device_code }}</span>, password = secret ở trên; publish lên <span class="mono">smartlock/{{ device.device_code }}/status|ack|event</span> và subscribe <span class="mono">smartlock/{{ device.device_code }}/cmd</span>.</div>
     </div>
 </div>
@@ -156,6 +159,7 @@
             <div class="card-header">Thông tin thiết lập</div>
             <div class="card-body">
                 <dl class="kv mb-0">
+                    <dt>MQTT broker</dt><dd class="mono text-break">{{ setup.mqtt.host }} : {{ setup.mqtt.port }}{% if setup.mqtt.tls %} (TLS){% endif %}</dd>
                     <dt>MQTT username</dt><dd class="mono">{{ setup.mqtt_username }}</dd>
                     <dt>Dấu vân tay secret</dt><dd class="mono">{{ setup.secret_fingerprint }}…</dd>
                     <dt>Topic lệnh</dt><dd class="mono text-break">{{ setup.cmd_topic }}</dd>

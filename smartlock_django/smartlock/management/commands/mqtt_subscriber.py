@@ -10,7 +10,7 @@ Topic (khớp ACL trong api/device.py -> mqtt_acl):
   smartlock/<device_code>/cmd      server  -> thiết bị  (do services.dispatch_command publish)
 
 Các kiểm tra ở đây GIỐNG HỆT đường HTTP (api/device.py): nfc_enabled, định dạng PIN, vector mặt hợp lệ,
-ack idempotent, cảnh báo TAMPER / FORCED_OPEN / DOOR_LEFT_OPEN / LOW_BATTERY qua services.raise_event.
+ack idempotent, cảnh báo TAMPER / FORCED_OPEN / DOOR_LEFT_OPEN / LOW_BATTERY qua raise_event (api/device.py).
 
 Lưu ý: KHÔNG gọi services.register_face từ đây (chỉ cho phép từ giao diện app/web).
 """
@@ -27,6 +27,7 @@ from django.db import close_old_connections
 from django.utils import timezone
 
 from smartlock import services
+from smartlock.api.device import DEVICE_EVENTS, LOW_BATTERY, raise_event   # dùng chung với đường HTTP
 from smartlock.models import Device, DeviceCommand, DeviceStatusLog
 
 logger = logging.getLogger('smartlock.mqtt')
@@ -128,9 +129,9 @@ class _Subscriber:
             battery = device.battery_level
 
         # cảnh báo pin yếu khi CHUYỂN qua ngưỡng (giống heartbeat HTTP), không lặp mỗi bản tin
-        if (device.owner_id and battery <= services.LOW_BATTERY
-                and (old_battery is None or old_battery > services.LOW_BATTERY)):
-            services.raise_event(device, 'LOW_BATTERY', {'battery': battery, 'source': 'mqtt'})
+        if (device.owner_id and battery <= LOW_BATTERY
+                and (old_battery is None or old_battery > LOW_BATTERY)):
+            raise_event(device, 'LOW_BATTERY', {'battery': battery, 'source': 'mqtt'})
 
         lock_state = str(d.get('lock_state') or '').lower()
         lock_state = lock_state if lock_state in LOCK_STATES else 'unknown'
@@ -149,7 +150,7 @@ class _Subscriber:
             raw_payload={k: v for k, v in list(d.items())[:30]
                          if isinstance(v, (int, float, str, bool)) and len(str(v)) <= 100} or None)
         if tamper and (prev is None or not prev[2]) and device.owner_id:
-            services.raise_event(device, 'TAMPER', {'source': 'mqtt'})
+            raise_event(device, 'TAMPER', {'source': 'mqtt'})
 
     # ------------------------------------------------------------ ack
     def on_ack(self, device, d):
@@ -219,13 +220,13 @@ class _Subscriber:
             recorder(device, ticket=str(d.get('ticket', ''))[:200], ok=d.get('ok') is not False,
                      reason=(str(d['reason'])[:100] if d.get('reason') else None), at=d.get('at'))
 
-        elif kind.upper() in services.DEVICE_EVENTS:              # BOOT, TAMPER, FORCED_OPEN, DOOR_LEFT_OPEN, LOW_BATTERY
+        elif kind.upper() in DEVICE_EVENTS:              # BOOT, TAMPER, FORCED_OPEN, DOOR_LEFT_OPEN, LOW_BATTERY
             if kind == 'boot':
                 services.touch_device(device, firmware=d.get('firmware'))
             meta = d.get('data') if isinstance(d.get('data'), dict) else {}
             meta = {k: v for k, v in list(meta.items())[:20] if isinstance(v, (int, float, str, bool))}
             meta['source'] = 'mqtt'
-            services.raise_event(device, kind.upper(), meta)
+            raise_event(device, kind.upper(), meta)
 
         else:
             logger.info('event không hỗ trợ từ %s: %s', device.device_code, kind)

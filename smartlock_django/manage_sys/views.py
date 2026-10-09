@@ -38,6 +38,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_http_methods, require_POST
 
 from smartlock import services
+from smartlock_django import links
 from smartlock.models import (
     AccessEvent, Announcement, AuditLog, CardDeviceAccess, Device, DeviceAccess, DeviceCommand,
     DeviceStatusLog, DoorPinCode, FaceProfile, MobileSession, NfcReader, User, fernet,
@@ -605,6 +606,11 @@ def _new_device_code():
     raise RuntimeError('Không sinh được mã thiết bị duy nhất.')
 
 
+def _mqtt_info():
+    """Địa chỉ broker để nạp vào khoá (cùng giá trị subscriber/publisher của Django đang dùng)."""
+    return {'host': services.MQTT_BROKER_HOST, 'port': services.MQTT_BROKER_PORT, 'tls': services.MQTT_USE_TLS}
+
+
 def _clean_mac(raw):
     return (raw or '').strip().upper().replace('-', ':')
 
@@ -864,6 +870,7 @@ def device_detail(request, device_id):
         # Thông tin thiết lập (secret gốc không lưu, chỉ có dấu vân tay hash).
         'setup': {
             'device_code': code, 'mqtt_username': code,
+            'mqtt': _mqtt_info(),
             'secret_fingerprint': (device.provisioning_secret_hash or '')[:8],
             'cmd_topic': f'smartlock/{code}/cmd',
             'publish_topics': [f'smartlock/{code}/{c}' for c in ('status', 'ack', 'event')],
@@ -910,7 +917,9 @@ def device_secret(request, device_id):
     resp = _render(request, 'device_created', {
         'device': device, 'secret': data['secret'], 'rotated': data['rotated'],
         'claim_url': reverse('manage_sys:device-detail', args=[device.id]),
-        'api_base': request.build_absolute_uri('/').rstrip('/'),
+        'mqtt': _mqtt_info(),
+        'api_base': links.SERVER_URL,
+        'device_api': links.API_DEVICE_URL,
     })
     resp['Cache-Control'] = 'no-store, private'
     return resp

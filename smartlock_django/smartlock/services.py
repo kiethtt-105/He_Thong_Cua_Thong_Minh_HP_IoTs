@@ -32,6 +32,8 @@ from django.utils.html import linebreaks, strip_tags, urlize
 from django.utils.http import urlsafe_base64_encode
 from django.utils.safestring import mark_safe
 
+from smartlock_django import links   # LINKS SERVER: nguồn duy nhất cho link/host/MQTT
+
 from .models import (
     AccessCard, AccessEvent, AuditLog, CardDeviceAccess, Device,
     DeviceAccess, DeviceCommand, DeviceStatusLog, DoorPinCode, FaceProfile, NfcLog, NfcReader,
@@ -468,7 +470,7 @@ def notify_access_shared(request, access, created=True) -> bool:
             'owner_name': owner_name, 'device_name': device.name,
             'device_location': device.location or '', 'permissions': perm_names,
             'expires_text': expires, 'is_update': not created,
-            'action_url': request.build_absolute_uri(reverse('smartlock:device-detail', args=[device.id])),
+            'action_url': links.absolute(reverse('smartlock:device-detail', args=[device.id])),
         })
         return send_mail(subject, plain, html, target.email)
     except Exception:
@@ -573,7 +575,7 @@ def send_verification(request, user) -> bool:
         user=user, purpose='EMAIL_VERIFY', token_hash=hash_token(token),
         expires_at=timezone.now() + timedelta(minutes=minutes),
     )
-    link = request.build_absolute_uri(reverse('smartlock:verify_email', args=[token]))
+    link = links.absolute(reverse('smartlock:verify_email', args=[token]))
     subject, html, plain = render_email('user_verification', {
         'full_name': user.full_name or user.username,
         'username': user.username,
@@ -761,7 +763,7 @@ def render_email(template_name: str, context: dict) -> tuple:
 def send_password_reset(request, user, by_admin=None) -> bool:
     """Gửi link đặt lại mật khẩu (user tự yêu cầu, hoặc admin gửi hộ qua manage_sys: by_admin=<admin>).
     Trả True nếu mail đã gửi/xếp hàng. Link chứa token nên không ghi nội dung mail vào log."""
-    link = request.build_absolute_uri(reverse('smartlock:reset_password_confirm', args=[
+    link = links.absolute(reverse('smartlock:reset_password_confirm', args=[
         urlsafe_base64_encode(force_bytes(str(user.pk))), default_token_generator.make_token(user),
     ]))
     subject, html, plain = render_email('password_reset', {
@@ -787,12 +789,10 @@ def invalidate_system_settings() -> None:
 # 3. MQTT + GỬI LỆNH
 # ============================================================================
 # Chấp nhận cả MQTT_BROKER_* lẫn MQTT_HOST/MQTT_PORT để .env đặt tên nào cũng có tác dụng.
-MQTT_BROKER_HOST = os.environ.get('MQTT_BROKER_HOST') or os.environ.get('MQTT_HOST') or 'localhost'
-try:
-    MQTT_BROKER_PORT = int(os.environ.get('MQTT_BROKER_PORT') or os.environ.get('MQTT_PORT') or '1883')
-except ValueError:
-    MQTT_BROKER_PORT = 1883
-MQTT_USE_TLS = os.environ.get('MQTT_BROKER_USE_TLS', '').lower() in ('1', 'true', 'yes')
+MQTT_BROKER_HOST = links.MQTT_HOST
+MQTT_BROKER_PORT = links.MQTT_PORT
+# Cổng 8883 (MQTTS) tự bật TLS; secret thiết bị là mật khẩu MQTT nên KHÔNG nên chạy cổng 1883 ngoài mạng nội bộ.
+MQTT_USE_TLS = links.MQTT_USE_TLS
 MQTT_PUBLISHER_USERNAME = os.environ.get('MQTT_PUBLISHER_USERNAME', '')
 MQTT_PUBLISHER_PASSWORD = os.environ.get('MQTT_PUBLISHER_PASSWORD', '')
 
@@ -852,7 +852,10 @@ def dispatch_command(device, command, *, source, issued_by=None, ttl=30, extra=N
         publish_command(device.device_code, {
             'command_id': str(cmd.id), 'command': command,
             'token': cmd.command_token_hash,     # thiết bị gửi lại đúng hash này khi ack
-            'source': source, **(extra or {}),
+            'source': source,
+            # Thiết bị PHẢI bỏ lệnh khi now_unix > expires_at (tin QoS1 xếp hàng khi mất mạng không được mở cửa trễ).
+            'expires_at': int(cmd.expires_at.timestamp()), 'ttl': int(ttl), 'server_time': int(time.time()),
+            **(extra or {}),
         })
         cmd.status = 'sent'
     except MqttPublishError as e:
@@ -876,7 +879,8 @@ BURST_STAGE_WINDOW_SECONDS = 24 * 3600     # số lần khoá trong 24h quyết 
 BURST_NOTIFY_COOLDOWN_SECONDS = 600        # tối đa 1 thông báo ACCESS_BURST / 10 phút / thiết bị
 LOCKOUT_ACTION = 'ACCESS_BURST_LOCKOUT'
 # Không tính vào bộ đếm: bị chặn do đang khoá (nếu tính sẽ tự gia hạn khoá mãi) và lỗi MQTT.
-NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED', 'CARD_REGISTERED', 'ACCESS_REVOKED')
+NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED', 'CARD_REGISTERED', 'ACCESS_REVOKED',
+                       'BLE_NOT_ALLOWED', 'NFC_PHONE_NOT_ALLOWED')   # vé còn hạn nhưng quyền vừa bị thu hồi: cửa đã mở offline, không phải dò mã
 
 
 def normalize_uid(raw_uid: str) -> str:
@@ -950,6 +954,14 @@ def _announce_access(event: AccessEvent) -> None:
         f'{who} đã mở "{event.device.name}" bằng {METHOD_TEXT.get(event.method, event.method)}.')
 
 
+def _push_unlock(device, source, extra, push=True) -> bool:
+    """push=True (kênh MQTT): server ra lệnh UNLOCK xuống khoá. push=False (kênh HTTP): khoá tự mở khi nhận
+    granted=true nên KHÔNG tạo lệnh UNLOCK thứ hai (tránh mở lại khi khoá poll /device/commands/)."""
+    if not push:
+        return True
+    return dispatch_command(device, 'UNLOCK', source=source, extra=extra).status == 'sent'
+
+
 def _log_event(occurred_at=None, **kwargs) -> AccessEvent:
     event = AccessEvent.objects.create(**kwargs)
     if occurred_at:  # sự kiện offline đến trễ: đặt lại đúng giờ xảy ra
@@ -1013,7 +1025,7 @@ def _auto_register_card(device, raw_uid, ip_address=None):
                       ip_address=ip_address)
 
 
-def verify_rfid_tap(device, raw_uid: str, ip_address=None) -> AccessEvent:
+def verify_rfid_tap(device, raw_uid: str, ip_address=None, push: bool = True) -> AccessEvent:
     """ESP32 đọc UID thẻ (RC522) và publish lên MQTT; server chỉ so khớp UID (đã hash) rồi ra lệnh mở."""
     with transaction.atomic():
         if in_lockout(device):
@@ -1035,15 +1047,14 @@ def verify_rfid_tap(device, raw_uid: str, ip_address=None) -> AccessEvent:
             return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
                               reason='ACCESS_REVOKED', user=card.user, access_card=card, ip_address=ip_address)
 
-    cmd = dispatch_command(device, 'UNLOCK', source='rfid', extra={'card_id': str(card.id)})
-    ok = cmd.status == 'sent'
+    ok = _push_unlock(device, 'rfid', {'card_id': str(card.id)}, push)
     return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=ok,
                       reason=None if ok else 'MQTT_PUBLISH_FAILED', user=card.user,
                       access_card=card, ip_address=ip_address)
 
 
 # ---------------------------------------------------------------- PIN (bàn phím)
-def verify_door_pin(device, raw_pin: str, ip_address=None) -> AccessEvent:
+def verify_door_pin(device, raw_pin: str, ip_address=None, push: bool = True) -> AccessEvent:
     with transaction.atomic():
         if in_lockout(device):
             return _log_event(device=device, method=AccessEvent.METHOD_PIN, success=False,
@@ -1062,8 +1073,7 @@ def verify_door_pin(device, raw_pin: str, ip_address=None) -> AccessEvent:
                               ip_address=ip_address)
         matched.register_use()
 
-    cmd = dispatch_command(device, 'UNLOCK', source='pin', extra={'pin_id': str(matched.id)})
-    ok = cmd.status == 'sent'
+    ok = _push_unlock(device, 'pin', {'pin_id': str(matched.id)}, push)
     if not ok:
         # Cửa chưa mở -> hoàn lại lượt dùng để PIN dùng-một-lần không bị "cháy" oan.
         DoorPinCode.objects.filter(pk=matched.pk, use_count__gt=0).update(use_count=F('use_count') - 1)
@@ -1113,26 +1123,37 @@ def _euclidean_distance(a, b) -> float:
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
-FACE_MAX_THRESHOLD = 0.6   # trần phía server: FaceProfile.threshold cao hơn cũng bị kẹp về mức này
+# Trần phía server: FaceProfile.threshold cao hơn cũng bị kẹp về mức này. 0.6 là mức chuẩn dlib nhưng lỏng cho khoá cửa -> mặc định 0.5,
+# chỉnh bằng settings.FACE_MAX_THRESHOLD. FACE_MIN_MARGIN: khoảng cách tới NGƯỜI KHÁC gần nhì phải cách xa ít nhất mức này (chống nhập nhằng).
+FACE_MAX_THRESHOLD = float(getattr(settings, 'FACE_MAX_THRESHOLD', 0.5))
+FACE_MIN_MARGIN = float(getattr(settings, 'FACE_MIN_MARGIN', 0.04))
 
 
-def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None) -> AccessEvent:
+def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None, push: bool = True) -> AccessEvent:
     """embedding do thiết bị biên/dịch vụ suy luận tính sẵn; server chỉ so khoảng cách Euclid
     với các FaceProfile đang active VÀ đã có xác nhận đồng ý của device này."""
     if in_lockout(device):
         return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False,
                           reason='DEVICE_LOCKED_OUT', snapshot_url=snapshot_url, ip_address=ip_address)
 
-    best_profile, best_distance = None, math.inf
+    best_profile, best_distance, second_distance = None, math.inf, math.inf
     for profile in FaceProfile.objects.filter(device=device, is_active=True, consent_confirmed=True):
         d = _euclidean_distance(embedding, profile.get_embedding())
         if d < best_distance:
+            if best_profile is not None and best_profile.user_id != profile.user_id:
+                second_distance = best_distance
             best_profile, best_distance = profile, d
+        elif best_profile is not None and profile.user_id != best_profile.user_id and d < second_distance:
+            second_distance = d
 
     limit = min(float(best_profile.threshold), FACE_MAX_THRESHOLD) if best_profile else 0.0
     if not best_profile or best_distance > limit:
         return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False,
                           reason='NO_MATCH', snapshot_url=snapshot_url, ip_address=ip_address)
+
+    if second_distance - best_distance < FACE_MIN_MARGIN:      # 2 người khác nhau đều gần như khớp -> từ chối
+        return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False,
+                          reason='AMBIGUOUS_MATCH', snapshot_url=snapshot_url, ip_address=ip_address)
 
     if not user_has_live_access(best_profile.user, device):
         return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False, reason='ACCESS_REVOKED',
@@ -1140,8 +1161,7 @@ def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None
                           ip_address=ip_address)
 
     confidence = max(0.0, 1 - (best_distance / limit))
-    cmd = dispatch_command(device, 'UNLOCK', source='face', extra={'face_profile_id': str(best_profile.id)})
-    ok = cmd.status == 'sent'
+    ok = _push_unlock(device, 'face', {'face_profile_id': str(best_profile.id)}, push)
     return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=ok,
                       reason=None if ok else 'MQTT_PUBLISH_FAILED', user=best_profile.user,
                       face_profile=best_profile, confidence=round(confidence, 4),
@@ -1596,6 +1616,11 @@ def revoke_mobile_sessions(user) -> int:
 # HẰNG SỐ DÙNG CHUNG (trước đây là constants.py)
 # ============================================================================
 COMMAND_TTL_SECONDS = 120
+COMMAND_TTL_BY_TYPE = {'UNLOCK': 30}      # lệnh mở cửa sống ngắn: không để lệnh cũ mở cửa trễ
+
+
+def command_ttl(command: str) -> int:
+    return COMMAND_TTL_BY_TYPE.get(command, COMMAND_TTL_SECONDS)
 # lệnh -> quyền cần có (None = chỉ chủ khoá)
 ALLOWED_COMMANDS = {'LOCK': 'LOCK', 'UNLOCK': 'UNLOCK', 'REBOOT': None}
 COMMAND_LABELS = {'LOCK': 'Khóa', 'UNLOCK': 'Mở khóa', 'REBOOT': 'Khởi động lại'}
@@ -1710,12 +1735,5 @@ def lock_minutes(user) -> int:
 
 
 def webauthn_rp(request):
-    """(rp_id, origin, rp_name). Ghi đè được bằng settings.WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN / WEBAUTHN_RP_NAME."""
-    host = request.get_host()
-    rp_id = getattr(settings, 'WEBAUTHN_RP_ID', None) or host.split(':')[0]
-    scheme = 'https' if request.is_secure() else 'http'
-    if getattr(settings, 'TRUST_PROXY_HEADERS', False) and \
-            request.META.get('HTTP_X_FORWARDED_PROTO', '').split(',')[0].strip() == 'https':
-        scheme = 'https'
-    origin = getattr(settings, 'WEBAUTHN_ORIGIN', None) or f'{scheme}://{host}'
-    return rp_id, origin, getattr(settings, 'WEBAUTHN_RP_NAME', TOTP_ISSUER)
+    """(rp_id, origin, rp_name). Luôn lấy từ LINKS SERVER (SERVER_URL), không suy từ Host header của request."""
+    return links.WEBAUTHN_RP_ID, links.WEBAUTHN_ORIGIN, getattr(settings, 'WEBAUTHN_RP_NAME', TOTP_ISSUER)

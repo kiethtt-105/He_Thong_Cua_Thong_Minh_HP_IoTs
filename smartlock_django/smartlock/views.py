@@ -22,6 +22,7 @@ import time
 from datetime import timedelta
 
 from django.apps import apps
+from django.core.cache import cache
 from django.db import connection
 from django.db.models import Avg, Count, F, OuterRef, Q, Subquery
 from django.db.models.functions import TruncHour, TruncMinute
@@ -163,10 +164,11 @@ def _require_demo_logs(request):
     """Chỉ bật khi settings.DEMO_LOGS_ENABLED; khi DEBUG=False chỉ admin đã đăng nhập xem được."""
     if not getattr(dj_settings, 'DEMO_LOGS_ENABLED', False):
         raise Http404()
-    if not dj_settings.DEBUG:
-        user = getattr(request, 'user', None)
-        if not (user and user.is_authenticated and _is_admin(user)):
-            raise Http404()
+    if dj_settings.DEBUG and getattr(dj_settings, 'DEMO_LOGS_PUBLIC', False):
+        return                      # công khai chỉ khi cả DEBUG và DEMO_LOGS_PUBLIC bật tường minh
+    user = getattr(request, 'user', None)
+    if not (user and user.is_authenticated and _is_admin(user)):
+        raise Http404()
 
 
 def public_system_logs(request):
@@ -521,6 +523,9 @@ def public_system_logs_api(request):
     """JSON snapshot mới nhất của TOÀN BỘ log trong hệ thống - client gọi lại mỗi 2s.
     Chỉ đọc (GET), không có tham số nào làm thay đổi dữ liệu."""
     _require_demo_logs(request)
+    cached = cache.get('sysview:public-snapshot')      # ~25 truy vấn / lần, client poll 2s -> gộp các client trong 2s
+    if cached is not None:
+        return JsonResponse(cached)
     _ls = DeviceStatusLog.objects.filter(device=OuterRef('pk')).order_by('-recorded_at')
     devices = (Device.objects.select_related('owner')
                .annotate(l_lock=Subquery(_ls.values('lock_state')[:1]),
@@ -620,7 +625,7 @@ def public_system_logs_api(request):
         'failed_login_24h': AuditLog.objects.filter(action__in=_LOGIN_FAIL_ACTIONS, created_at__gte=since_24h).count(),
     }
 
-    return JsonResponse({
+    payload = {
         'server_time': timezone.now().isoformat(),
         'stats': stats,
         'devices': device_rows,
@@ -639,4 +644,6 @@ def public_system_logs_api(request):
             'tamper_events': tamper_series,
             'avg_battery': avg_battery_series, 'avg_temp': avg_temp_series,
         },
-    })
+    }
+    cache.set('sysview:public-snapshot', payload, 2)
+    return JsonResponse(payload)

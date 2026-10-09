@@ -12,6 +12,10 @@ load_dotenv(BASE_DIR.parent / ".env")   # .env nằm ở thư mục gốc repo
 load_dotenv()                           # fallback: .env ở thư mục hiện tại
 
 
+# LINKS SERVER: nguồn duy nhất cho SERVER_URL / MQTT broker (xem smartlock_django/links.py). Import SAU load_dotenv.
+from smartlock_django import links
+
+
 # ==================== HELPERS ====================
 def env_bool(name, default=False):
     value = os.environ.get(name)
@@ -50,13 +54,13 @@ OTP_MAX_ATTEMPTS = env_int("OTP_MAX_ATTEMPTS", 5)
 # domain đang mở trên trình duyệt, ví dụ khi test qua devtunnel:
 #   WEBAUTHN_RP_ID=xxxx.asse.devtunnels.ms
 #   WEBAUTHN_ORIGIN=https://xxxx.asse.devtunnels.ms
-WEBAUTHN_RP_ID = os.environ.get("WEBAUTHN_RP_ID") or None
-WEBAUTHN_ORIGIN = os.environ.get("WEBAUTHN_ORIGIN") or None
+WEBAUTHN_RP_ID = links.WEBAUTHN_RP_ID          # = host của SERVER_URL
+WEBAUTHN_ORIGIN = links.WEBAUTHN_ORIGIN        # = SERVER_URL
 WEBAUTHN_RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "Smart Lock")
 
 # ==================== MQTT ====================
-MQTT_HOST = os.environ.get("MQTT_HOST")
-MQTT_PORT = env_int("MQTT_PORT", 1883)
+MQTT_HOST = links.MQTT_HOST
+MQTT_PORT = links.MQTT_PORT
 MQTT_TOPIC_PREFIX = os.environ.get("MQTT_TOPIC_PREFIX", "")
 # Bí mật chung broker <-> Django cho webhook auth/ACL (broker gửi header X-Webhook-Secret).
 MQTT_WEBHOOK_SECRET = os.environ.get("MQTT_WEBHOOK_SECRET") or None
@@ -64,7 +68,16 @@ MQTT_WEBHOOK_SECRET = os.environ.get("MQTT_WEBHOOK_SECRET") or None
 MQTT_TRUSTED_USERNAMES = env_list("MQTT_TRUSTED_USERNAMES", os.environ.get("MQTT_PUBLISHER_USERNAME", ""))
 
 # Trang log công khai /demo/system-logs/: chỉ bật khi DEBUG hoặc khi đặt DEMO_LOGS_ENABLED=True.
-DEMO_LOGS_ENABLED = env_bool("DEMO_LOGS_ENABLED", DEBUG)
+# Mặc định TẮT (kể cả DEBUG). Bật: DEMO_LOGS_ENABLED=True -> chỉ admin đã đăng nhập xem được;
+# muốn công khai (chỉ khi DEBUG, để demo) phải đặt thêm DEMO_LOGS_PUBLIC=True.
+DEMO_LOGS_ENABLED = env_bool("DEMO_LOGS_ENABLED", False)
+DEMO_LOGS_PUBLIC = env_bool("DEMO_LOGS_PUBLIC", False)
+
+# Nhận diện khuôn mặt (xem services.py): ngưỡng khoảng cách tối đa và độ chênh với người gần nhì.
+FACE_MAX_THRESHOLD = float(os.environ.get("FACE_MAX_THRESHOLD", "0.5"))
+FACE_MIN_MARGIN = float(os.environ.get("FACE_MIN_MARGIN", "0.04"))
+# Kênh HTTP của khoá: True = ngoài granted=true còn gửi thêm lệnh UNLOCK (chỉ cho firmware cũ cần lệnh).
+HTTP_ACCESS_PUSH_UNLOCK = env_bool("HTTP_ACCESS_PUSH_UNLOCK", False)
 
 # Lưu messages trong session (không đi qua cookie) - PIN cấp cho khách hiển thị qua messages.
 MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
@@ -74,30 +87,15 @@ MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 # Dự án học tập: ALLOW_ALL_HOSTS=True -> chạy được ở local, devtunnel, Vercel (mọi preview) mà không cần liệt kê host.
 # Production thật: đặt ALLOW_ALL_HOSTS=False và liệt kê ALLOWED_HOSTS (vd. localhost,ten-mien.vercel.app).
 ALLOW_ALL_HOSTS = env_bool("ALLOW_ALL_HOSTS", False)
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1")
+# Host hợp lệ = host của SERVER_URL (+ localhost khi DEBUG, + ALLOWED_HOSTS trong .env nếu muốn thêm).
+ALLOWED_HOSTS = links.allowed_hosts()
 if ALLOW_ALL_HOSTS:
     ALLOWED_HOSTS = ["*"]
 
 
 # ==================== CSRF TRUSTED ORIGINS ====================
-_explicit_origins = env_list("CSRF_TRUSTED_ORIGINS")
-if _explicit_origins:
-    CSRF_TRUSTED_ORIGINS = _explicit_origins
-elif ALLOW_ALL_HOSTS:
-    # "*" ở ALLOWED_HOSTS không áp dụng cho CSRF -> liệt kê wildcard cho các môi trường hay dùng.
-    CSRF_TRUSTED_ORIGINS = [
-        "http://localhost:8000", "http://127.0.0.1:8000", "http://10.0.2.2:8000",
-        "https://*.vercel.app", "https://*.devtunnels.ms", "https://*.ngrok-free.app", "https://*.ngrok.io",
-    ]
-else:
-    CSRF_TRUSTED_ORIGINS = []
-    for _host in ALLOWED_HOSTS:
-        if _host in ("localhost", "127.0.0.1", "0.0.0.0", "10.0.2.2"):
-            CSRF_TRUSTED_ORIGINS += [f"http://{_host}", f"http://{_host}:8000"]
-        elif _host.startswith("."):
-            CSRF_TRUSTED_ORIGINS.append(f"https://*{_host}")
-        else:
-            CSRF_TRUSTED_ORIGINS.append(f"https://{_host}")
+# = SERVER_URL (+ CSRF_TRUSTED_ORIGINS trong .env nếu muốn thêm). Không còn tự đoán wildcard vercel/devtunnel/ngrok.
+CSRF_TRUSTED_ORIGINS = links.csrf_trusted_origins()
 
 
 # ==================== PROXY / HTTPS (Vercel) ====================
@@ -222,6 +220,9 @@ REPLICA_FRESH_MODELS = set(env_list("REPLICA_FRESH_MODELS", ",".join([
     "smartlock.Fido2Credential", "smartlock.MobileSession", "smartlock.DeviceCommand",
     "smartlock.SystemSettings", "otp_totp.TOTPDevice", "otp_static.StaticDevice", "otp_static.StaticToken",
     "smartlock.SecurityRecord",
+    # dữ liệu quyết định mở cửa: thu hồi xong phải có hiệu lực ngay, không đọc từ bản sao
+    "smartlock.Device", "smartlock.DeviceAccess", "smartlock.AccessCredential", "smartlock.CardDeviceAccess",
+    "smartlock.NfcReader",
 ])))
 if LOCAL_REPLICA:
     # Mặc định SQLite (không cần cài gì). Postgres local: REPLICA_ENGINE=django.db.backends.postgresql + REPLICA_DB_*.
