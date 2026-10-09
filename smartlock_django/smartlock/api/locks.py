@@ -242,8 +242,7 @@ def device_command(request, device_id):
                        metadata={'reason': 'duplicate_pending'})
         raise ApiError('DUPLICATE', 'Lệnh này vừa được gửi, vui lòng chờ vài giây.', 429)
 
-    cmd = services.dispatch_command(device, command, source=request.client_type, issued_by=user,
-                                    ttl=services.command_ttl(command))
+    cmd = services.dispatch_command(device, command, source=request.client_type, issued_by=user, ttl=COMMAND_TTL_SECONDS)
     if cmd.status != 'sent':
         services.audit(request, f'CMD_{command}_FAILED', device=device, success=False,
                        metadata={'reason': 'mqtt_publish_failed', 'error': getattr(cmd, 'publish_error', '')})
@@ -340,8 +339,6 @@ def device_pins(request, device_id):
             max_uses = max(0, int(data.get('max_uses') if data.get('max_uses') is not None else 1))
         except (TypeError, ValueError):
             raise ApiError('BAD_FIELD', 'Thời hạn hoặc số lần dùng không hợp lệ.', 400)
-        if max_uses == 0:                       # PIN không giới hạn lượt: tối đa 7 ngày (khách dài ngày cấp lại)
-            ttl = min(ttl, 7 * 24 * 60)
         label = s(data, 'label', 100)
         try:
             pin, plain = services.issue_unique_door_pin(device=device, created_by=user, ttl_minutes=ttl,
@@ -958,6 +955,7 @@ def _snapshot_payload(request) -> dict:
     # ---- bảo mật tài khoản (không có bí mật TOTP, không có khoá công khai) ----
     cfg = TwoFactorConfig.objects.filter(user=user).first()
     passkeys = Fido2Credential.objects.filter(user=user).order_by('created_at')
+    rp_here = services.webauthn_rp(request)[0]
     sessions = MobileSession.objects.filter(user=user, revoked_at__isnull=True,
                                             expires_at__gt=now).order_by('-created_at')
     current = request.api_session.id if request.api_session else None
@@ -1012,7 +1010,8 @@ def _snapshot_payload(request) -> dict:
             'email_otp': bool(cfg and cfg.email_otp_enabled),
             'preferred_method': cfg.preferred_method if cfg else '',
             'passkeys': [{'id': str(k.id), 'name': k.name, 'created_at': iso(k.created_at),
-                          'last_used_at': iso(k.last_used_at)} for k in passkeys],
+                          'last_used_at': iso(k.last_used_at), 'rp_id': k.rp_id or '',
+                          'usable_here': (not k.rp_id) or k.rp_id == rp_here} for k in passkeys],
             'sessions': [session_json(m, current) for m in sessions],
         },
     }

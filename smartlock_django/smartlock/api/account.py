@@ -15,6 +15,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.utils.encoding import force_str
@@ -90,10 +91,21 @@ def _burn_password_check(password):
     check_password(password, _DUMMY_HASH)
 
 
+def _passkeys_here(user, request=None):
+    """Passkey dùng được trên tên miền ĐANG CHẠY (rp_id trùng RP ID hiện tại; rp_id rỗng/NULL = bản cũ, coi như dùng được).
+    Passkey gắn chặt với tên miền: đăng ký ở devtunnel thì không dùng được ở Vercel và ngược lại."""
+    rp_id = services.webauthn_rp(request)[0]
+    return Fido2Credential.objects.filter(user=user).filter(Q(rp_id=rp_id) | Q(rp_id='') | Q(rp_id__isnull=True))
+
+
 def _2fa_methods(user, web=False) -> list:
-    """App: chỉ totp + email (passkey cần RP/origin của trình duyệt). Web: thêm passkey (fido2)."""
+    """App: chỉ totp + email (passkey cần RP/origin của trình duyệt). Web: thêm passkey (fido2) NẾU có passkey
+    đăng ký đúng tên miền đang mở."""
     allowed = ('totp', 'email', 'fido2') if web else ('totp', 'email')
-    return [m for m in services.get_cfg(user).available_methods() if m in allowed]
+    methods = [m for m in services.get_cfg(user).available_methods() if m in allowed]
+    if 'fido2' in methods and not _passkeys_here(user).exists():
+        methods.remove('fido2')
+    return methods
 
 
 def _is_web(info) -> bool:
@@ -159,12 +171,19 @@ def register(request):
         existing.save(update_fields=['password', 'username', 'full_name', 'updated_at'])
         recent = OneTimeCode.objects.filter(user=existing, purpose='EMAIL_VERIFY',
                                             created_at__gt=timezone.now() - timedelta(seconds=60)).exists()
+        sent = None
         if not recent:
             sent = services.send_verification(request, existing)
             services.audit(request, 'VERIFY_MAIL_RESENT', actor=None, target_user=existing, success=sent,
                            metadata={'reason': 'duplicate_register_unverified', 'channel': 'mobile'})
-        return ok({'verification_required': True, 'email': email,
-                   'message': 'Email đã đăng ký nhưng chưa xác thực. Đã gửi lại email xác thực.'}, 200)
+        if recent:
+            msg = 'Email đã đăng ký nhưng chưa xác thực. Email xác thực vừa được gửi, hãy kiểm tra hộp thư (kể cả Spam).'
+        elif sent:
+            msg = 'Email đã đăng ký nhưng chưa xác thực. Đã gửi lại email xác thực.'
+        else:
+            msg = 'Email đã đăng ký nhưng chưa xác thực. Chưa gửi được email xác thực, hãy thử lại sau ít phút.'
+        return ok({'verification_required': True, 'email': email, 'email_sent': bool(sent) or recent,
+                   'message': msg}, 200)
 
     try:
         with transaction.atomic():
@@ -258,8 +277,9 @@ def login(request):
             methods = _2fa_methods(auth_user, _is_web(info))
             if not methods:
                 raise ApiError('TWO_FACTOR_UNSUPPORTED',
-                               'Tài khoản chỉ bật Passkey. Hãy thêm Google Authenticator hoặc Email OTP '
-                               'trên web để đăng nhập bằng app.', 403)
+                               'Tài khoản chỉ có Passkey, mà passkey này không dùng được ở địa chỉ hiện tại '
+                               '(hoặc trên app). Hãy đăng nhập ở địa chỉ đã đăng ký passkey và thêm Google '
+                               'Authenticator hoặc Email OTP.', 403)
             cfg = services.get_cfg(auth_user)
             services.audit(request, 'LOGIN_2FA_REQUIRED', actor=None, target_user=auth_user,
                            metadata={'channel': 'web' if _is_web(info) else 'mobile'})
@@ -353,9 +373,9 @@ def two_factor_passkey_options(request):
         raise ApiError('WEB_ONLY', 'Passkey chỉ dùng được trên web.', 400)
     check_csrf(request)
     creds = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(c.credential_id))
-             for c in Fido2Credential.objects.filter(user=user)]
+             for c in _passkeys_here(user, request)]
     if not creds:
-        raise ApiError('NO_PASSKEY', 'Tài khoản chưa đăng ký passkey.', 400)
+        raise ApiError('NO_PASSKEY', 'Tài khoản chưa có passkey đăng ký ở địa chỉ này.', 400)
     rp_id, _origin, _name = services.webauthn_rp(request)
     options = generate_authentication_options(rp_id=rp_id, allow_credentials=creds,
                                               user_verification=UserVerificationRequirement.PREFERRED)
@@ -383,7 +403,7 @@ def two_factor_passkey_finish(request):
         raise ApiError('PASSKEY_EXPIRED', 'Yêu cầu passkey đã hết hạn. Hãy thử lại.', 400)
     credential = data.get('credential')
     credential = credential if isinstance(credential, dict) else {}
-    cred = Fido2Credential.objects.filter(user=user, credential_id=credential.get('id') or '').first()
+    cred = _passkeys_here(user, request).filter(credential_id=credential.get('id') or '').first()
     rp_id, origin, _name = services.webauthn_rp(request)
     good = False
     if cred:
@@ -837,7 +857,7 @@ def passkey_options(request):
         rp_id=rp_id, rp_name=rp_name, user_id=user.pk.bytes, user_name=user.email,
         user_display_name=user.full_name or user.username,
         exclude_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(c.credential_id))
-                             for c in Fido2Credential.objects.filter(user=user)],
+                             for c in _passkeys_here(user, request)],
         authenticator_selection=AuthenticatorSelectionCriteria(
             resident_key=ResidentKeyRequirement.PREFERRED,
             user_verification=UserVerificationRequirement.PREFERRED))
@@ -861,6 +881,7 @@ def passkey_register(request):
                                          expected_rp_id=rp_id, expected_origin=origin,
                                          require_user_verification=False)
     except Exception:
+        services.audit(request, 'PASSKEY_REGISTER_FAILED', success=False, severity='warning', target_user=user)
         raise ApiError('PASSKEY_INVALID', 'Không xác minh được passkey.', 400)
     cred_id = bytes_to_base64url(v.credential_id)
     if len(cred_id) > 512 or Fido2Credential.objects.filter(credential_id=cred_id).exists():
@@ -870,7 +891,8 @@ def passkey_register(request):
         with transaction.atomic():
             Fido2Credential.objects.create(
                 user=user, credential_id=cred_id, public_key=v.credential_public_key, sign_count=v.sign_count,
-                transports=[str(t)[:20] for t in transports][:8], name=s(data, 'name', 100) or 'Passkey')
+                transports=[str(t)[:20] for t in transports][:8], name=s(data, 'name', 100) or 'Passkey',
+                rp_id=rp_id)
     except IntegrityError:
         raise ApiError('PASSKEY_EXISTS', 'Passkey này đã được đăng ký.', 409)
     with transaction.atomic():
