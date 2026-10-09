@@ -1,4 +1,5 @@
 # smartlock_django/smartlock_django/settings.py
+
 import os
 from pathlib import Path
 
@@ -6,17 +7,14 @@ from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env (local). Trên Vercel không có file .env, biến lấy từ Environment Variables.
 from dotenv import load_dotenv
-load_dotenv(BASE_DIR.parent / ".env")   # .env nằm ở thư mục gốc repo
-load_dotenv()                           # fallback: .env ở thư mục hiện tại
+load_dotenv(BASE_DIR.parent / ".env")
+load_dotenv()
 
 
-# LINKS SERVER: nguồn duy nhất cho SERVER_URL / MQTT broker (xem smartlock_django/links.py). Import SAU load_dotenv.
 from smartlock_django import links
 
 
-# ==================== HELPERS ====================
 def env_bool(name, default=False):
     value = os.environ.get(name)
     if value is None:
@@ -36,83 +34,55 @@ def env_list(name, default=""):
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-# ==================== SECURITY CONFIGURATION ====================
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     raise ImproperlyConfigured("Thiếu biến môi trường DJANGO_SECRET_KEY")
 
 DEBUG = env_bool("DEBUG", False)
 
-# Khóa mã hóa Fernet và cấu hình OTP (đọc từ .env)
 FERNET_KEY = os.environ.get("FERNET_KEY")
 OTP_EXPIRY_MINUTES = env_int("OTP_EXPIRY_MINUTES", 5)
 OTP_MAX_ATTEMPTS = env_int("OTP_MAX_ATTEMPTS", 5)
 
-# ==================== WEBAUTHN (PASSKEY) ====================
-# Để trống -> tự suy ra từ Host header của request (dễ sai khi chạy qua devtunnel/ngrok
-# vì tunnel có thể đổi Host header thành localhost). Đặt cứng trong .env để chắc chắn khớp
-# domain đang mở trên trình duyệt, ví dụ khi test qua devtunnel:
-#   WEBAUTHN_RP_ID=xxxx.asse.devtunnels.ms
-#   WEBAUTHN_ORIGIN=https://xxxx.asse.devtunnels.ms
-WEBAUTHN_RP_ID = links.WEBAUTHN_RP_ID          # = host của SERVER_URL
-WEBAUTHN_ORIGIN = links.WEBAUTHN_ORIGIN        # = SERVER_URL
+WEBAUTHN_RP_ID = links.WEBAUTHN_RP_ID
+WEBAUTHN_ORIGIN = links.WEBAUTHN_ORIGIN
 WEBAUTHN_RP_NAME = os.environ.get("WEBAUTHN_RP_NAME", "Smart Lock")
 
-# ==================== MQTT ====================
 MQTT_HOST = links.MQTT_HOST
 MQTT_PORT = links.MQTT_PORT
 MQTT_TOPIC_PREFIX = os.environ.get("MQTT_TOPIC_PREFIX", "")
-# Bí mật chung broker <-> Django cho webhook auth/ACL (broker gửi header X-Webhook-Secret).
 MQTT_WEBHOOK_SECRET = os.environ.get("MQTT_WEBHOOK_SECRET") or None
-# Tài khoản MQTT của server (publisher/subscriber) được bỏ qua ACL theo thiết bị.
 MQTT_TRUSTED_USERNAMES = env_list("MQTT_TRUSTED_USERNAMES", os.environ.get("MQTT_PUBLISHER_USERNAME", ""))
 
-# Trang log công khai /demo/system-logs/: chỉ bật khi DEBUG hoặc khi đặt DEMO_LOGS_ENABLED=True.
-# Mặc định TẮT (kể cả DEBUG). Bật: DEMO_LOGS_ENABLED=True -> chỉ admin đã đăng nhập xem được;
-# muốn công khai (chỉ khi DEBUG, để demo) phải đặt thêm DEMO_LOGS_PUBLIC=True.
 DEMO_LOGS_ENABLED = env_bool("DEMO_LOGS_ENABLED", False)
 DEMO_LOGS_PUBLIC = env_bool("DEMO_LOGS_PUBLIC", False)
 
-# Nhận diện khuôn mặt (xem services.py): ngưỡng khoảng cách tối đa và độ chênh với người gần nhì.
 FACE_MAX_THRESHOLD = float(os.environ.get("FACE_MAX_THRESHOLD", "0.5"))
 FACE_MIN_MARGIN = float(os.environ.get("FACE_MIN_MARGIN", "0.04"))
-# Kênh HTTP của khoá: True = ngoài granted=true còn gửi thêm lệnh UNLOCK (chỉ cho firmware cũ cần lệnh).
 HTTP_ACCESS_PUSH_UNLOCK = env_bool("HTTP_ACCESS_PUSH_UNLOCK", False)
 
-# Lưu messages trong session (không đi qua cookie) - PIN cấp cho khách hiển thị qua messages.
 MESSAGE_STORAGE = "django.contrib.messages.storage.session.SessionStorage"
 
 
-# ==================== HOST CONFIGURATION (100% từ .env) ====================
-# Dự án học tập: ALLOW_ALL_HOSTS=True -> chạy được ở local, devtunnel, Vercel (mọi preview) mà không cần liệt kê host.
-# Production thật: đặt ALLOW_ALL_HOSTS=False và liệt kê ALLOWED_HOSTS (vd. localhost,ten-mien.vercel.app).
 ALLOW_ALL_HOSTS = env_bool("ALLOW_ALL_HOSTS", False)
-# Host hợp lệ = host của SERVER_URL (+ localhost khi DEBUG, + ALLOWED_HOSTS trong .env nếu muốn thêm).
 ALLOWED_HOSTS = links.allowed_hosts()
 if ALLOW_ALL_HOSTS:
     ALLOWED_HOSTS = ["*"]
 
 
-# ==================== CSRF TRUSTED ORIGINS ====================
-# = SERVER_URL (+ CSRF_TRUSTED_ORIGINS trong .env nếu muốn thêm). Không còn tự đoán wildcard vercel/devtunnel/ngrok.
 CSRF_TRUSTED_ORIGINS = links.csrf_trusted_origins()
 
 
-# ==================== PROXY / HTTPS (Vercel) ====================
-# Chỉ tin X-Forwarded-Proto khi app thật sự đứng sau proxy tin cậy (nếu không, client giả header được).
 TRUST_PROXY_HEADERS = env_bool("TRUST_PROXY_HEADERS", True)
 if TRUST_PROXY_HEADERS:
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
-# Mặc định bật cookie Secure khi DEBUG=False (Vercel dùng HTTPS).
-# Chạy local bằng http://localhost với DEBUG=False: đặt SECURE_COOKIES=False trong .env
 SECURE_COOKIES = env_bool("SECURE_COOKIES", not DEBUG)
 if SECURE_COOKIES:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
 
-# ==================== APPLICATION CONFIGURATION ====================
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -130,10 +100,9 @@ INSTALLED_APPS = [
     'corsheaders',
 ]
 if DEBUG:
-    INSTALLED_APPS.append('django_extensions')   # chỉ dùng khi dev (shell_plus...)
+    INSTALLED_APPS.append('django_extensions')
 
 
-# ==================== MIDDLEWARE CONFIGURATION ====================
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -148,15 +117,13 @@ MIDDLEWARE = [
     'allauth.account.middleware.AccountMiddleware',
     'django_otp.middleware.OTPMiddleware',
 ]
-if env_bool("PERF_TIMING", False):   # xem manage_sys/middleware.py: Server-Timing + log request chậm
+if env_bool("PERF_TIMING", False):
     MIDDLEWARE.insert(0, 'manage_sys.middleware.ServerTimingMiddleware')
 
 
-# ==================== URL CONFIGURATION ====================
 ROOT_URLCONF = 'smartlock_django.urls'
 
 
-# ==================== TEMPLATE CONFIGURATION ====================
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -174,13 +141,10 @@ TEMPLATES = [
 ]
 
 
-# ==================== WSGI/ASGI CONFIGURATION ====================
 WSGI_APPLICATION = 'smartlock_django.wsgi.application'
 ASGI_APPLICATION = 'smartlock_django.asgi.application'
 
 
-# ==================== DATABASE CONFIGURATION ====================
-# Dùng Supabase Transaction Pooler: DB_HOST=...pooler.supabase.com, DB_PORT=6543
 DATABASES = {
     'default': {
         'ENGINE': os.environ.get("ENGINE", "django.db.backends.postgresql"),
@@ -189,43 +153,33 @@ DATABASES = {
         'PASSWORD': os.environ.get("DB_PASSWORD"),
         'HOST': os.environ.get("DB_HOST"),
         'PORT': os.environ.get("DB_PORT", "6543"),
-        # Mở kết nối TLS tới Supabase mỗi request tốn ~0.3-1s. Local/VPS: giữ kết nối 60s; Vercel (serverless): 0.
         'CONN_MAX_AGE': env_int("DB_CONN_MAX_AGE", 0 if os.environ.get("VERCEL") else 60),
-        'CONN_HEALTH_CHECKS': True,               # kết nối cũ bị pooler đóng -> tự mở lại, không lỗi
-        'DISABLE_SERVER_SIDE_CURSORS': True,      # bắt buộc với pooler transaction mode
+        'CONN_HEALTH_CHECKS': True,
+        'DISABLE_SERVER_SIDE_CURSORS': True,
         'OPTIONS': {
             'sslmode': os.environ.get("DB_SSLMODE", "require"),
-            'connect_timeout': env_int("DB_CONNECT_TIMEOUT", 5),   # mất mạng -> báo lỗi sau 5s thay vì treo
+            'connect_timeout': env_int("DB_CONNECT_TIMEOUT", 5),
         },
     }
 }
 if not DATABASES['default']['ENGINE'].endswith('postgresql'):
-    DATABASES['default']['OPTIONS'] = {}      # sslmode/connect_timeout chỉ dành cho Postgres (vd. ENGINE=sqlite3 khi test)
+    DATABASES['default']['OPTIONS'] = {}
     DATABASES['default'].pop('CONN_HEALTH_CHECKS', None)
 
 
-# ==================== BẢN SAO LOCAL + TỰ ĐỒNG BỘ (chỉ máy cá nhân; Vercel không đặt LOCAL_REPLICA) ====================
-# LOCAL_REPLICA=True: khi chạy `python manage.py runserver`, server TỰ tải Supabase về DB trên máy rồi tự làm mới
-# mỗi REPLICA_SYNC_SECONDS giây (mặc định 2s, chỉ chép bảng có thay đổi; luồng nền, code ở cuối file này). Đọc từ máy local cho nhanh; GHI luôn vào
-# Supabase (nguồn dữ liệu duy nhất -> không xung đột); dữ liệu Vercel ghi sẽ về máy sau tối đa vài giây.
-# Mất kết nối Supabase: vẫn ĐỌC được từ bản sao, ghi sẽ báo lỗi.
 LOCAL_REPLICA = env_bool("LOCAL_REPLICA", False)
-REPLICA_SYNC_SECONDS = max(1, env_int("REPLICA_SYNC_SECONDS", 2))          # chu kỳ kiểm tra thay đổi (rẻ: 1 truy vấn nhỏ)
-REPLICA_FULL_SYNC_SECONDS = max(10, env_int("REPLICA_FULL_SYNC_SECONDS", 300))   # định kỳ chép lại tất cả để chắc chắn khớp
+REPLICA_SYNC_SECONDS = max(1, env_int("REPLICA_SYNC_SECONDS", 2))
+REPLICA_FULL_SYNC_SECONDS = max(10, env_int("REPLICA_FULL_SYNC_SECONDS", 300))
 REPLICA_STICKY_SECONDS = env_int("REPLICA_STICKY_SECONDS", 5)
-# Bảng luôn đọc Supabase (ghi xong đọc lại ngay: phiên đăng nhập, tài khoản, OTP, 2FA, lệnh thiết bị...).
-# Mọi bảng còn lại đọc từ máy. Ghi đè bằng .env: REPLICA_FRESH_MODELS=a,b,c (thay thế hoàn toàn danh sách này).
 REPLICA_FRESH_MODELS = set(env_list("REPLICA_FRESH_MODELS", ",".join([
     "sessions.Session", "smartlock.User", "smartlock.OneTimeCode", "smartlock.TwoFactorConfig",
     "smartlock.Fido2Credential", "smartlock.MobileSession", "smartlock.DeviceCommand",
     "smartlock.SystemSettings", "otp_totp.TOTPDevice", "otp_static.StaticDevice", "otp_static.StaticToken",
     "smartlock.SecurityRecord",
-    # dữ liệu quyết định mở cửa: thu hồi xong phải có hiệu lực ngay, không đọc từ bản sao
     "smartlock.Device", "smartlock.DeviceAccess", "smartlock.AccessCredential", "smartlock.CardDeviceAccess",
     "smartlock.NfcReader",
 ])))
 if LOCAL_REPLICA:
-    # Mặc định SQLite (không cần cài gì). Postgres local: REPLICA_ENGINE=django.db.backends.postgresql + REPLICA_DB_*.
     _replica_engine = os.environ.get("REPLICA_ENGINE", "django.db.backends.sqlite3")
     if _replica_engine.endswith("sqlite3"):
         DATABASES['replica'] = {
@@ -245,20 +199,16 @@ if LOCAL_REPLICA:
     DATABASE_ROUTERS = ['smartlock_django.settings.ReplicaRouter']
 
 
-# ==================== CACHE CONFIGURATION ====================
-# Cần chạy 1 lần: python manage.py createcachetable
 if os.environ.get("VERCEL"):
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
             'LOCATION': 'email_cache',
-            'TIMEOUT': 60 * 60 * 24,                  # 1 ngày
+            'TIMEOUT': 60 * 60 * 24,
             'OPTIONS': {'MAX_ENTRIES': 10000},
         }
     }
 else:
-    # Local/VPS 1 tiến trình: cache trong RAM (không tốn 1 vòng mạng tới Supabase cho mỗi lần get/set).
-    # Lưu ý: mỗi tiến trình có cache riêng; nếu chạy nhiều worker gunicorn thì dùng Redis/Memcached.
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
@@ -267,15 +217,12 @@ else:
             'OPTIONS': {'MAX_ENTRIES': 10000},
         }
     }
-    # Session: đọc từ RAM, ghi xuống DB (đăng xuất/xoá session vẫn có hiệu lực).
     SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
 
 
-# ==================== AUTH CONFIGURATION ====================
 AUTH_USER_MODEL = 'smartlock.User'
 
 
-# ==================== LOGIN/LOGOUT CONFIGURATION ====================
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 8}},
@@ -288,7 +235,6 @@ LOGIN_REDIRECT_URL = 'smartlock:dashboard'
 LOGOUT_REDIRECT_URL = 'smartlock:login'
 
 
-# ==================== EMAIL CONFIGURATION ====================
 EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = os.environ.get("EMAIL_HOST")
 EMAIL_PORT = env_int("EMAIL_PORT", 465)
@@ -302,18 +248,14 @@ EMAIL_BATCH_SIZE = env_int("EMAIL_BATCH_SIZE", 100)
 
 PASSWORD_RESET_TIMEOUT = env_int("PASSWORD_RESET_TIMEOUT_MINUTES", 5) * 60
 
-# ==================== INTERNATIONALIZATION CONFIGURATION ====================
 LANGUAGE_CODE = 'vi'
 TIME_ZONE = 'Asia/Ho_Chi_Minh'
 USE_I18N = True
 USE_TZ = True
 
 
-# ==================== STATIC FILES CONFIGURATION ====================
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-# Vercel (@vercel/python) không chạy collectstatic lúc build -> để WhiteNoise tự tìm file static qua finders
-# (admin + static của các app) thay vì đọc từ STATIC_ROOT. Có thể tắt nếu đã commit thư mục staticfiles/.
 WHITENOISE_USE_FINDERS = env_bool("WHITENOISE_USE_FINDERS", True)
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
@@ -321,11 +263,9 @@ STORAGES = {
 }
 
 
-# ==================== MEDIA FILES CONFIGURATION ====================
 SUPABASE_URI = os.environ.get("SUPABASE_URI")
 
 
-# ==================== LOGGING ====================
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -360,56 +300,32 @@ LOGGING = {
 }
 
 MANAGE_SYS_URL_PREFIX = '/manage-sys/'
-# Bắt buộc 2FA (TOTP) khi vào Django admin /admin/. CHỈ bật sau khi Superuser đã có thiết bị TOTP
-# (tạo bằng shell: TOTPDevice.objects.create(user=u, name='default', confirmed=True)), nếu không sẽ tự khoá mình.
 ADMIN_REQUIRE_2FA = env_bool("ADMIN_REQUIRE_2FA", False)
 MANAGE_SYS_SESSION_SECONDS = 2 * 60 * 60
-# True (mặc định): mọi tài khoản quản trị có quyền cao nhất trong manage-sys (cấp/thu hồi admin, xoay secret, gỡ chủ khoá,
-# đổi cài đặt). Vẫn bắt nhập lại mật khẩu + audit. False: các thao tác đó chỉ dành cho Superuser.
 ADMIN_FULL_POWER = env_bool("ADMIN_FULL_POWER", True)
 
 
-# TRUST_PROXY_HEADERS (khai báo ở phần PROXY / HTTPS phía trên): đứng sau proxy (Vercel/nginx) -> tin X-Forwarded-For/Proto
-# Số proxy TIN CẬY phía trước app: IP client = phần tử thứ N tính từ cuối của X-Forwarded-For
-# (phần tử đầu do client tự đặt được). Vercel = 1; nginx -> gunicorn = 1.
 TRUST_PROXY_COUNT = env_int("TRUST_PROXY_COUNT", 1)
 
-# Vé Bluetooth offline không thu hồi được -> giữ hạn ngắn (mặc định 1 giờ).
 BLE_TICKET_TTL_SECONDS = env_int("BLE_TICKET_TTL_SECONDS", 3600)
 
-# ==================== HTTPS HARDENING (production) ====================
 if not DEBUG and SECURE_COOKIES:
-    SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 60 * 60 * 24 * 30)   # 30 ngày
+    SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 60 * 60 * 24 * 30)
     SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", False)
-    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)   # Vercel đã tự redirect; bật nếu tự host
-    SECURE_REDIRECT_EXEMPT = [r"api/mqtt/", r"api/webhooks/"]   # broker gọi webhook server-to-server, không bị 301
+    SECURE_SSL_REDIRECT = env_bool("SECURE_SSL_REDIRECT", False)
+    SECURE_REDIRECT_EXEMPT = [r"api/mqtt/", r"api/webhooks/"]
     SECURE_REFERRER_POLICY = "same-origin"
 
 
-# ==================== CORS (Flutter web / web khác origin gọi /api/app/) ====================
-# App Android/iOS không bị CORS. Chỉ trình duyệt mới cần. API dùng Bearer nên KHÔNG bật CORS_ALLOW_CREDENTIALS.
-# Production: CORS_ALLOWED_ORIGINS=https://ten-mien-web.com  (nhiều giá trị cách nhau bằng dấu phẩy)
-CORS_URLS_REGEX = r"^/api/app/.*$"                     # chỉ mở CORS cho API dùng chung, không mở manage-sys/mqtt
+CORS_URLS_REGEX = r"^/api/app/.*$"
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
-# Dev: Flutter web chạy port ngẫu nhiên (localhost:53844...) -> cho phép mọi port localhost.
 if env_bool("CORS_ALLOW_LOCALHOST", DEBUG):
     CORS_ALLOWED_ORIGIN_REGEXES = [r"^http://localhost:\d+$", r"^http://127\.0\.0\.1:\d+$"]
 
 
-# ==================== API (api/app dùng chung APP + WEB) ====================
-# API viết bằng Django thuần (smartlock/api/), KHÔNG dùng Django REST Framework.
-#   * App (Android/iOS): Authorization: Bearer <access_token>
-#   * Web: session cookie + header X-CSRFToken (lấy bằng GET /api/app/auth/csrf/)
-# Khối REST_FRAMEWORK cũ trỏ tới smartlock.api.mobile_auth, api_exception_handler, StandardPagination
-# (các module này không còn tồn tại) nên đã được gỡ.
-
-# ==================== APP DI ĐỘNG ====================
 MOBILE_ACCESS_TOKEN_SECONDS = 15 * 60
 
 
-# =====================================================================================================
-# ROUTER + TỰ ĐỒNG BỘ BẢN SAO LOCAL (mọi import Django đều để lười bên trong hàm: settings chưa sẵn sàng lúc import)
-# =====================================================================================================
 import sys as _sys
 import threading as _threading
 import time as _time
@@ -421,7 +337,6 @@ _ready_cache = {'t': 0.0, 'ok': False}
 
 
 def _supabase_up():
-    """Supabase còn kết nối được không (cache 15 giây)."""
     from django.db import connections
     now = _time.monotonic()
     if now - _up_cache['t'] < 15:
@@ -440,7 +355,6 @@ def _supabase_up():
 
 
 def _replica_ready():
-    """Đã có ít nhất 1 lượt đồng bộ thành công chưa."""
     now = _time.monotonic()
     if now - _ready_cache['t'] > 5:
         _ready_cache.update(t=now, ok=os.path.exists(_REPLICA_STATE_FILE))
@@ -462,7 +376,7 @@ class ReplicaRouter:
 
     def db_for_write(self, model, **hints):
         _replica_tls.wrote = _time.monotonic()
-        _replica_wake.set()          # vừa ghi -> đánh thức luồng đồng bộ chạy sớm
+        _replica_wake.set()
         return 'default'
 
     def allow_relation(self, obj1, obj2, **hints):
@@ -489,8 +403,6 @@ def _replica_chunks(seq, n=400):
 
 
 def _replica_upsert(model, qs):
-    """INSERT ... ON CONFLICT (pk) DO UPDATE bằng SQL thuần: không signal, không auto_now (giữ nguyên giờ gốc),
-    không phải sửa thuộc tính field dùng chung với các luồng đang xử lý request."""
     from django.db import connections
     conn = connections['replica']
     q = conn.ops.quote_name
@@ -519,8 +431,6 @@ def _replica_upsert(model, qs):
 
 
 def _replica_counters():
-    """Bộ đếm insert/update/delete của mọi bảng trên Supabase (1 truy vấn nhỏ). Bảng không đổi bộ đếm = không cần chép.
-    Trả None nếu không đọc được (không phải Postgres...) -> khi đó chép tất cả."""
     from django.db import connections
     from django.db.utils import InterfaceError, OperationalError
     try:
@@ -529,14 +439,12 @@ def _replica_counters():
                         'WHERE schemaname = current_schema()')
             return {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
     except (OperationalError, InterfaceError):
-        raise                                   # mất kết nối: để vòng lặp xử lý
+        raise
     except Exception:
         return None
 
 
 def replica_sync_once(full=False):
-    """Supabase -> bản sao local, một chiều, CHỈ chép bảng có thay đổi. Cả lượt nằm trong 1 transaction:
-    lỗi giữa chừng thì giữ nguyên bản cũ. Trả (số dòng ghi, số dòng xoá), hoặc None nếu đang có lượt khác chạy."""
     import json
     from datetime import timedelta
     from django.apps import apps
@@ -547,7 +455,7 @@ def replica_sync_once(full=False):
     if not _replica_sync_lock.acquire(blocking=False):
         return None
     try:
-        snap = _replica_counters()                  # lấy TRƯỚC khi chép: thay đổi xảy ra trong lúc chép sẽ bắt ở lượt sau
+        snap = _replica_counters()
         prev = _replica_state['snap']
         now = _time.monotonic()
         full_pass = (full or snap is None or prev is None
@@ -563,7 +471,6 @@ def replica_sync_once(full=False):
         started = timezone.now()
         upserted = deleted = 0
         with transaction.atomic(using='replica'):
-            # Pha 1: xoá dòng local không còn trên Supabase (cả contenttype/permission tự sinh khi migrate local).
             for m in todo:
                 pk_name = m._meta.pk.name
                 remote = set(m._base_manager.using('default').values_list(pk_name, flat=True))
@@ -572,7 +479,6 @@ def replica_sync_once(full=False):
                 for part in _replica_chunks(gone):
                     m._base_manager.using('replica').filter(pk__in=part)._raw_delete('replica')
                 deleted += len(gone)
-            # Pha 2: ghi đè dòng mới/đã đổi. FK là DEFERRABLE nên thứ tự bảng không quan trọng.
             for m in todo:
                 label = m._meta.label
                 qs = m._base_manager.using('default').all()
@@ -580,7 +486,7 @@ def replica_sync_once(full=False):
                 if ts and state.get(label) and not full:
                     qs = qs.filter(**{f'{ts}__gte': parse_datetime(state[label]) - timedelta(minutes=2)})
                 upserted += _replica_upsert(m, qs)
-        for m in todo:                              # chỉ cập nhật mốc của bảng vừa chép (log chỉ-thêm dựa vào mốc này)
+        for m in todo:
             state[m._meta.label] = started.isoformat()
         state['_last_ok'] = timezone.now().isoformat()
         _REPLICA_STATE_FILE.write_text(json.dumps(state), encoding='utf-8')
@@ -596,10 +502,10 @@ def _replica_autosync_loop():
     from django.apps import apps
     from django.core.management import call_command
     from django.db import connections
-    while not apps.ready:                      # chờ Django nạp xong app
+    while not apps.ready:
         _time.sleep(0.5)
     try:
-        call_command('migrate', database='replica', verbosity=0, interactive=False)   # dựng schema bản sao
+        call_command('migrate', database='replica', verbosity=0, interactive=False)
     except Exception as exc:
         _replica_log(f'Không dựng được schema bản sao: {exc}. Thử REPLICA_ENGINE=postgresql (Postgres local).')
         return
@@ -611,7 +517,7 @@ def _replica_autosync_loop():
                 _replica_log(f'Tải xong lần đầu ({r[0]} dòng). Kiểm tra thay đổi mỗi {REPLICA_SYNC_SECONDS}s, '
                              f'chỉ chép bảng có đổi.')
                 first = False
-        except Exception as exc:               # mất mạng...: giữ bản sao cũ, lượt sau thử lại
+        except Exception as exc:
             _replica_log(f'Đồng bộ lỗi, giữ bản sao cũ: {exc}')
             for alias in ('default', 'replica'):
                 try:
@@ -621,11 +527,10 @@ def _replica_autosync_loop():
         woke = _replica_wake.wait(timeout=REPLICA_SYNC_SECONDS)
         if woke:
             _replica_wake.clear()
-            _time.sleep(0.4)                   # chờ request commit xong rồi mới chép
+            _time.sleep(0.4)
 
 
 def _start_replica_autosync():
-    """Chỉ chạy trong tiến trình thật của `runserver` (không chạy ở migrate/shell/Vercel/tiến trình cha của reloader)."""
     argv = _sys.argv
     is_runserver = len(argv) > 1 and argv[1] == 'runserver'
     is_child = os.environ.get('RUN_MAIN') == 'true' or '--noreload' in argv

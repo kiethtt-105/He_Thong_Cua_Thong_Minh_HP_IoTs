@@ -1,4 +1,5 @@
 # smartlock/apps.py
+
 from django.apps import AppConfig
 
 
@@ -8,4 +9,4 @@ class SmartlockConfig(AppConfig):
 
     def ready(self):
         from . import services
-        services.register_signals()   # push FCM mỗi khi có Notification mới
+        services.register_signals()

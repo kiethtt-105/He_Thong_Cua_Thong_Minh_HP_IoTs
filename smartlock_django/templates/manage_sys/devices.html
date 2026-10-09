@@ -1,6 +1,7 @@
+{# manage_sys/templates/manage_sys/devices.html #}
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
-{# Gộp: device_list, device_create, device_created, device_detail (biến `page`). Tiêu đề tĩnh: PAGE_TITLES trong views. #}
+
 {% block page_title %}{% if page == 'device_detail' %}{{ device.name }} <span class="badge text-bg-{{ device.status|badge }} align-middle">{{ device.status|vi }}</span>{% else %}{{ block.super }}{% endif %}{% endblock %}
 {% block page_actions %}
 {% if page == 'device_list' %}

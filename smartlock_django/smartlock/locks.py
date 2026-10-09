@@ -1,4 +1,5 @@
-"""KHOÁ CỦA NGƯỜI DÙNG (app + web): thiết bị, lệnh, PIN/thẻ/mặt, chia sẻ, lịch sử, snapshot - /api/app/..."""
+# smartlock/api/locks.py
+
 import hashlib
 import json
 from datetime import timedelta
@@ -60,14 +61,6 @@ from smartlock.models import (
 )
 
 
-# ======================================================================
-# KHOÁ CỦA TÔI: danh sách · chi tiết · live · gỡ khoá · lịch sử trạng thái · lệnh · vé BLE/NFC
-# ======================================================================
-
-# ======================================================================
-# devices.py - Khoá: danh sách, chi tiết, trạng thái trực tiếp, thêm khoá bằng code + secret.
-# ======================================================================
-
 @api('GET', auth='any')
 def devices_list(request):
     user = request.user
@@ -79,7 +72,6 @@ def devices_list(request):
 
 
 def _release(request, device):
-    """Chủ gỡ khoá khỏi tài khoản (factory reset + thu hồi mọi quyền/thẻ/PIN/khuôn mặt). Phải gõ lại mã khoá để xác nhận."""
     need_owner(request, device, 'DEVICE_RELEASE')
     if s(read_json(request), 'device_code', 50).upper() != device.device_code.upper():
         raise ApiError('CONFIRM_REQUIRED', 'Hãy nhập lại đúng mã khoá để xác nhận gỡ.', 400, field='device_code')
@@ -98,7 +90,6 @@ def _release(request, device):
 
 @api('GET', 'PATCH', 'DELETE', auth='any')
 def device_detail(request, device_id):
-    """GET chi tiết · PATCH đổi tên/vị trí/bật-tắt kênh (chủ) · DELETE gỡ khoá khỏi tài khoản (chủ, body {device_code})."""
     device = get_device(request, device_id)
     user = request.user
     if request.method == 'DELETE':
@@ -144,10 +135,8 @@ def device_detail(request, device_id):
 
 @api('GET', auth='any')
 def device_live(request, device_id):
-    """Trạng thái trực tiếp - app poll 2-3 giây/lần khi đang mở màn hình điều khiển."""
     device = get_device(request, device_id)
     user = request.user
-    # .using('default'): đọc thẳng DB chính, tránh trễ của bản sao local (~2s) - trang live poll 2s/lần
     log = DeviceStatusLog.objects.using('default').filter(device=device).order_by('-recorded_at').first()
     link = services.link_status(device)
     out = {
@@ -170,7 +159,6 @@ def device_live(request, device_id):
 
 @api('GET', auth='any')
 def device_status_history(request, device_id):
-    """Lịch sử trạng thái khoá (khoá/mở, pin, tín hiệu, tamper, nhiệt độ). ?hours=24 (tối đa 168). Cần quyền view_history."""
     device = managed_device(request, device_id, 'view_history')
     try:
         hours = max(1, min(168, int(request.GET.get('hours') or 24)))
@@ -206,10 +194,6 @@ def device_claim(request):
     device = Device.objects.select_related('owner').get(pk=device.pk)
     return ok({'device': device_json(device, request.user, services.permission_codes(request.user, device))}, 201)
 
-
-# ======================================================================
-# commands.py - Lệnh điều khiển (LOCK / UNLOCK / REBOOT) + vé mở cửa offline BLE / NFC.
-# ======================================================================
 
 @api('POST', auth='any')
 def device_command(request, device_id):
@@ -263,7 +247,6 @@ def device_commands_list(request, device_id):
 
 @api('GET', auth='any')
 def command_status(request, command_id):
-    """App poll tới khi status = acknowledged | failed | expired."""
     cmd = DeviceCommand.objects.select_related('device').filter(pk=uuid_or_404(command_id)).first()
     if cmd:
         if not services.accessible_devices(request.user).filter(pk=cmd.device_id).exists():
@@ -288,7 +271,7 @@ def _ticket(request, device_id, kind):
         raise ApiError('FORBIDDEN', f"Bạn không có quyền mở khóa bằng {cfg['name']}.", 403,
                        permission=cfg['permission'])
     ttl = None
-    if device.owner_id != request.user.id:                 # vé không được sống lâu hơn thời hạn chia sẻ
+    if device.owner_id != request.user.id:
         share = (services._live_access(request.user, timezone.now())
                  .filter(device=device, permissions__code=cfg['permission']).first())
         if share and share.expires_at:
@@ -311,14 +294,6 @@ def device_nfc_ticket(request, device_id):
     return _ticket(request, device_id, 'nfc')
 
 
-# ======================================================================
-# QUYỀN VÀO CỬA: PIN khách · thẻ NFC · đầu đọc · khuôn mặt · chia sẻ
-# ======================================================================
-
-# ======================================================================
-# pins.py - Mã PIN cho khách.
-# ======================================================================
-
 def _pin_json(p) -> dict:
     return {
         'id': str(p.id), 'device_id': str(p.device_id), 'label': p.label or '', 'valid_from': iso(p.valid_from),
@@ -335,7 +310,7 @@ def device_pins(request, device_id):
     if request.method == 'POST':
         data = read_json(request)
         try:
-            ttl = max(1, min(int(data.get('ttl_minutes') or 1440), 43200))        # tối đa 30 ngày
+            ttl = max(1, min(int(data.get('ttl_minutes') or 1440), 43200))
             max_uses = max(0, int(data.get('max_uses') if data.get('max_uses') is not None else 1))
         except (TypeError, ValueError):
             raise ApiError('BAD_FIELD', 'Thời hạn hoặc số lần dùng không hợp lệ.', 400)
@@ -346,7 +321,6 @@ def device_pins(request, device_id):
         except RuntimeError as exc:
             raise ApiError('PIN_POOL_FULL', str(exc), 409)
         services.audit(request, 'DOOR_PIN_CREATED', device=device, metadata={'pin_id': str(pin.id), 'label': label})
-        # plain_pin CHỈ trả đúng 1 lần ở đây, server không lưu dạng thô.
         return ok({'pin': _pin_json(pin), 'plain_pin': plain,
                    'message': f'Khách bấm mã này trên bàn phím của khoá (hết hạn sau {ttl} phút).'}, 201)
     qs = DoorPinCode.objects.filter(device=device).select_related('created_by')
@@ -357,7 +331,6 @@ def device_pins(request, device_id):
 
 @api('PATCH', 'DELETE', auth='any')
 def pin_revoke(request, pin_id):
-    """DELETE: thu hồi PIN. PATCH {label?, ttl_minutes?}: đổi nhãn / gia hạn (tính từ bây giờ, tối đa 30 ngày)."""
     pin = DoorPinCode.objects.select_related('device').filter(pk=uuid_or_404(pin_id)).first()
     if pin and not (services.accessible_devices(request.user).filter(pk=pin.device_id).exists()
                     and services.has_permission(request.user, pin.device, 'manage_pins')):
@@ -385,10 +358,6 @@ def pin_revoke(request, pin_id):
     return ok()
 
 
-# ======================================================================
-# cards.py - Thẻ NFC / RFID của người dùng.
-# ======================================================================
-
 def _card_json(c, user, owned_ids) -> dict:
     mine = c.user_id == user.id
     links = [l for l in c.carddeviceaccess_set.all() if mine or l.device_id in owned_ids]
@@ -412,7 +381,7 @@ def cards_list(request):
 
 @api('PATCH', 'DELETE', auth='any')
 def card_detail(request, card_id):
-    card = AccessCard.objects.filter(pk=uuid_or_404(card_id), user=request.user).first()   # chỉ thẻ CỦA MÌNH
+    card = AccessCard.objects.filter(pk=uuid_or_404(card_id), user=request.user).first()
     if not card:
         services.audit(request, 'CARD_ACTION_DENIED', success=False, severity='warning',
                        metadata={'card_id': str(card_id)[:64]})
@@ -440,7 +409,6 @@ def card_detail(request, card_id):
 
 @api('PATCH', auth='any')
 def card_link(request, card_id, device_id):
-    """Bật/tắt thẻ trên MỘT khoá. Chủ khoá: thẻ của bất kỳ ai; người khác: chỉ thẻ của mình (cần manage_nfc)."""
     user = request.user
     link = (CardDeviceAccess.objects.select_related('device', 'access_card')
             .filter(access_card_id=uuid_or_404(card_id), device_id=uuid_or_404(device_id)).first())
@@ -456,7 +424,6 @@ def card_link(request, card_id, device_id):
     if not isinstance(data.get('is_active'), bool):
         raise ApiError('BAD_FIELD', 'Cần "is_active": true/false.', 400)
     if data['is_active'] and link.device.owner_id != user.id:
-        # người được chia sẻ chỉ được TẮT thẻ của mình, không tự bật lại thẻ mà chủ khoá đã tắt
         raise ApiError('OWNER_ONLY', 'Chỉ chủ khoá mới được bật lại thẻ trên khoá này.', 403)
     link.is_active = data['is_active']
     link.save(update_fields=['is_active'])
@@ -467,7 +434,6 @@ def card_link(request, card_id, device_id):
 
 @api('POST', auth='any')
 def card_register(request, device_id):
-    """Đăng ký thẻ bằng UID (app đọc UID qua NFC của điện thoại hoặc người dùng nhập)."""
     device = managed_device(request, device_id, 'manage_nfc')
     user = request.user
     if not device.nfc_enabled:
@@ -498,10 +464,6 @@ def card_register(request, device_id):
                         device=device, type_='CARD')
     return ok({'card': {'id': str(card.id), 'name': card.name or '', 'is_active': True}}, 201)
 
-
-# ======================================================================
-# readers.py - Đầu đọc NFC gắn với khoá (kể cả cửa sổ quẹt-để-đăng-ký).
-# ======================================================================
 
 def _reader_json(r) -> dict:
     left = max(0, int((r.auto_register_until - timezone.now()).total_seconds())) if r.auto_register_active else 0
@@ -536,7 +498,7 @@ def reader_detail(request, reader_id):
     if not reader.device.nfc_enabled:
         raise ApiError('NFC_DISABLED', 'NFC của khoá đang tắt.', 409)
     data = read_json(request)
-    for flag in ('is_active', 'auto_register'):          # bool("false") == True -> phải kiểm kiểu thật
+    for flag in ('is_active', 'auto_register'):
         if flag in data and not isinstance(data[flag], bool):
             raise ApiError('BAD_FIELD', f'"{flag}" phải là true/false.', 400, field=flag)
     audit_action = None
@@ -547,7 +509,7 @@ def reader_detail(request, reader_id):
     if 'auto_register' in data:
         reader.auto_register = bool(data['auto_register'])
         if reader.auto_register:
-            reader.auto_register_until = None          # để signal mở lại cửa sổ 60 giây
+            reader.auto_register_until = None
         audit_action = 'NFC_AUTO_REGISTER_ON' if reader.auto_register else 'NFC_AUTO_REGISTER_OFF'
         event = 'CONFIG_UPDATED'
     if audit_action is None:
@@ -558,10 +520,6 @@ def reader_detail(request, reader_id):
     services.audit(request, audit_action, device=reader.device, metadata={'reader_id': str(reader.id)})
     return ok({'reader': _reader_json(reader)})
 
-
-# ======================================================================
-# faces.py - Khuôn mặt (app gửi vector đặc trưng, không gửi ảnh).
-# ======================================================================
 
 def _face_json(f) -> dict:
     return {'id': str(f.id), 'device_id': str(f.device_id), 'name': f.name or '', 'user': f.user.username,
@@ -597,7 +555,6 @@ def device_faces(request, device_id):
 
 
 def _own_profile_or_404(request, profile_id):
-    """Chủ khoá thao tác được mọi hồ sơ của khoá; người khác chỉ hồ sơ của chính mình."""
     profile = FaceProfile.objects.select_related('device', 'user').filter(pk=uuid_or_404(profile_id)).first()
     if profile and profile.user_id != request.user.id and profile.device.owner_id != request.user.id:
         profile = None
@@ -606,7 +563,6 @@ def _own_profile_or_404(request, profile_id):
 
 @api('PATCH', 'DELETE', auth='any')
 def face_delete(request, profile_id):
-    """DELETE: xoá hẳn hồ sơ (dữ liệu sinh trắc). PATCH {"is_active": bool}: bật/tắt hồ sơ."""
     profile = _own_profile_or_404(request, profile_id)
     if not profile:
         services.audit(request, 'FACE_PROFILE_DELETE_DENIED' if request.method == 'DELETE' else 'FACE_PROFILE_TOGGLE_DENIED',
@@ -632,10 +588,6 @@ def face_delete(request, profile_id):
                    severity='warning', metadata=info)
     return ok({'message': 'Đã xoá hồ sơ khuôn mặt.'})
 
-
-# ======================================================================
-# shares.py - Chia sẻ khoá: danh mục quyền, chia sẻ / thu hồi / tự rời.
-# ======================================================================
 
 def _share_json(a) -> dict:
     return {
@@ -731,7 +683,7 @@ def share_detail(request, share_id):
         raise ApiError('NOT_FOUND', 'Không tìm thấy quyền truy cập.', 404)
     device = access.device
     if request.method == 'PATCH':
-        data = read_json(request)                        # đổi quyền (preset|permissions) và/hoặc gia hạn (expires_at)
+        data = read_json(request)
         meta = {'access_id': str(access.id)}
         if 'expires_at' in data:
             exp = parse_iso(data.get('expires_at'))
@@ -754,7 +706,7 @@ def share_detail(request, share_id):
     access.revoked_at = timezone.now()
     access.save(update_fields=['is_active', 'revoked_at'])
     cancelled = DeviceCommand.objects.filter(device=device, issued_by=access.user, status='pending').update(status='failed')
-    creds = services.revoke_user_credentials(device, access.user)     # thẻ / khuôn mặt / PIN của người đó mất hiệu lực
+    creds = services.revoke_user_credentials(device, access.user)
     services.audit(request, 'ACCESS_REVOKED', device=device, target_user=access.user, severity='warning',
                    metadata={'access_id': str(access.id), 'cancelled_commands': cancelled,
                              'revoked_credentials': creds})
@@ -781,14 +733,6 @@ def share_leave(request, share_id):
                         device=access.device, type_='SHARE')
     return ok()
 
-
-# ======================================================================
-# LỊCH SỬ · NHẬT KÝ · THÔNG BÁO · POLL SỰ KIỆN
-# ======================================================================
-
-# ======================================================================
-# history.py - Lịch sử ra vào + nhật ký hệ thống (audit).
-# ======================================================================
 
 @api('GET', auth='any')
 def access_history(request):
@@ -817,10 +761,6 @@ def audit_logs(request):
         'device_id': str(l.device_id) if l.device_id else None, 'device': l.device.name if l.device_id else None,
         'ip_address': l.ip_address, 'created_at': iso(l.created_at)}))
 
-
-# ======================================================================
-# notifications.py - Thông báo + poll sự kiện khi app đang mở.
-# ======================================================================
 
 @api('GET', 'DELETE', auth='any')
 def notifications(request):
@@ -864,7 +804,6 @@ def notification_delete(request, notification_id):
 
 @api('GET', auth='any')
 def events_poll(request):
-    """Poll nhẹ khi app đang mở (khi nền thì dùng push FCM). ?cursor=<iso> (lần đầu bỏ trống)."""
     user, now = request.user, timezone.now()
     since = parse_iso(request.GET.get('cursor'), 'cursor')
     unread = Notification.objects.filter(user=user, is_read=False).count()
@@ -876,19 +815,11 @@ def events_poll(request):
     return ok({'events': [notification_json(n) for n in rows], 'cursor': iso(cursor), 'unread_count': unread})
 
 
-# ======================================================================
-# announcements.py - GET /announcements/ - thông báo hệ thống đang bật (quản trị đăng ở manage_sys).
-# ======================================================================
-
 @api('GET', auth='any')
 def announcements(request):
     qs = Announcement.objects.filter(is_active=True).order_by('-created_at')
     return ok(paginate(request, qs, announcement_json))
 
-
-# ======================================================================
-# BOOTSTRAP + SNAPSHOT: toàn bộ dữ liệu của user (ETag/304) - web poll 2-5s, app dùng chung
-# ======================================================================
 
 @api('GET', auth='any')
 def bootstrap(request):
@@ -910,9 +841,6 @@ def bootstrap(request):
     })
 
 
-# ====================== SNAPSHOT: TOÀN BỘ dữ liệu của CHÍNH user này (client cache + làm mới 2-5s) ======================
-# Mỗi section lọc theo quyền của user giống hệt endpoint riêng của nó (chủ khoá thấy hết, người được chia sẻ chỉ thấy
-# phần được phép). Trả kèm ETag: client gửi If-None-Match, không đổi gì -> 304 rỗng (nhẹ băng thông, không vẽ lại UI).
 SNAPSHOT_LIMITS = {'notifications': 50, 'history': 50, 'audit': 50, 'pins': 200, 'commands': 50, 'nfc_logs': 30}
 
 
@@ -924,52 +852,44 @@ def _snapshot_payload(request) -> dict:
                    .annotate(last_lock_state=Subquery(latest)).order_by('name'))
     perms = services.permission_map(user, devices)
 
-    # ---- thẻ NFC (cùng logic cards_list) ----
     nfc_managed = list(services.devices_with_permission(user, 'manage_nfc').values_list('id', 'owner_id'))
     owned_ids = {i for i, o in nfc_managed if o == user.id}
     cards = (AccessCard.objects.filter(Q(user=user) | Q(carddeviceaccess__device_id__in=owned_ids)).distinct()
              .select_related('user').prefetch_related('carddeviceaccess_set__device').order_by('-created_at'))
 
-    # ---- đầu đọc / PIN / khuôn mặt: gộp theo thiết bị, client nhóm lại bằng device_id ----
     readers = NfcReader.objects.filter(device__in=services.devices_with_permission(user, 'manage_nfc')) \
         .order_by('-created_at')
     pins = (DoorPinCode.objects.filter(device__in=services.devices_with_permission(user, 'manage_pins'))
-            .filter(Q(device__owner=user) | Q(created_by=user))          # không phải chủ: chỉ thấy mã mình tạo
+            .filter(Q(device__owner=user) | Q(created_by=user))
             .select_related('created_by').order_by('-created_at')[:SNAPSHOT_LIMITS['pins']])
     faces = (FaceProfile.objects.filter(device__in=services.devices_with_permission(user, 'manage_face_profiles'))
-             .filter(Q(device__owner=user) | Q(user=user))                # không phải chủ: chỉ hồ sơ của mình
+             .filter(Q(device__owner=user) | Q(user=user))
              .select_related('user').order_by('-created_at'))
 
-    # ---- chia sẻ: mình chia sẻ cho người khác (chủ khoá) + được chia sẻ cho mình ----
     share_qs = DeviceAccess.objects.select_related('device', 'user', 'created_by').prefetch_related('permissions')
     shares_out = share_qs.filter(device__owner=user, is_active=True).order_by('-created_at')
     shares_in = (share_qs.filter(user=user, is_active=True)
                  .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)).order_by('-created_at'))
 
-    # ---- lịch sử ra vào + nhật ký + thông báo ----
     history = (AccessEvent.objects.filter(device__in=services.devices_with_permission(user, 'view_history'))
                .select_related('device', 'user').order_by('-created_at')[:SNAPSHOT_LIMITS['history']])
     audit = services.visible_logs(user).select_related('device').order_by('-created_at')[:SNAPSHOT_LIMITS['audit']]
     notes = Notification.objects.filter(user=user).order_by('-created_at')[:SNAPSHOT_LIMITS['notifications']]
 
-    # ---- bảo mật tài khoản (không có bí mật TOTP, không có khoá công khai) ----
     cfg = TwoFactorConfig.objects.filter(user=user).first()
     passkeys = Fido2Credential.objects.filter(user=user).order_by('created_at')
     sessions = MobileSession.objects.filter(user=user, revoked_at__isnull=True,
                                             expires_at__gt=now).order_by('-created_at')
     current = request.api_session.id if request.api_session else None
 
-    # ---- nhật ký NFC (chủ khoá thấy hết, người khác chỉ thấy của mình) ----
     nfc_logs = (NfcLog.objects.filter(device__in=services.devices_with_permission(user, 'manage_nfc'))
                 .filter(Q(device__owner=user) | Q(user=user)).select_related('nfc_tag')
                 .order_by('-created_at')[:SNAPSHOT_LIMITS['nfc_logs']])
 
-    # ---- lệnh điều khiển gần đây (chủ khoá thấy hết, người khác chỉ thấy lệnh của mình) ----
     commands = (DeviceCommand.objects.filter(device__in=[d.id for d in devices])
                 .filter(Q(device__owner=user) | Q(issued_by=user)).select_related('issued_by')
                 .order_by('-created_at')[:SNAPSHOT_LIMITS['commands']])
 
-    # ---- biểu đồ hoạt động 7 ngày (đếm sẵn, client chỉ vẽ) ----
     today = timezone.localdate()
     days = [today - timedelta(days=i) for i in range(6, -1, -1)]
     counts = {r['d']: r['c'] for r in
@@ -1017,8 +937,6 @@ def _snapshot_payload(request) -> dict:
 
 @api('GET', auth='any')
 def snapshot(request):
-    """GET /api/app/snapshot/ - mọi dữ liệu của user đang đăng nhập trong 1 lần gọi.
-    ETag tính trên nội dung (không gồm server_time) -> If-None-Match khớp thì trả 304."""
     payload = _snapshot_payload(request)
     body = json.dumps(payload, sort_keys=True, default=str, separators=(',', ':'))
     etag = '"' + hashlib.sha1(body.encode('utf-8')).hexdigest() + '"'
@@ -1032,13 +950,8 @@ def snapshot(request):
     return resp
 
 
-# ======================================================================
-# CHỦ KHOÁ: xoay secret · gỡ khoá tạm (lockout) · nhật ký NFC · xuất dữ liệu cá nhân
-# ======================================================================
-
 @api('POST', auth='any')
 def device_rotate_secret(request, device_id):
-    """Chủ khoá xoay secret (nhập lại mật khẩu). Secret mới CHỈ trả 1 lần; khoá phải nạp lại, vé BLE cũ mất hiệu lực."""
     device = get_device(request, device_id)
     need_owner(request, device, 'DEVICE_SECRET_ROTATE')
     if not request.user.check_password(str(read_json(request).get('password') or '')):
@@ -1052,7 +965,6 @@ def device_rotate_secret(request, device_id):
 
 @api('POST', auth='any')
 def device_clear_lockout(request, device_id):
-    """Chủ khoá gỡ khoá tạm do nhập sai nhiều lần (giữ nguyên log để bậc khoá luỹ tiến vẫn được tính)."""
     device = get_device(request, device_id)
     need_owner(request, device, 'LOCKOUT_CLEAR')
     if not services.in_lockout(device):
@@ -1066,7 +978,6 @@ def device_clear_lockout(request, device_id):
 
 @api('GET', auth='any')
 def nfc_logs(request):
-    """Nhật ký NFC có phân trang (chủ khoá thấy hết, người khác chỉ thấy của mình). ?device=<id>."""
     qs = (NfcLog.objects.filter(device__in=services.devices_with_permission(request.user, 'manage_nfc'))
           .filter(Q(device__owner=request.user) | Q(user=request.user)).select_related('nfc_tag').order_by('-created_at'))
     if request.GET.get('device'):
@@ -1078,7 +989,6 @@ def nfc_logs(request):
 
 @api('GET', auth='any')
 def me_export(request):
-    """Xuất toàn bộ dữ liệu của chính mình (quyền của chủ thể dữ liệu, NĐ 13/2023) - tải về dạng JSON."""
     body = json.dumps({'exported_at': iso(timezone.now()), **_snapshot_payload(request)}, ensure_ascii=False,
                       indent=2, default=str)
     resp = HttpResponse(body, content_type='application/json; charset=utf-8')

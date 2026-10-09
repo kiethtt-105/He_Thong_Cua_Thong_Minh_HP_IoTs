@@ -1,11 +1,5 @@
-"""Views của giao diện web (smartlock) - 100% dữ liệu và thao tác đi qua API dùng chung web/app (smartlock/api/).
+# smartlock/views.py
 
-Ở đây CHỈ còn:
-  * render "khung trang" account/app.html (JS tự gọi /api/app/... để đăng nhập, đọc snapshot, thao tác);
-  * decorator chặn tài khoản quản trị vào cổng người dùng;
-  * trang demo log công khai (khung) + hàm kiểm tra quyền dùng cho sysview.py.
-Không còn form POST, không truy vấn dữ liệu người dùng trong view.
-"""
 from functools import wraps
 
 from django.conf import settings as dj_settings
@@ -39,7 +33,6 @@ _login_required = login_required(login_url='smartlock:login')
 
 
 def auth_required(view_func):
-    """Phải đăng nhập và KHÔNG phải tài khoản quản trị (admin chỉ dùng cổng manage_sys)."""
     @_login_required
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
@@ -53,11 +46,9 @@ def auth_required(view_func):
 
 
 def _render(request, page, context=None):
-    """Mọi trang dùng chung account/app.html; `page` chỉ để chọn lane JS cần nạp (auth hay app)."""
     return render(request, 'account/app.html', {**(context or {}), 'page': page})
 
 
-# ---------- trang công khai (chưa đăng nhập): khung; JS gọi /api/app/auth/... ----------
 def login_view(request):
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
@@ -65,7 +56,6 @@ def login_view(request):
 
 
 def register(request):
-    # đóng/mở đăng ký do API quyết định (auth/register/ trả REGISTRATION_DISABLED -> hiện trong form)
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
     return _render(request, 'register')
@@ -84,11 +74,9 @@ def reset_password(request, uidb64, token):
 
 
 def logout_view(request):
-    """Link /logout/ cũ: hiện khung, JS gọi POST /api/app/auth/logout/ rồi về trang đăng nhập."""
     return _render(request, 'logout')
 
 
-# ---------- trang sau đăng nhập: khung; dữ liệu = GET /api/app/snapshot/ ----------
 @auth_required
 def dashboard(request):
     return _render(request, 'dashboard')
@@ -159,13 +147,11 @@ def audit_logs(request):
     return _render(request, 'audit_logs')
 
 
-# ---------- DEMO log hệ thống (công khai khi DEBUG): khung + guard; dữ liệu ở sysview.py ----------
 def _require_demo_logs(request):
-    """Chỉ bật khi settings.DEMO_LOGS_ENABLED; khi DEBUG=False chỉ admin đã đăng nhập xem được."""
     if not getattr(dj_settings, 'DEMO_LOGS_ENABLED', False):
         raise Http404()
     if dj_settings.DEBUG and getattr(dj_settings, 'DEMO_LOGS_PUBLIC', False):
-        return                      # công khai chỉ khi cả DEBUG và DEMO_LOGS_PUBLIC bật tường minh
+        return
     user = getattr(request, 'user', None)
     if not (user and user.is_authenticated and _is_admin(user)):
         raise Http404()
@@ -176,10 +162,9 @@ def public_system_logs(request):
     return render(request, 'public/system_logs.html', {})
 
 
-# ====================== API xem hệ thống (demo, chỉ GET) - gộp từ sysview.py ======================
 SECRET_RE = re.compile(r'(hash|secret|password|token|embedding|public_key|fcm|pepper|key_enc|encrypted)', re.I)
 ENV_KEYS = ['DJANGO_SECRET_KEY', 'FERNET_KEY', 'SHARE_CODE_PEPPER', 'MQTT_HOST', 'MQTT_WEBHOOK_SECRET',
-            'EMAIL_HOST_USER', 'WEBAUTHN_RP_ID', 'SUPABASE_URI']   # chỉ báo "đã cấu hình hay chưa", không lộ giá trị
+            'EMAIL_HOST_USER', 'WEBAUTHN_RP_ID', 'SUPABASE_URI']
 
 
 def _iso(v):
@@ -313,7 +298,6 @@ def events_api(request):
     return JsonResponse({'total': total, 'page': page, 'size': size, 'rows': rows})
 
 
-# ------------------------------------------------------------------------------------ trình duyệt database
 def _models():
     return {m._meta.db_table: m for m in apps.get_models() if not m._meta.proxy}
 
@@ -352,7 +336,7 @@ def db_rows_api(request):
     cols = list(fields)
     qs = m._base_manager.all()
     errors = []
-    for spec in g.getlist('f')[:8]:                       # f=cột:phép:giá trị
+    for spec in g.getlist('f')[:8]:
         col, _, rest = spec.partition(':')
         op, _, val = rest.partition(':')
         f = fields.get(col)
@@ -395,7 +379,6 @@ def db_rows_api(request):
         'total': total, 'page': page, 'size': size, 'warnings': errors})
 
 
-# ------------------------------------------------------------------------------------ API / MQTT / phiên
 def _walk(patterns, prefix=''):
     for p in patterns:
         if isinstance(p, URLResolver):
@@ -409,7 +392,6 @@ def _walk(patterns, prefix=''):
 
 @_guard
 def api_api(request):
-    """Danh mục endpoint /api/** lấy từ URL resolver (luôn khớp code thật) + health."""
     groups = {}
     for path, name, mod, doc in _walk(get_resolver().url_patterns):
         if not path.startswith('/api/'):
@@ -437,7 +419,6 @@ def api_api(request):
 
 @_guard
 def channels_api(request):
-    """Lệnh MQTT/điều khiển, vòng ping hai chiều và phiên đăng nhập app."""
     now = timezone.now()
     since = now - timedelta(hours=24)
     cmds = DeviceCommand.objects.filter(created_at__gte=since)
@@ -462,14 +443,7 @@ def channels_api(request):
         'by': by, 'recent': recent, 'sessions': sessions})
 
 
-# ------------------------------------------------------------------------------------ chức năng quản trị (chỉ đọc)
-# Dùng lại serializer của manage_sys nên không bao giờ lộ mật khẩu / hash PIN / UID thẻ / embedding / secret.
-
-
-# ====================== API log demo (chuyển từ views.py sang đây: view không còn xử lý dữ liệu) ======================
 def _bucketed_counts(queryset, dt_field, minutes=20):
-    """Đếm số bản ghi theo từng phút trong `minutes` phút gần nhất, KHÔNG bị hụt phút nào
-    (phút không có dữ liệu vẫn trả về 0) - dùng để vẽ biểu đồ đường theo thời gian."""
     since = timezone.now() - timedelta(minutes=minutes)
     rows = (
         queryset.filter(**{f'{dt_field}__gte': since})
@@ -487,9 +461,6 @@ def _bucketed_counts(queryset, dt_field, minutes=20):
 
 
 def _bucketed_avg(queryset, dt_field, value_field, minutes=20):
-    """Giống _bucketed_counts nhưng lấy TRUNG BÌNH của value_field theo từng phút
-    (vd: pin trung bình, nhiệt độ trung bình). Phút không có dữ liệu -> None (Chart.js
-    tự bỏ qua điểm đó, không vẽ về 0 gây hiểu nhầm)."""
     since = timezone.now() - timedelta(minutes=minutes)
     rows = (
         queryset.filter(**{f'{dt_field}__gte': since, f'{value_field}__isnull': False})
@@ -512,18 +483,15 @@ _LOGIN_FAIL_ACTIONS = ('LOGIN_FAILED', 'LOGIN_ADMIN_REJECTED')
 
 
 def _login_attempts():
-    """Lượt đăng nhập lấy từ AuditLog (bảng LoginAttemptLog cũ đã gộp vào AuditLog)."""
     return AuditLog.objects.filter(action__in=_LOGIN_OK_ACTIONS + _LOGIN_FAIL_ACTIONS)
 
 
-LOG_ROW_LIMIT = 100  # số dòng gần nhất trả về mỗi loại log (tăng từ 40 -> 100 để trang demo hiển thị nhiều hơn)
+LOG_ROW_LIMIT = 100
 
 
 def public_system_logs_api(request):
-    """JSON snapshot mới nhất của TOÀN BỘ log trong hệ thống - client gọi lại mỗi 2s.
-    Chỉ đọc (GET), không có tham số nào làm thay đổi dữ liệu."""
     _require_demo_logs(request)
-    cached = cache.get('sysview:public-snapshot')      # ~25 truy vấn / lần, client poll 2s -> gộp các client trong 2s
+    cached = cache.get('sysview:public-snapshot')
     if cached is not None:
         return JsonResponse(cached)
     _ls = DeviceStatusLog.objects.filter(device=OuterRef('pk')).order_by('-recorded_at')
@@ -632,7 +600,7 @@ def public_system_logs_api(request):
         'commands': command_rows,
         'status_logs': status_rows,
         'nfc_logs': nfc_rows,
-        'rule_logs': [],      # đã bỏ tự động hoá - xoá panel này trong public/system_logs.html
+        'rule_logs': [],
         'audit_logs': audit_rows,
         'login_attempts': login_rows,
         'chart': {

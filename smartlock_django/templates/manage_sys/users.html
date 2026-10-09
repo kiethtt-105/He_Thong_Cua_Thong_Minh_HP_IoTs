@@ -1,6 +1,7 @@
+{# manage_sys/templates/manage_sys/users.html #}
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
-{# Gộp: user_list, user_detail (biến `page`). Tiêu đề tĩnh: PAGE_TITLES trong views. #}
+
 {% block page_title %}
 {% if page == 'user_detail' %}
 <span class="text-break">{{ target.email }}</span>

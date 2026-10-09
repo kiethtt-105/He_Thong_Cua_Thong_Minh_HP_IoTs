@@ -1,4 +1,5 @@
-"""NGƯỜI DÙNG (app + web): xác thực, hồ sơ, phiên, 2FA - /api/app/auth/..., /api/app/me/..."""
+# smartlock/api/account.py
+
 import base64
 import io
 import json
@@ -71,19 +72,10 @@ from smartlock.models import (
 )
 
 
-# ======================================================================
-# ĐĂNG KÝ · ĐĂNG NHẬP · 2FA KHI LOGIN · REFRESH · QUÊN MẬT KHẨU
-# ======================================================================
-
-# ======================================================================
-# views.py - Đăng ký, đăng nhập, 2FA, làm mới token, đăng xuất, quên mật khẩu, xác thực email.
-# ======================================================================
-
 _DUMMY_HASH = None
 
 
 def _burn_password_check(password):
-    """Chống dò tài khoản qua thời gian phản hồi: user không tồn tại vẫn tốn 1 lần băm mật khẩu."""
     global _DUMMY_HASH
     if _DUMMY_HASH is None:
         _DUMMY_HASH = make_password('smartlock-timing-dummy')
@@ -91,7 +83,6 @@ def _burn_password_check(password):
 
 
 def _2fa_methods(user, web=False) -> list:
-    """App: chỉ totp + email (passkey cần RP/origin của trình duyệt). Web: thêm passkey (fido2)."""
     allowed = ('totp', 'email', 'fido2') if web else ('totp', 'email')
     return [m for m in services.get_cfg(user).available_methods() if m in allowed]
 
@@ -101,7 +92,6 @@ def _is_web(info) -> bool:
 
 
 def _client_info(data) -> dict:
-    """Thông tin thiết bị + loại client. `client` = 'web' (cookie + CSRF) hoặc 'app' (mặc định, Bearer token)."""
     info = device_info(data)
     if s(data, 'client', 10).lower() == 'web':
         info['client'] = 'web'
@@ -111,14 +101,14 @@ def _client_info(data) -> dict:
 def _finish_login(request, user, info, method=None):
     services.reset_lockout(user)
     if _is_web(info):
-        web_login(request, user)                      # session cookie (giống trang đăng nhập HTML)
-        services.notify_login(request, user)          # PHẢI trước audit LOGIN
+        web_login(request, user)
+        services.notify_login(request, user)
         services.audit(request, 'LOGIN', actor=user, metadata={'channel': 'web', 'two_factor': method})
         return ok({'user': user_json(user), 'client': 'web', 'csrf_token': get_token(request),
                    'session_expires_in': services.user_session_seconds()})
     session, tokens = create_session(request, user, info)
-    User.objects.filter(pk=user.pk).update(last_login=timezone.now())   # web đã tự cập nhật qua django_login
-    services.notify_login(request, user)          # PHẢI trước audit LOGIN (so với lịch sử IP cũ)
+    User.objects.filter(pk=user.pk).update(last_login=timezone.now())
+    services.notify_login(request, user)
     services.audit(request, 'LOGIN', actor=user,
                    metadata={'channel': 'mobile', 'platform': info.get('platform'), 'two_factor': method})
     return ok({'user': user_json(user), **tokens})
@@ -151,7 +141,6 @@ def register(request):
                            success=False, severity='warning', username_attempt=email[:150])
             raise ApiError('EMAIL_EXISTS', 'Email này đã có tài khoản. Hãy đăng nhập hoặc dùng "Quên mật khẩu".',
                            409, field='email')
-        # Tài khoản chưa xác thực: người đăng ký MỚI NHẤT được quyền đặt mật khẩu/username (chống chiếm trước email).
         existing.set_password(password)
         existing.username = username.strip().lower()
         if full_name:
@@ -196,7 +185,7 @@ def resend_verification(request):
         sent = services.send_verification(request, user)
         services.audit(request, 'VERIFY_MAIL_RESENT', actor=None, target_user=user, success=sent,
                        metadata={'channel': 'mobile'})
-    return ok({'message': 'Nếu tài khoản cần xác thực, email đã được gửi lại.'})      # luôn trung tính
+    return ok({'message': 'Nếu tài khoản cần xác thực, email đã được gửi lại.'})
 
 
 @api('POST', auth=False)
@@ -230,7 +219,7 @@ def login(request):
         raise ApiError('MISSING_FIELD', 'Vui lòng nhập email/username và mật khẩu.', 400)
     info = _client_info(data)
     if _is_web(info):
-        check_csrf(request)                           # web: chống login-CSRF (cần X-CSRFToken)
+        check_csrf(request)
     ip = services.client_ip(request)
     user = services.find_user(identifier)
     now = timezone.now()
@@ -248,7 +237,7 @@ def login(request):
         _burn_password_check(password)
         auth_user = None
 
-    if auth_user and services.is_admin(auth_user):       # quản trị chỉ đăng nhập ở cổng riêng
+    if auth_user and services.is_admin(auth_user):
         services.audit(request, 'LOGIN_ADMIN_REJECTED', actor=None, target_user=user, success=False,
                        severity='warning', username_attempt=identifier[:150])
         raise ApiError('INVALID_CREDENTIALS', 'Email/Username hoặc mật khẩu không đúng.', 401)
@@ -271,7 +260,7 @@ def login(request):
         return _finish_login(request, auth_user, info)
 
     if user and not user.is_active and user.check_password(password):
-        if user.email_verified:                       # đã xác thực mà is_active=False => bị quản trị vô hiệu hóa
+        if user.email_verified:
             services.audit(request, 'LOGIN_DISABLED_ACCOUNT', actor=None, target_user=user, success=False,
                            severity='warning', username_attempt=identifier[:150])
             raise ApiError('ACCOUNT_DISABLED', 'Tài khoản đã bị vô hiệu hóa. Vui lòng liên hệ quản trị viên.', 403)
@@ -319,7 +308,7 @@ def two_factor_verify(request):
     data = read_json(request)
     user, info = _challenge_user(data)
     if _is_web(info):
-        check_csrf(request)                           # bước này tạo session cookie => phải qua CSRF
+        check_csrf(request)
     minutes = services.lock_minutes(user)
     if minutes:
         raise ApiError('ACCOUNT_LOCKED', f'Tài khoản đang bị khóa tạm thời. Thử lại sau {minutes} phút.', 423,
@@ -347,7 +336,6 @@ def two_factor_verify(request):
 
 @api('POST', auth=False)
 def two_factor_passkey_options(request):
-    """WEB: lấy tuỳ chọn WebAuthn cho bước 2FA bằng passkey (cần challenge_token từ /auth/login/)."""
     user, info = _challenge_user(read_json(request))
     if not _is_web(info):
         raise ApiError('WEB_ONLY', 'Passkey chỉ dùng được trên web.', 400)
@@ -366,7 +354,6 @@ def two_factor_passkey_options(request):
 
 @api('POST', auth=False)
 def two_factor_passkey_finish(request):
-    """WEB: hoàn tất đăng nhập bằng passkey: {challenge_token, credential}."""
     data = read_json(request)
     user, info = _challenge_user(data)
     if not _is_web(info):
@@ -420,8 +407,6 @@ def refresh(request):
 
 @api('POST', auth='any')
 def logout(request):
-    """App: thu hồi phiên token hiện tại (all=true: mọi phiên app). Web: đăng xuất session cookie
-    (all=true: đồng thời thu hồi mọi phiên app của tài khoản)."""
     data = read_json(request)
     user = request.user
     if request.client_type == 'web':
@@ -443,13 +428,11 @@ def logout(request):
 
 @api('GET', auth=False)
 def csrf(request):
-    """Web: gọi 1 lần khi mở trang để nhận CSRF cookie + token (gửi lại ở header X-CSRFToken). App không cần."""
     return ok({'csrf_token': get_token(request)})
 
 
 @api('POST', auth=False)
 def verify_email(request):
-    """Xác thực email bằng token trong link (UUID). Dùng cho cả web lẫn app (deep link)."""
     token = services.parse_uuid(s(read_json(request), 'token', 64, required=True))
     now = timezone.now()
     vt = None
@@ -457,13 +440,11 @@ def verify_email(request):
         vt = (OneTimeCode.objects.select_related('user')
               .filter(token_hash=services.hash_token(token), purpose='EMAIL_VERIFY', is_used=False,
                       expires_at__gt=now).first())
-    # đánh dấu đã dùng bằng UPDATE có điều kiện => 2 request song song không cùng dùng được 1 token
     if vt is None or not OneTimeCode.objects.filter(pk=vt.pk, is_used=False).update(is_used=True, used_at=now):
         services.audit(request, 'EMAIL_VERIFY_FAILED', actor=None, success=False, severity='warning')
         raise ApiError('TOKEN_INVALID', 'Link xác thực không hợp lệ hoặc đã hết hạn.', 400)
     user = vt.user
     if user.email_verified:
-        # Đã xác thực từ trước: KHÔNG bật lại is_active (tránh mở khóa tài khoản đã bị quản trị vô hiệu hóa).
         if user.is_active:
             return ok({'verified': True, 'message': 'Tài khoản đã được kích hoạt trước đó.'})
         services.audit(request, 'EMAIL_VERIFY_FAILED', actor=None, target_user=user, success=False,
@@ -477,7 +458,6 @@ def verify_email(request):
 
 
 def _reset_user(request, data):
-    """Kiểm tra {uid, token} của link đặt lại mật khẩu; sai/hết hạn -> audit + ApiError RESET_INVALID."""
     uid, token = s(data, 'uid', 200, required=True), s(data, 'token', 200, required=True)
     try:
         user = User.objects.get(pk=force_str(urlsafe_base64_decode(uid)))
@@ -492,14 +472,12 @@ def _reset_user(request, data):
 
 @api('POST', auth=False)
 def password_reset_check(request):
-    """Kiểm tra link đặt lại mật khẩu còn hiệu lực không: {uid, token}. Trang web gọi khi mở link."""
     _reset_user(request, read_json(request))
     return ok({'valid': True})
 
 
 @api('POST', auth=False)
 def password_reset_confirm(request):
-    """Đặt mật khẩu mới từ link trong email: {uid, token, new_password}. Dùng cho cả web lẫn app."""
     data = read_json(request)
     user = _reset_user(request, data)
     new = str(data.get('new_password') or '')
@@ -509,7 +487,7 @@ def password_reset_confirm(request):
         raise ApiError('WEAK_PASSWORD', ' '.join(e.messages), 400, field='new_password')
     user.set_password(new)
     user.save()
-    revoke_all_sessions(user)                         # đổi mật khẩu = đăng xuất mọi app
+    revoke_all_sessions(user)
     services.reset_lockout(user)
     services.audit(request, 'PASSWORD_RESET_DONE', actor=user, target_user=user,
                    metadata={'channel': 'api'})
@@ -518,16 +496,7 @@ def password_reset_confirm(request):
     return ok({'message': 'Mật khẩu đã được thay đổi thành công!'})
 
 
-# ======================================================================
-# TÀI KHOẢN: hồ sơ · đổi mật khẩu · phiên đăng nhập · push token
-# ======================================================================
-
-# ======================================================================
-# views.py - Tài khoản: hồ sơ, đổi mật khẩu, phiên đăng nhập, push token, trạng thái 2FA, bootstrap (tải 1 lần khi mở app/web).
-# ======================================================================
-
 def _delete_account(request):
-    """DELETE /me/ {password}: vô hiệu hoá tài khoản + xoá dữ liệu sinh trắc/thẻ. Chủ khoá phải gỡ khoá trước."""
     user = request.user
     if Device.objects.filter(owner=user).exists():
         raise ApiError('OWNS_DEVICES', 'Bạn còn đang sở hữu khoá. Hãy gỡ khoá khỏi tài khoản trước khi xoá.', 409)
@@ -537,7 +506,7 @@ def _delete_account(request):
     for acc in DeviceAccess.objects.filter(user=user, is_active=True).select_related('device'):
         services.revoke_user_credentials(acc.device, user)
     DeviceAccess.objects.filter(user=user, is_active=True).update(is_active=False, revoked_at=timezone.now())
-    FaceProfile.objects.filter(user=user).delete()                 # dữ liệu sinh trắc: xoá hẳn (NĐ 13/2023)
+    FaceProfile.objects.filter(user=user).delete()
     AccessCard.objects.filter(user=user).delete()
     revoke_all_sessions(user)
     services.audit(request, 'ACCOUNT_DELETED', target_user=user, severity='warning',
@@ -595,8 +564,7 @@ def change_password(request):
     user.set_password(new)
     user.save()
     if request.client_type == 'web':
-        update_session_auth_hash(request, user)        # giữ phiên web hiện tại; các phiên web khác tự hết hiệu lực
-    # app: giữ phiên đang dùng; web: không có MobileSession nên thu hồi mọi phiên app
+        update_session_auth_hash(request, user)
     others = revoke_all_sessions(user, exclude=request.api_session)
     services.audit(request, 'PASSWORD_CHANGED', severity='warning', target_user=user,
                    metadata={'channel': request.client_type, 'revoked_other_sessions': others})
@@ -607,9 +575,6 @@ def change_password(request):
 
 @api('GET', 'DELETE', auth='any')
 def sessions_list(request):
-    """GET: danh sách phiên đăng nhập trên app. DELETE: đăng xuất MỌI phiên app khác (trừ phiên đang dùng).
-    Danh sách phiên đăng nhập trên app. Web gọi cũng được (để xem/đăng xuất các thiết bị di động);
-    phiên web là cookie của Django nên không nằm trong danh sách này."""
     if request.method == 'DELETE':
         n = revoke_all_sessions(request.user, exclude=request.api_session)
         services.audit(request, 'MOBILE_SESSIONS_REVOKED_ALL', severity='warning',
@@ -634,7 +599,7 @@ def session_revoke(request, session_id):
 @api('PUT', 'DELETE', auth='any')
 def push_token(request):
     session = request.api_session
-    if session is None:                                    # web không có FCM token / phiên app
+    if session is None:
         raise ApiError('APP_ONLY', 'Chức năng push token chỉ dành cho app di động.', 400)
     if request.method == 'DELETE':
         session.fcm_token = ''
@@ -659,19 +624,13 @@ def two_factor_status(request):
                'manage_on_web': True})
 
 
-# ======================================================================
-# CÀI ĐẶT 2FA: TOTP · email · passkey
-# ======================================================================
-
 _SETUP_SALT = 'smartlock.api.totp-setup.v1'
 SETUP_TTL_SECONDS = 10 * 60
-MAX_SETUP_FAILS = 5                     # sai quá 5 lần / 15 phút -> chặn tạm
+MAX_SETUP_FAILS = 5
 MAX_PASSWORD_FAILS = 5
 
 
-# ----------------------------------------------------------------------------------------------- helpers
 def _qr_data_uri(text: str) -> str:
-    """QR dạng SVG (không cần Pillow -> chạy được trên Vercel)."""
     img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
     buf = io.BytesIO()
     img.save(buf)
@@ -684,7 +643,6 @@ def _recent_fails(user, action) -> int:
 
 
 def _require_password(request, data):
-    """Nhập lại mật khẩu cho thao tác nhạy cảm (gỡ phương thức). Có giới hạn số lần sai."""
     user = request.user
     if _recent_fails(user, 'TWO_FACTOR_PASSWORD_FAILED') >= MAX_PASSWORD_FAILS:
         raise ApiError('RATE_LIMITED', 'Nhập sai mật khẩu quá nhiều lần. Thử lại sau 15 phút.', 429)
@@ -694,7 +652,6 @@ def _require_password(request, data):
 
 
 def _after_added(request, user, method) -> dict:
-    """Ghi log + thông báo; phương thức ĐẦU TIÊN tự bật 2FA."""
     services.audit(request, 'TWO_FACTOR_METHOD_ADDED', target_user=user, severity='warning',
                    metadata={'method': method})
     services.notify(user, 'Đã thêm phương thức 2FA', f'Phương thức {method.upper()} vừa được thêm vào tài khoản.',
@@ -728,7 +685,7 @@ def _after_removed(request, user, method) -> dict:
     services.notify(user, 'Đã gỡ phương thức 2FA', f'Phương thức {method.upper()} vừa được gỡ khỏi tài khoản.',
                     severity='warning', type_='SECURITY')
     auto_off = was and not now
-    if auto_off:                                      # gỡ phương thức cuối -> 2FA tự tắt
+    if auto_off:
         services.audit(request, 'TWO_FACTOR_DISABLED', target_user=user, severity='warning',
                        metadata={'method': method, 'auto': True})
         services.notify(user, 'Đã tắt xác thực 2 lớp',
@@ -744,10 +701,8 @@ def _web_only(request):
         raise ApiError('WEB_ONLY', 'Passkey chỉ thiết lập được trên web.', 400)
 
 
-# ----------------------------------------------------------------------------------------------- TOTP
 @api('POST', auth='any')
 def totp_begin(request):
-    """Bắt đầu thiết lập Google Authenticator: trả secret + QR + setup_token (đã ký, hạn 10 phút)."""
     user = request.user
     if services.get_cfg(user).totp_confirmed:
         raise ApiError('ALREADY_SET', 'Google Authenticator đã được thiết lập. Hãy gỡ trước nếu muốn cài lại.', 409)
@@ -796,7 +751,6 @@ def totp_confirm(request):
     return ok(_after_added(request, user, 'totp'))
 
 
-# ----------------------------------------------------------------------------------------------- Email OTP
 @api('POST', auth='any')
 def email_send(request):
     user = request.user
@@ -827,7 +781,6 @@ def email_confirm(request):
     return ok(_after_added(request, user, 'email'))
 
 
-# ----------------------------------------------------------------------------------------------- Passkey (web)
 @api('POST', auth='any')
 def passkey_options(request):
     _web_only(request)
@@ -893,7 +846,6 @@ def passkey_remove(request, cred_id):
     return ok(_after_removed(request, user, 'fido2'))
 
 
-# ----------------------------------------------------------------------------------------------- gỡ TOTP / Email
 @api('POST', auth='any')
 def method_remove(request, method):
     user, data = request.user, read_json(request)

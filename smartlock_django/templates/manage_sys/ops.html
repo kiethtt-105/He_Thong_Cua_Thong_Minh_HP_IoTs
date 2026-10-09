@@ -1,6 +1,7 @@
+{# manage_sys/templates/manage_sys/ops.html #}
 {% extends 'manage_sys/base.html' %}
 {% load manage_sys_tags %}
-{# Gộp: dashboard, audit_logs, audit_logins, announcements, settings (biến `page`). Tiêu đề tĩnh: PAGE_TITLES trong views. #}
+
 {% block content %}
 {% if page == 'dashboard' %}
 {% url 'manage_sys:users' as users_url %}{% url 'manage_sys:devices' as devices_url %}

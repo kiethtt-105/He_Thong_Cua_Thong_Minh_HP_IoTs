@@ -22,11 +22,10 @@ from .models import (
 admin.site.site_header = 'Smart Lock - Quản trị'
 admin.site.site_title = 'Smart Lock'
 
-# ================================================================ VAI TRÒ + CHÍNH SÁCH
 V, A, C, D = 'view', 'add', 'change', 'delete'
 FULL = frozenset({V, A, C, D})
 VIEW = frozenset({V})
-VIEW_DELETE = frozenset({V, D})          # log: không ai sửa/thêm; Superuser được xoá (lưu trữ) và việc xoá cũng bị ghi log
+VIEW_DELETE = frozenset({V, D})
 
 
 def _full_power() -> bool:
@@ -34,9 +33,6 @@ def _full_power() -> bool:
 
 
 def _role(request):
-    """'super' | 'admin' | None.
-    Superuser: is_active + is_staff + is_superuser. Admin (is_admin): ADMIN_FULL_POWER=True -> vai trò 'super'
-    (quyền cao nhất, không cần is_staff); False -> vai trò 'admin' (cần is_staff, chỉ xem + vận hành)."""
     u = request.user
     if not getattr(u, 'is_active', False):
         return None
@@ -51,14 +47,11 @@ def _role(request):
 
 
 def _is_real_superuser(request) -> bool:
-    """Superuser thật (cờ is_superuser) - dùng cho việc không thể xác nhận lại mật khẩu ở Django admin."""
     u = request.user
     return bool(getattr(u, 'is_active', False) and getattr(u, 'is_staff', False) and u.is_superuser)
 
 
 class RoleAdminMixin:
-    """Quyền theo bảng `policy` = {'super': {...}, 'admin': {...}}. Không có vai trò => không có quyền gì
-    (KHÔNG rơi về quyền Django mặc định, để Superuser không bị "chỉ-xem" như trước và staff thường không lách được)."""
     policy = {'super': FULL, 'admin': VIEW}
 
     def _can(self, request, op):
@@ -81,18 +74,14 @@ class RoleAdminMixin:
     def has_delete_permission(self, request, obj=None):
         return self._can(request, D)
 
-    # Dùng cho @admin.action(permissions=['operate']): thao tác vận hành (thu hồi, ping...) cho cả 2 vai trò.
     def has_operate_permission(self, request):
         return _role(request) is not None
 
 
-# ================================================================ GHI AUDITLOG
 BULK_AUDIT_LIMIT = 200
 
 
 class AuditedAdminMixin(RoleAdminMixin):
-    """Ghi AuditLog (ADMIN_<MODEL>_ADDED/CHANGED/DELETED) cho mọi thao tác. Với sửa: chỉ ghi TÊN trường đổi
-    (không ghi giá trị để khỏi lộ dữ liệu nhạy cảm); riêng cờ quyền của User ghi thêm giá trị cũ->mới ở bên dưới."""
 
     def _log(self, request, verb, obj, severity='warning', extra=None, strict=False):
         model = obj._meta.model_name.upper()
@@ -113,7 +102,7 @@ class AuditedAdminMixin(RoleAdminMixin):
             self._log(request, 'ADDED', obj)
 
     def delete_model(self, request, obj):
-        self._log(request, 'DELETED', obj, severity='critical', strict=True)   # ghi TRƯỚC khi xoá để còn thông tin
+        self._log(request, 'DELETED', obj, severity='critical', strict=True)
         super().delete_model(request, obj)
 
     def delete_queryset(self, request, queryset):
@@ -121,7 +110,7 @@ class AuditedAdminMixin(RoleAdminMixin):
         if len(objs) <= BULK_AUDIT_LIMIT:
             for obj in objs:
                 self._log(request, 'DELETED', obj, severity='critical', extra={'bulk': True}, strict=True)
-        else:   # xoá hàng loạt lớn (vd. dọn log cũ): ghi 1 dòng tổng kết thay vì hàng nghìn dòng
+        else:
             services.audit(request, f'ADMIN_{self.model._meta.model_name.upper()}_BULKDEL'[:50],
                            severity='critical', strict=True,
                            metadata={'model': self.model._meta.label, 'count': queryset.count(),
@@ -129,25 +118,22 @@ class AuditedAdminMixin(RoleAdminMixin):
         super().delete_queryset(request, queryset)
 
 
-# ================================================================ NHÓM CỘT NHẠY CẢM: KHÔNG BAO GIỜ HIỆN / SỬA
 _EXTRA_SECRET_FIELDS = {'snapshot_url', 'fcm_token', 'public_key'}
 
 
 def _secret_fields(model):
-    """Mọi cột hash/mã hoá (token, PIN, UID thẻ, secret thiết bị, embedding khuôn mặt, TOTP...) + ảnh chụp + token push."""
     return [f.name for f in model._meta.fields
             if f.name.endswith(('_hash', '_encrypted')) or f.name in _EXTRA_SECRET_FIELDS]
 
 
 class BaseModelAdmin(AuditedAdminMixin, admin.ModelAdmin):
     list_per_page = 50
-    show_full_result_count = False    # tránh COUNT(*) toàn bảng ở mỗi lần mở danh sách (bảng log lớn + DB ở xa = chậm)
+    show_full_result_count = False
 
     def get_exclude(self, request, obj=None):
         return _secret_fields(self.model)
 
 
-# ================================================================ USER
 FLAGS = ('is_active', 'is_staff', 'is_superuser', 'is_admin')
 
 
@@ -165,7 +151,6 @@ def _revoke_mobile_sessions(user) -> int:
 
 
 def _privilege_errors(actor, target, cleaned) -> list:
-    """Các chốt chặn khi đổi cờ quyền / kích hoạt (kể cả Superuser)."""
     new = {f: cleaned.get(f, getattr(target, f)) for f in FLAGS}
     errors = []
     if new['is_superuser'] != target.is_superuser and not actor.is_superuser:
@@ -222,17 +207,14 @@ class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
     add_fieldsets = (
         (None, {'classes': ('wide',), 'fields': ('email', 'username', 'password1', 'password2')}),
     )
-    # Admin thường chỉ sửa được các trường này (và chỉ trên user thường).
     _ADMIN_EDITABLE = {'full_name', 'phone', 'is_active'}
 
     def get_readonly_fields(self, request, obj=None):
         if obj is None:
             return ()
         if _role(request) == 'super':
-            # Tự sửa mình: khoá cờ quyền/kích hoạt để không tự khoá tài khoản.
             if obj.pk == request.user.pk:
                 return FLAGS + ('last_login',)
-            # Cờ is_superuser chỉ Superuser thật được đổi (xem _privilege_errors).
             return ('last_login',) if _is_real_superuser(request) else ('last_login', 'is_superuser')
         every = {f for _, opts in self.fieldsets for f in opts['fields']}
         return tuple(sorted(every - self._ADMIN_EDITABLE - {'password'}))
@@ -240,7 +222,6 @@ class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
     def has_change_permission(self, request, obj=None):
         if not super().has_change_permission(request, obj):
             return False
-        # Admin thường không sửa Superuser và không sửa chính mình (xem thông tin thì được).
         if obj is not None and _role(request) == 'admin' and (obj.is_superuser or obj.pk == request.user.pk):
             return False
         return True
@@ -250,12 +231,11 @@ class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
             return False
         if obj is None:
             return True
-        # Không xoá chính mình / Superuser cuối. User đang là chủ khoá bị RESTRICT chặn ở tầng DB (Django báo rõ).
         return obj.pk != request.user.pk and not _is_last_superuser(obj)
 
     def get_actions(self, request):
         actions = super().get_actions(request)
-        actions.pop('delete_selected', None)   # xoá user chỉ từng người một (có kiểm tra ở trên)
+        actions.pop('delete_selected', None)
         return actions
 
     def get_form(self, request, obj=None, **kwargs):
@@ -277,7 +257,6 @@ class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
         if change:
             old = User.objects.filter(pk=obj.pk).values(*FLAGS).first()
         else:
-            # User tạo từ admin: chuẩn hoá giống UserManager.create_user và kích hoạt sẵn (đã được quản trị tin cậy).
             obj.username = (obj.username or '').strip().lower()
             obj.email = User.objects.normalize_email(obj.email)
             obj.is_active = True
@@ -298,7 +277,7 @@ class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
 
     def user_change_password(self, request, id, form_url=''):
         if not _is_real_superuser(request):
-            raise PermissionDenied   # đổi mật khẩu người khác = chiếm tài khoản: chỉ Superuser thật
+            raise PermissionDenied
         response = super().user_change_password(request, id, form_url)
         if request.method == 'POST' and response.status_code == 302:
             target = User.objects.filter(pk=id).first()
@@ -318,7 +297,6 @@ class CustomUserAdmin(AuditedAdminMixin, UserAdmin):
     actions = ['action_unlock']
 
 
-# ================================================================ SYSTEM SETTINGS (singleton)
 class SystemSettingsForm(forms.ModelForm):
     class Meta:
         model = SystemSettings
@@ -361,12 +339,10 @@ class SystemSettingsAdmin(BaseModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-# ================================================================ DEVICE
 _DEVICE_CODE_RE = re.compile(r'^[A-Z0-9][A-Z0-9_-]{2,49}$')
 
 
 class DeviceCreateForm(forms.ModelForm):
-    """Admin tạo khoá MỚI. Mã tự sinh nếu để trống; secret sinh tự động và chỉ hiện MỘT lần sau khi lưu."""
     class Meta:
         model = Device
         fields = ('name', 'device_code', 'device_mode', 'mac_address', 'location')
@@ -395,7 +371,7 @@ class DeviceCreateForm(forms.ModelForm):
 
 @admin.register(Device)
 class DeviceAdmin(BaseModelAdmin):
-    policy = {'super': FULL, 'admin': frozenset({V, A, C})}      # CHỈ quản trị mới tạo được khoá mới
+    policy = {'super': FULL, 'admin': frozenset({V, A, C})}
     list_display = ('name', 'device_code', 'owner', 'status', 'device_mode', 'battery_level', 'last_seen_at')
     list_filter = ('status', 'device_mode', 'is_purchased')
     search_fields = ('name', 'device_code', 'mac_address', 'owner__email', 'owner__username')
@@ -409,7 +385,6 @@ class DeviceAdmin(BaseModelAdmin):
                 'bluetooth_enabled', 'wifi_enabled', 'nfc_enabled']
 
     def get_readonly_fields(self, request, obj=None):
-        # Gán/gỡ chủ + xoay secret đi qua /manage-sys/ (nhập lại mật khẩu, kiểm tra kết nối, audit strict).
         ro = ['device_code', 'owner', 'status', 'battery_level', 'is_purchased', 'purchased_at', 'last_seen_at']
         if obj is not None and obj.owner_id:
             ro.append('device_mode')
@@ -423,11 +398,11 @@ class DeviceAdmin(BaseModelAdmin):
     def has_delete_permission(self, request, obj=None):
         if not super().has_delete_permission(request, obj):
             return False
-        return obj is None or not obj.owner_id      # khoá còn chủ: phải gỡ chủ trước (mất thẻ/PIN/khuôn mặt của chủ)
+        return obj is None or not obj.owner_id
 
     def get_actions(self, request):
         actions = super().get_actions(request)
-        actions.pop('delete_selected', None)        # xoá từng khoá (có kiểm tra chủ ở trên), không xoá hàng loạt
+        actions.pop('delete_selected', None)
         return actions
 
     def save_model(self, request, obj, form, change):
@@ -436,7 +411,7 @@ class DeviceAdmin(BaseModelAdmin):
         secret = secrets.token_urlsafe(24)
         obj.owner = None
         obj.status = 'provisioning'
-        obj.provisioning_secret_hash = services.hash_token(secret)    # cùng kiểu hash với MQTT webhook / BLE
+        obj.provisioning_secret_hash = services.hash_token(secret)
         super().save_model(request, obj, form, change)
         messages.warning(
             request, f'Khoá {obj.device_code} đã tạo. Provisioning secret: {secret} '
@@ -474,10 +449,9 @@ class DeviceStatusLogAdmin(BaseModelAdmin):
     list_select_related = ('device',)
 
 
-# ================================================================ QUYỀN / CHIA SẺ
 @admin.register(Permission)
 class PermissionAdmin(BaseModelAdmin):
-    policy = {'super': frozenset({V, C}), 'admin': VIEW}      # mã quyền gắn với code: không thêm/xoá tay
+    policy = {'super': frozenset({V, C}), 'admin': VIEW}
     list_display = ('code', 'name', 'is_sensitive')
 
     def get_readonly_fields(self, request, obj=None):
@@ -530,7 +504,7 @@ class DeviceAccessAdmin(BaseModelAdmin):
         super().save_model(request, obj, form, change)
 
     def save_related(self, request, form, formsets, change):
-        super().save_related(request, form, formsets, change)      # M2M permissions lưu ở đây
+        super().save_related(request, form, formsets, change)
         if form.instance.is_active:
             try:
                 services.notify_access_shared(request, form.instance, created=not change)
@@ -538,7 +512,6 @@ class DeviceAccessAdmin(BaseModelAdmin):
                 pass
 
 
-# ================================================================ NFC / THẺ / PIN / KHUÔN MẶT
 @admin.register(NfcReader)
 class NfcReaderAdmin(BaseModelAdmin):
     policy = {'super': FULL, 'admin': VIEW}
@@ -550,7 +523,7 @@ class NfcReaderAdmin(BaseModelAdmin):
 
 @admin.register(AccessCard)
 class AccessCardAdmin(BaseModelAdmin):
-    policy = {'super': frozenset({V, C, D}), 'admin': VIEW}   # thêm thẻ phải quẹt thật (cần UID) nên không thêm tay
+    policy = {'super': frozenset({V, C, D}), 'admin': VIEW}
     list_display = ('name', 'user', 'is_active', 'created_at')
     list_filter = ('is_active',)
     search_fields = ('name', 'user__email')
@@ -595,13 +568,13 @@ class CardDeviceAccessAdmin(BaseModelAdmin):
     list_display = ('access_card', 'device', 'is_active', 'created_at')
     list_filter = ('is_active',)
     list_select_related = ('access_card', 'device')
-    autocomplete_fields = ('device',)          # bỏ 'access_card'
-    raw_id_fields = ('access_card',)            # chọn thẻ bằng ID, không cần admin cho AccessCredential
+    autocomplete_fields = ('device',)
+    raw_id_fields = ('access_card',)
 
 
 @admin.register(DoorPinCode)
 class DoorPinCodeAdmin(BaseModelAdmin):
-    policy = {'super': VIEW_DELETE, 'admin': VIEW}     # PIN chỉ sinh từ luồng của chủ khoá (hiện 1 lần); không thêm tay
+    policy = {'super': VIEW_DELETE, 'admin': VIEW}
     list_display = ('device', 'label', 'created_by', 'expires_at', 'use_count', 'max_uses', 'is_revoked')
     list_filter = ('is_revoked',)
     search_fields = ('device__name', 'label')
@@ -621,7 +594,7 @@ class DoorPinCodeAdmin(BaseModelAdmin):
 
 @admin.register(FaceProfile)
 class FaceProfileAdmin(BaseModelAdmin):
-    policy = {'super': VIEW_DELETE, 'admin': VIEW}     # embedding sinh trắc: không xem/sửa/thêm ở admin (NĐ 13/2023)
+    policy = {'super': VIEW_DELETE, 'admin': VIEW}
     list_display = ('user', 'device', 'name', 'is_active', 'consent_confirmed', 'created_at')
     list_filter = ('is_active', 'consent_confirmed')
     list_select_related = ('user', 'device')
@@ -655,7 +628,6 @@ class AccessEventAdmin(BaseModelAdmin):
     list_select_related = ('device', 'user')
 
 
-# ================================================================ THÔNG BÁO / LOG / OTP
 @admin.register(Notification)
 class NotificationAdmin(BaseModelAdmin):
     policy = {'super': FULL, 'admin': VIEW}
@@ -667,7 +639,7 @@ class NotificationAdmin(BaseModelAdmin):
 
     def save_model(self, request, obj, form, change):
         if obj.is_read and not obj.read_at:
-            obj.read_at = timezone.now()          # constraint chk_notification_readat_requires_read
+            obj.read_at = timezone.now()
         if not obj.is_read:
             obj.read_at = None
         super().save_model(request, obj, form, change)
@@ -693,7 +665,7 @@ class OneTimeCodeAdmin(BaseModelAdmin):
 
 @admin.register(Announcement)
 class AnnouncementAdmin(BaseModelAdmin):
-    policy = {'super': FULL, 'admin': FULL}       # thông báo hệ thống: cả 2 vai trò quản trị đều đăng/sửa/gỡ
+    policy = {'super': FULL, 'admin': FULL}
     list_display = ('title', 'level', 'is_active', 'created_by', 'created_at')
     list_filter = ('level', 'is_active')
     list_select_related = ('created_by',)
@@ -705,7 +677,6 @@ class AnnouncementAdmin(BaseModelAdmin):
         super().save_model(request, obj, form, change)
 
 
-# ================================================================ PHIÊN APP / 2FA (chỉ xem; không lộ token/khoá)
 @admin.register(MobileSession)
 class MobileSessionAdmin(BaseModelAdmin):
     policy = {'super': VIEW, 'admin': VIEW}
@@ -728,7 +699,7 @@ class MobileSessionAdmin(BaseModelAdmin):
 
 @admin.register(TwoFactorConfig)
 class TwoFactorConfigAdmin(BaseModelAdmin):
-    policy = {'super': VIEW, 'admin': VIEW}      # không ai tắt 2FA của người khác từ đây
+    policy = {'super': VIEW, 'admin': VIEW}
     list_display = ('user', 'totp_confirmed', 'email_otp_enabled', 'preferred_method', 'enabled_at')
     list_select_related = ('user',)
 
@@ -740,7 +711,6 @@ class Fido2CredentialAdmin(BaseModelAdmin):
     list_select_related = ('user',)
 
 
-# ================================================================ SITE: ai được vào /admin/ + 2FA (ADMIN_REQUIRE_2FA=True trong .env)
 _REQUIRE_2FA = bool(getattr(settings, 'ADMIN_REQUIRE_2FA', False))
 _SiteBase = admin.site.__class__
 if _REQUIRE_2FA:
@@ -750,18 +720,16 @@ if _REQUIRE_2FA:
 
 class SmartLockAdminSite(_SiteBase):
     def has_permission(self, request):
-        if super().has_permission(request):          # is_staff (+ đã xác minh OTP nếu bật 2FA)
+        if super().has_permission(request):
             return True
         if _role(request) is None:
             return False
-        # Admin full-power không có is_staff: vẫn vào được; 2FA (nếu bật) vẫn bắt buộc.
         return (not _REQUIRE_2FA) or bool(getattr(request.user, 'is_verified', lambda: False)())
 
 
 admin.site.__class__ = SmartLockAdminSite
 
 
-# LogEntry của Django: chỉ xem (dấu vết admin còn nguyên).
 @admin.register(LogEntry)
 class LogEntryAdmin(RoleAdminMixin, admin.ModelAdmin):
     policy = {'super': VIEW, 'admin': VIEW}

@@ -1,4 +1,5 @@
 # smartlock/services.py
+
 import hashlib
 import html as _html
 import hmac
@@ -32,9 +33,7 @@ from django.utils.html import linebreaks, strip_tags, urlize
 from django.utils.http import urlsafe_base64_encode
 from django.utils.safestring import mark_safe
 
-from smartlock_django import links   # LINKS SERVER: nguồn duy nhất cho link/host/MQTT
-# QUY ƯỚC: link nằm TRONG EMAIL luôn dùng links.public_absolute() (= link Vercel, kể cả khi server đang chạy local/devtunnel).
-# Không dùng links.absolute() / request.build_absolute_uri() cho email.
+from smartlock_django import links
 
 from .models import (
     AccessCard, AccessEvent, AuditLog, CardDeviceAccess, Device,
@@ -45,22 +44,15 @@ from .models import (
 logger = logging.getLogger('smartlock.services')
 
 
-# ============================================================================
-# 1. HELPER CHUNG
-# ============================================================================
-LOGIN_FAIL_WINDOW = timedelta(minutes=30)     # quá khoảng này kể từ lần sai gần nhất -> reset bộ đếm sai
-LOGIN_STAGE_RESET = timedelta(hours=24)       # quá khoảng này -> reset bậc khóa (5/10/30 phút)
-MAX_FAILED_ATTEMPTS = 5          # đăng nhập sai bao nhiêu lần thì khoá tài khoản tạm
+LOGIN_FAIL_WINDOW = timedelta(minutes=30)
+LOGIN_STAGE_RESET = timedelta(hours=24)
+MAX_FAILED_ATTEMPTS = 5
 
 
-# SMTP qua SSL mất 1-3 giây/mail (bắt tay TLS tới máy chủ mail) và chặn luôn response của view.
-# Chạy local/VPS: gửi ở luồng nền (mặc định). Vercel/serverless: hàm bị đóng băng ngay sau khi trả response nên
-# luồng nền có thể mất mail -> mặc định gửi đồng bộ; muốn nhanh hơn hãy dùng API mail qua HTTPS (Resend/SendGrid...).
 EMAIL_ASYNC = os.environ.get('EMAIL_ASYNC', '' if os.environ.get('VERCEL') else '1').strip().lower() in ('1', 'true', 'yes')
 
 
 def send_mail(subject, plain, html, to, log_body=True) -> bool:
-    """Trả True nếu đã gửi (chế độ nền: True = đã xếp hàng gửi, lỗi sẽ chỉ ghi log)."""
     if EMAIL_ASYNC:
         threading.Thread(target=_send_mail_now, args=(subject, plain, html, to, log_body),
                          name='send-mail', daemon=True).start()
@@ -69,7 +61,6 @@ def send_mail(subject, plain, html, to, log_body=True) -> bool:
 
 
 def _send_mail_now(subject, plain, html, to, log_body=True) -> bool:
-    # log_body=False: không ghi nội dung mail vào log (dùng cho mail chứa mã OTP)
     logger.info('send_mail: to=%s subject=%r plain_preview=%r', to, subject,
                 plain[:200] if log_body else '<ẩn nội dung>')
     try:
@@ -82,7 +73,6 @@ def _send_mail_now(subject, plain, html, to, log_body=True) -> bool:
 
 
 def safe_eq(a, b) -> bool:
-    """So sánh hằng-thời-gian, KHÔNG ném lỗi với None / ký tự non-ASCII (hmac.compare_digest(str) sẽ ném TypeError)."""
     if not a or not b:
         return False
     return hmac.compare_digest(str(a).encode('utf-8'), str(b).encode('utf-8'))
@@ -100,10 +90,6 @@ def valid_ip(value):
 
 
 def client_ip(request) -> str:
-    """Chỉ tin X-Forwarded-For khi settings.TRUST_PROXY_HEADERS = True (đứng sau proxy).
-    Phần tử ĐẦU của XFF do client tự đặt được -> lấy IP do proxy TIN CẬY ghi, tức phần tử thứ
-    TRUST_PROXY_COUNT tính từ cuối (mặc định 1 = proxy ngay phía trước).
-    Luôn trả về IP hợp lệ để không làm hỏng ghi log / GenericIPAddressField."""
     ip = None
     if getattr(settings, 'TRUST_PROXY_HEADERS', False):
         parts = [p.strip() for p in (request.META.get('HTTP_X_FORWARDED_FOR') or '').split(',') if p.strip()]
@@ -122,9 +108,6 @@ def system_settings() -> SystemSettings:
 
 
 def user_session_seconds() -> int:
-    """Thời gian phiên của USER thường theo SystemSettings.session_timeout_hours.
-    Nơi đăng nhập user (smartlock/views.py login_view) PHẢI gọi request.session.set_expiry(services.user_session_seconds())
-    (và dùng cho hạn MobileSession khi làm API). Phiên admin dùng MANAGE_SYS_SESSION_SECONDS riêng."""
     return int(system_settings().session_timeout_hours) * 3600
 
 
@@ -133,7 +116,6 @@ def is_admin(user) -> bool:
 
 
 def admins():
-    """Tài khoản quản trị (đang active) để gửi email thông báo cho admin."""
     return User.objects.filter(Q(is_staff=True) | Q(is_superuser=True) | Q(is_admin=True),
                                is_active=True).exclude(email='')
 
@@ -162,14 +144,11 @@ def find_user(identifier):
 
 
 class AuditWriteError(Exception):
-    """Không ghi được AuditLog cho thao tác bắt buộc phải có log (audit(..., strict=True))."""
+    pass
 
 
 def audit(request, action, *, device=None, target_user=None, success=True,
           severity='info', metadata=None, actor='auto', username_attempt=None, strict=False):
-    """Ghi AuditLog. Mặc định NUỐT lỗi ghi log (không làm hỏng luồng chính).
-    strict=True (thao tác nhạy cảm: cấp quyền, gán/gỡ chủ, xoay secret...) -> ném AuditWriteError để
-    view đặt thao tác + audit trong cùng transaction.atomic() và HUỶ thao tác khi không ghi được log."""
     if actor == 'auto':
         actor = request.user if request.user.is_authenticated else None
     snapshot = dict(metadata or {})
@@ -186,9 +165,9 @@ def audit(request, action, *, device=None, target_user=None, success=True,
     )
     try:
         if connections['default'].in_atomic_block:
-            with transaction.atomic():  # savepoint: lỗi ghi log không làm hỏng transaction bên ngoài
+            with transaction.atomic():
                 AuditLog.objects.create(**fields)
-        else:                           # autocommit: 1 INSERT là đủ (atomic() sẽ tốn thêm BEGIN + COMMIT)
+        else:
             AuditLog.objects.create(**fields)
     except Exception as exc:
         logger.exception('audit: không ghi được log %s', action)
@@ -203,9 +182,6 @@ def notify(user, title, message, severity='info', device=None, type_='SYSTEM'):
 
 
 def notify_login(request, user) -> None:
-    """Báo cho user khi đăng nhập từ một IP chưa từng đăng nhập thành công trước đó.
-    PHẢI gọi TRƯỚC khi audit 'LOGIN' của lần đăng nhập hiện tại (để so với lịch sử cũ).
-    Lần đăng nhập đầu tiên (chưa có lịch sử) thì không báo. Không bao giờ ném lỗi làm hỏng đăng nhập."""
     try:
         ip = client_ip(request)
         known = set(AuditLog.objects.filter(actor_user=user, action='LOGIN', success=True, ip_address__isnull=False)
@@ -230,8 +206,6 @@ def accessible_devices(user):
 
 
 def user_has_live_access(user, device) -> bool:
-    """User còn quyền dùng khoá NGAY BÂY GIỜ: là chủ, hoặc có chia sẻ còn hiệu lực (chưa thu hồi / chưa hết hạn).
-    Dùng khi xác thực thẻ / khuôn mặt / PIN để thông tin xác thực của người đã mất quyền không còn mở được cửa."""
     if user is None or not user.is_active:
         return False
     if device.owner_id == user.id:
@@ -240,7 +214,6 @@ def user_has_live_access(user, device) -> bool:
 
 
 def revoke_user_credentials(device, user) -> dict:
-    """Khi 1 người bị thu hồi / tự rời chia sẻ: vô hiệu thẻ NFC, hồ sơ khuôn mặt và PIN do người đó tạo trên khoá này."""
     now = timezone.now()
     return {
         'cards': CardDeviceAccess.objects.filter(device=device, access_card__user=user, is_active=True)
@@ -261,9 +234,6 @@ def has_permission(user, device, code) -> bool:
     ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)).exists()
 
 
-# ---------------------------------------------------------------- Quyền theo TỪNG TÍNH NĂNG
-# Chủ khoá luôn có đủ mọi quyền. Người được chia sẻ chỉ có đúng các quyền chủ chọn lúc chia sẻ.
-# (code, tên hiển thị, mô tả, nhạy cảm?)
 PERMISSION_CATALOG = [
     ('UNLOCK', 'Mở khoá từ xa (Internet)',
      'Bấm nút MỞ trên web/app khi khoá đang online và bật Wi-Fi.', False),
@@ -284,8 +254,6 @@ PERMISSION_CATALOG = [
 ]
 PERMISSION_CODES = tuple(code for code, *_ in PERMISSION_CATALOG)
 
-# Nhóm hiển thị (cho giao diện chia sẻ) + phạm vi của từng quyền: 'device' = tác động lên cả khoá,
-# 'own' = chỉ trên dữ liệu do chính người được chia sẻ tạo. CHỦ KHOÁ luôn thấy/quản lý tất cả.
 PERMISSION_META = {
     'UNLOCK': {'group': 'open', 'scope': 'device'},
     'LOCK': {'group': 'open', 'scope': 'device'},
@@ -303,7 +271,6 @@ PERMISSION_GROUPS = [
     ('watch', 'Giám sát', 'Xem nhật ký và nhận thông báo.'),
 ]
 
-# Vai trò mẫu: chọn 1 vai trò = tích sẵn nhóm quyền hay đi cùng nhau (vẫn chỉnh tay được).
 ROLE_PRESETS = {
     'viewer': {'label': 'Chỉ xem', 'desc': 'Xem lịch sử ra vào và nhận thông báo cửa mở. Không điều khiển được cửa.',
                'codes': ['view_history']},
@@ -315,7 +282,6 @@ ROLE_PRESETS = {
     'manager': {'label': 'Người trông nhà', 'desc': 'Như Thành viên gia đình, thêm cấp mã PIN cho khách.',
                 'codes': list(PERMISSION_CODES)},
 }
-# Những việc KHÔNG BAO GIỜ chia sẻ được (chỉ chủ khoá) - hiển thị cho chủ biết ranh giới.
 OWNER_ONLY_ACTIONS = [
     'Chia sẻ lại / thu hồi quyền của người khác',
     'Sửa tên, vị trí, bật/tắt Wi-Fi, Bluetooth, NFC của khoá',
@@ -328,8 +294,6 @@ _perms_synced = False
 
 
 def ensure_default_permissions() -> None:
-    """Đồng bộ danh mục quyền vào DB (tạo thiếu + cập nhật tên/mô tả mới). Chỉ chạy 1 lần mỗi tiến trình
-    (trước đây chạy mỗi lần mở trang chia sẻ = 1+ truy vấn thừa)."""
     global _perms_synced
     if _perms_synced:
         return
@@ -345,13 +309,11 @@ def ensure_default_permissions() -> None:
 
 
 def preset_codes(key):
-    """Mã quyền của vai trò mẫu, hoặc None nếu key không hợp lệ."""
     preset = ROLE_PRESETS.get(key)
     return list(preset['codes']) if preset else None
 
 
 def permission_form_context() -> dict:
-    """Dữ liệu cho form chia sẻ: nhóm quyền (kèm phạm vi), vai trò mẫu, ranh giới chỉ-chủ-khoá."""
     by_code = {p.code: p for p in Permission.objects.filter(code__in=PERMISSION_CODES)}
     groups = []
     for gkey, gname, gdesc in PERMISSION_GROUPS:
@@ -371,13 +333,11 @@ def permission_form_context() -> dict:
 
 
 def _live_access(user, now):
-    """DeviceAccess còn hiệu lực của user (đang bật, đã đến hạn bắt đầu, chưa hết hạn)."""
     return (DeviceAccess.objects.filter(user=user, is_active=True, accepted=True, valid_from__lte=now)
             .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now)))
 
 
 def devices_with_permission(user, code):
-    """Khoá user dùng được tính năng `code`: khoá của mình + khoá được chia sẻ kèm quyền đó."""
     ids = _live_access(user, timezone.now()).filter(permissions__code=code).values('device_id')
     return Device.objects.filter(Q(owner=user) | Q(id__in=ids))
 
@@ -391,7 +351,6 @@ def permission_codes(user, device) -> set:
 
 
 def permission_map(user, devices) -> dict:
-    """{device_id: set(mã quyền)} cho NHIỀU khoá bằng 1 truy vấn (permission_codes từng khoá = N+1 truy vấn)."""
     out, shared = {}, []
     for d in devices:
         if d.owner_id == user.id:
@@ -409,8 +368,6 @@ def permission_map(user, devices) -> dict:
 
 
 def capabilities(user, device) -> dict:
-    """Giao diện dùng dict này để hiện/ẩn từng khối chức năng cho CHỦ và cho NGƯỜI ĐƯỢC CHIA SẺ.
-    `bluetooth` / `nfc_phone` là tính năng của ĐIỆN THOẠI (app), trình duyệt không dùng được."""
     codes = permission_codes(user, device)
     return {
         'is_owner': device.owner_id == user.id,
@@ -422,14 +379,11 @@ def capabilities(user, device) -> dict:
         'manage_pins': 'manage_pins' in codes,
         'manage_faces': 'manage_face_profiles' in codes,
         'view_history': 'view_history' in codes,
-        'manage_sharing': device.owner_id == user.id,     # chỉ chủ mới chia sẻ/thu hồi
+        'manage_sharing': device.owner_id == user.id,
     }
 
 
-# ---------------------------------------------------------------- Chia sẻ khoá (có hiệu lực NGAY)
 def grant_access(device, owner, target, permissions, expires_at):
-    """Chia sẻ khoá cho `target` (không cần người nhận xác nhận). Đã có quyền -> cập nhật.
-    Trả (DeviceAccess, created)."""
     with transaction.atomic():
         access = (DeviceAccess.objects.select_for_update()
                   .filter(device=device, user=target, is_active=True).order_by('-created_at').first())
@@ -450,8 +404,6 @@ def _expiry_text(dt) -> str:
 
 
 def notify_access_shared(request, access, created=True) -> bool:
-    """Báo cho người được chia sẻ: thông báo trong app (kèm popup + push) VÀ email.
-    Trả True nếu email gửi được. Không bao giờ ném lỗi."""
     device, target, owner = access.device, access.user, access.created_by
     owner_name = owner.full_name or owner.username
     perm_names = [p.name for p in access.permissions.order_by('name')]
@@ -480,11 +432,7 @@ def notify_access_shared(request, access, created=True) -> bool:
         return False
 
 
-# ---------------------------------------------------------------- Popup trên màn hình
-# Mọi Notification mới đều hiện thành popup NGAY TRONG TRANG (JS poll smartlock:events), không dùng
-# Notification API của trình duyệt. Hàm dưới tạo Notification cho những ai đang "theo dõi" cánh cửa.
 def door_watchers(device):
-    """Chủ khoá + người được chia sẻ có quyền xem lịch sử."""
     shared = (_live_access_for_device(device).filter(permissions__code='view_history').values('user_id'))
     return User.objects.filter(Q(pk=device.owner_id) | Q(pk__in=shared), is_active=True).distinct()
 
@@ -505,8 +453,6 @@ def announce_door_event(device, title, message, severity='info', type_='DOOR_EVE
 
 
 def announce_command_result(cmd, ok=True) -> None:
-    """SUBSCRIBER MQTT gọi khi nhận ack của lệnh LOCK/UNLOCK -> popup "Đã khoá/Đã mở khoá" cho
-    người gửi lệnh + những người theo dõi cửa. Lệnh khác bỏ qua."""
     verb = {'LOCK': 'khoá', 'UNLOCK': 'mở khoá'}.get(cmd.command_type)
     if not verb:
         return
@@ -520,8 +466,6 @@ def announce_command_result(cmd, ok=True) -> None:
 
 
 def pick_device(queryset, raw_id, strict=False):
-    """strict=True (dùng cho POST): id gửi lên phải khớp đúng thiết bị,
-    không được âm thầm rơi về thiết bị đầu tiên (thao tác nhầm thiết bị)."""
     dev_id = parse_uuid(raw_id)
     if strict:
         return queryset.filter(id=dev_id).first() if dev_id else None
@@ -530,19 +474,18 @@ def pick_device(queryset, raw_id, strict=False):
 
 
 def register_failure(user, ip):
-    """Ghi 1 lần đăng nhập sai. Trả về số phút bị khoá nếu vừa kích hoạt khoá, ngược lại None."""
     stages = system_settings().login_lockout_stage_minutes or [5, 10, 30]
     now = timezone.now()
     locked_minutes = None
     with transaction.atomic():
         lock = User.objects.select_for_update().get(pk=user.pk)
         if lock.login_locked_until and lock.login_locked_until > now:
-            return None                       # đang khóa: request song song không được cộng dồn / leo thang
+            return None
         last = lock.login_last_failed_at
         if last and now - last > LOGIN_FAIL_WINDOW:
-            lock.login_failed_attempts = 0    # yên lặng đủ lâu -> đếm lại từ đầu
+            lock.login_failed_attempts = 0
         if last and now - last > LOGIN_STAGE_RESET:
-            lock.login_lock_stage = 0         # lâu không sai -> hạ bậc khóa về mức đầu
+            lock.login_lock_stage = 0
         lock.login_failed_attempts += 1
         lock.login_last_failed_at = now
         lock.login_last_failed_ip = ip
@@ -584,21 +527,11 @@ def send_verification(request, user) -> bool:
         'verification_link': link,
         'expiry_minutes': minutes,
     })
-    return send_mail(subject, plain, html, user.email, log_body=False)   # link chứa token: không ghi vào log
+    return send_mail(subject, plain, html, user.email, log_body=False)
 
 
-# ============================================================================
-# 2. EMAIL
-# ============================================================================
 BRAND_NAME = 'Smart Lock'
 
-# Mỗi loại mail = 1 mục. Mọi chuỗi là template Django nhỏ ({{ biến }}, {% if %}); biến lấy từ context truyền vào
-# render_email(). Giao diện chung ở templates/emails/message.html; bản text được dựng từ chính các trường này.
-#   subject / preheader / heading / greeting / footnote : chuỗi
-#   paras  : danh sách đoạn văn              code   : (nhãn, giá trị)  -> khung mã to (OTP)
-#   rows   : [(nhãn, giá trị, mono?)]         dòng có giá trị rỗng tự bị bỏ
-#   notice : ('info'|'warn', nội dung)        button : (url, nhãn)  -> không có url thì không hiện nút
-#   link   : url hiển thị dạng chữ để copy khi nút lỗi
 _GREET = 'Xin chào <strong>{{ full_name }}</strong>,'
 EMAIL_SPECS = {
     'user_verification': dict(
@@ -687,7 +620,6 @@ EMAIL_SPECS = {
 
 def _email_context(context: dict) -> dict:
     ctx = dict(context)
-    # views truyền 'reset_link'; mail dùng 'password_reset_link'
     if not ctx.get('password_reset_link') and ctx.get('reset_link'):
         ctx['password_reset_link'] = ctx['reset_link']
     ctx.setdefault('brand_name', BRAND_NAME)
@@ -698,7 +630,6 @@ def _email_context(context: dict) -> dict:
 
 
 def _rt(text, ctx):
-    """Render 1 chuỗi template nhỏ (tự escape biến). Trả SafeString để message.html không escape lần nữa."""
     if not text:
         return mark_safe('')
     return mark_safe(engines['django'].from_string(text).render(ctx).strip())
@@ -728,7 +659,6 @@ def _email_plain(v: dict, brand: str) -> str:
 
 
 def render_email(template_name: str, context: dict) -> tuple:
-    """Trả về (subject, html, plain_text). `template_name`: khoá trong EMAIL_SPECS (chấp nhận cả 'xxx.html')."""
     key = template_name[:-5] if template_name.endswith('.html') else template_name
     ctx = _email_context(context)
     fallback_title = key.replace('_', ' ').title()
@@ -763,8 +693,6 @@ def render_email(template_name: str, context: dict) -> tuple:
 
 
 def send_password_reset(request, user, by_admin=None) -> bool:
-    """Gửi link đặt lại mật khẩu (user tự yêu cầu, hoặc admin gửi hộ qua manage_sys: by_admin=<admin>).
-    Trả True nếu mail đã gửi/xếp hàng. Link chứa token nên không ghi nội dung mail vào log."""
     link = links.public_absolute(reverse('smartlock:reset_password_confirm', args=[
         urlsafe_base64_encode(force_bytes(str(user.pk))), default_token_generator.make_token(user),
     ]))
@@ -783,24 +711,18 @@ def mask_email(email: str) -> str:
 
 
 def invalidate_system_settings() -> None:
-    """manage_sys gọi sau khi lưu cài đặt. system_settings() hiện luôn đọc DB (chưa cache) nên không cần làm gì;
-    giữ hàm để khi thêm cache chỉ phải sửa ở đây."""
+    pass
 
 
-# ============================================================================
-# 3. MQTT + GỬI LỆNH
-# ============================================================================
-# Chấp nhận cả MQTT_BROKER_* lẫn MQTT_HOST/MQTT_PORT để .env đặt tên nào cũng có tác dụng.
 MQTT_BROKER_HOST = links.MQTT_HOST
 MQTT_BROKER_PORT = links.MQTT_PORT
-# Cổng 8883 (MQTTS) tự bật TLS; secret thiết bị là mật khẩu MQTT nên KHÔNG nên chạy cổng 1883 ngoài mạng nội bộ.
 MQTT_USE_TLS = links.MQTT_USE_TLS
 MQTT_PUBLISHER_USERNAME = os.environ.get('MQTT_PUBLISHER_USERNAME', '')
 MQTT_PUBLISHER_PASSWORD = os.environ.get('MQTT_PUBLISHER_PASSWORD', '')
 
 
 class MqttPublishError(Exception):
-    """Không publish được lệnh xuống thiết bị (broker down, timeout...)."""
+    pass
 
 
 def cmd_topic(device_code: str) -> str:
@@ -813,8 +735,6 @@ ACK_TOPIC = 'smartlock/+/ack'
 
 
 def publish_command(device_code: str, payload: dict) -> None:
-    """Publish 1 lệnh xuống thiết bị (QoS 1), kiểu connect ngắn hạn - publish - disconnect
-    để an toàn khi chạy nhiều worker. Raise MqttPublishError nếu không publish được."""
     try:
         import paho.mqtt.publish as mqtt_publish
     except ImportError as e:
@@ -830,7 +750,7 @@ def publish_command(device_code: str, payload: dict) -> None:
             qos=1, retain=False,
             hostname=MQTT_BROKER_HOST, port=MQTT_BROKER_PORT, auth=auth,
             tls={'ca_certs': None} if MQTT_USE_TLS else None,
-            client_id=f'django-pub-{uuid.uuid4().hex[:16]}',  # unique mỗi lần: tránh broker đá kết nối trùng
+            client_id=f'django-pub-{uuid.uuid4().hex[:16]}',
         )
     except Exception as e:
         logger.warning('MQTT publish thất bại tới %s: %s', device_code, e)
@@ -838,9 +758,6 @@ def publish_command(device_code: str, payload: dict) -> None:
 
 
 def dispatch_command(device, command, *, source, issued_by=None, ttl=30, extra=None) -> DeviceCommand:
-    """Tạo DeviceCommand + publish MQTT. Trả về DeviceCommand; status == 'sent' nghĩa là
-    publish thành công, 'failed' nghĩa là lỗi (lý do nằm ở cmd.publish_error).
-    Thiết bị phải có owner (hoặc truyền issued_by), nếu không raise ValueError."""
     issuer = issued_by or device.owner
     if issuer is None:
         raise ValueError(f'Thiết bị {device.device_code} chưa có chủ sở hữu, không thể gửi lệnh.')
@@ -853,9 +770,8 @@ def dispatch_command(device, command, *, source, issued_by=None, ttl=30, extra=N
     try:
         publish_command(device.device_code, {
             'command_id': str(cmd.id), 'command': command,
-            'token': cmd.command_token_hash,     # thiết bị gửi lại đúng hash này khi ack
+            'token': cmd.command_token_hash,
             'source': source,
-            # Thiết bị PHẢI bỏ lệnh khi now_unix > expires_at (tin QoS1 xếp hàng khi mất mạng không được mở cửa trễ).
             'expires_at': int(cmd.expires_at.timestamp()), 'ttl': int(ttl), 'server_time': int(time.time()),
             **(extra or {}),
         })
@@ -868,37 +784,28 @@ def dispatch_command(device, command, *, source, issued_by=None, ttl=30, extra=N
     return cmd
 
 
-# ============================================================================
-# 4. MỞ KHOÁ: RFID / PIN / KHUÔN MẶT / BLUETOOTH
-# ============================================================================
-# Khoá tạm sau nhiều lần thất bại liên tiếp trên CÙNG một thiết bị, bất kể kênh nào
-# (kịch bản demo: quẹt thẻ lạ 3 lần -> khoá tạm 60 giây, còi kêu, báo cho chủ nhà).
 BURST_FAIL_THRESHOLD = 3
 BURST_FAIL_WINDOW_SECONDS = 60
-BURST_LOCKOUT_SECONDS = 60                 # mức khoá đầu tiên (giữ tên cũ cho tương thích)
-BURST_LOCKOUT_STAGES = (60, 300, 1800)     # luỹ tiến: lần 1 -> 1 phút, lần 2 -> 5 phút, từ lần 3 -> 30 phút
-BURST_STAGE_WINDOW_SECONDS = 24 * 3600     # số lần khoá trong 24h quyết định mức khoá
-BURST_NOTIFY_COOLDOWN_SECONDS = 600        # tối đa 1 thông báo ACCESS_BURST / 10 phút / thiết bị
+BURST_LOCKOUT_SECONDS = 60
+BURST_LOCKOUT_STAGES = (60, 300, 1800)
+BURST_STAGE_WINDOW_SECONDS = 24 * 3600
+BURST_NOTIFY_COOLDOWN_SECONDS = 600
 LOCKOUT_ACTION = 'ACCESS_BURST_LOCKOUT'
-# Không tính vào bộ đếm: bị chặn do đang khoá (nếu tính sẽ tự gia hạn khoá mãi) và lỗi MQTT.
 NON_COUNTED_REASONS = ('DEVICE_LOCKED_OUT', 'MQTT_PUBLISH_FAILED', 'CARD_REGISTERED', 'ACCESS_REVOKED',
-                       'BLE_NOT_ALLOWED', 'NFC_PHONE_NOT_ALLOWED')   # vé còn hạn nhưng quyền vừa bị thu hồi: cửa đã mở offline, không phải dò mã
+                       'BLE_NOT_ALLOWED', 'NFC_PHONE_NOT_ALLOWED')
 
 
 def normalize_uid(raw_uid: str) -> str:
-    """Chuẩn hoá UID thẻ (bỏ khoảng trắng, ':' và '-', viết hoa) - giống lúc đăng ký thẻ."""
     return re.sub(r'[\s:\-]', '', raw_uid or '').upper()
 
 
 def count_recent_failures(device, window_seconds) -> int:
-    """Đếm duy nhất 1 chỗ: số lần mở cửa thất bại gần đây (bỏ qua lý do không tính)."""
     since = timezone.now() - timedelta(seconds=window_seconds)
     return (AccessEvent.objects.filter(device=device, success=False, created_at__gte=since)
             .exclude(reason__in=NON_COUNTED_REASONS).count())
 
 
 def in_lockout(device) -> bool:
-    """Đang bị khoá? Chỉ lần khoá GẦN NHẤT quyết định; thời lượng nằm trong metadata của log."""
     now = timezone.now()
     since = now - timedelta(seconds=max(BURST_LOCKOUT_STAGES))
     last = (AuditLog.objects.filter(device=device, action=LOCKOUT_ACTION, created_at__gte=since)
@@ -915,8 +822,6 @@ def start_lockout(device, metadata=None):
 
 
 def _handle_burst_if_needed(device):
-    """Sau mỗi lần thất bại: vượt ngưỡng trong cửa sổ thời gian thì khoá tạm LUỸ TIẾN + báo còi
-    (lệnh MQTT riêng cho firmware) + thông báo cho chủ nhà (có giới hạn tần suất)."""
     if in_lockout(device):
         return
     if count_recent_failures(device, BURST_FAIL_WINDOW_SECONDS) < BURST_FAIL_THRESHOLD:
@@ -931,7 +836,7 @@ def _handle_burst_if_needed(device):
     try:
         publish_command(device.device_code, {'command': 'BUZZER_ALERT', 'reason': 'ACCESS_BURST'})
     except MqttPublishError:
-        pass  # còi là phụ trợ; lỗi MQTT không được làm hỏng luồng khoá tạm
+        pass
     if device.owner_id and not Notification.objects.filter(
             device=device, type='ACCESS_BURST',
             created_at__gte=now - timedelta(seconds=BURST_NOTIFY_COOLDOWN_SECONDS)).exists():
@@ -946,7 +851,7 @@ def _handle_burst_if_needed(device):
 
 METHOD_TEXT = {'RFID': 'thẻ NFC', 'PIN': 'mã PIN', 'FACE': 'khuôn mặt', 'BLE': 'Bluetooth',
                'NFC_PHONE': 'NFC trên điện thoại'}
-STALE_EVENT_SECONDS = 300      # sự kiện offline đến trễ hơn mức này thì không bật popup
+STALE_EVENT_SECONDS = 300
 
 
 def _announce_access(event: AccessEvent) -> None:
@@ -957,8 +862,6 @@ def _announce_access(event: AccessEvent) -> None:
 
 
 def _push_unlock(device, source, extra, push=True) -> bool:
-    """push=True (kênh MQTT): server ra lệnh UNLOCK xuống khoá. push=False (kênh HTTP): khoá tự mở khi nhận
-    granted=true nên KHÔNG tạo lệnh UNLOCK thứ hai (tránh mở lại khi khoá poll /device/commands/)."""
     if not push:
         return True
     return dispatch_command(device, 'UNLOCK', source=source, extra=extra).status == 'sent'
@@ -966,7 +869,7 @@ def _push_unlock(device, source, extra, push=True) -> bool:
 
 def _log_event(occurred_at=None, **kwargs) -> AccessEvent:
     event = AccessEvent.objects.create(**kwargs)
-    if occurred_at:  # sự kiện offline đến trễ: đặt lại đúng giờ xảy ra
+    if occurred_at:
         AccessEvent.objects.filter(pk=event.pk).update(created_at=occurred_at)
         event.created_at = occurred_at
     if not event.success and event.reason not in NON_COUNTED_REASONS:
@@ -975,16 +878,12 @@ def _log_event(occurred_at=None, **kwargs) -> AccessEvent:
                           or (timezone.now() - occurred_at).total_seconds() <= STALE_EVENT_SECONDS):
         try:
             _announce_access(event)
-        except Exception:      # popup chỉ là phụ trợ, không được làm hỏng luồng mở cửa
+        except Exception:
             logger.exception('popup: không tạo được thông báo mở cửa')
     return event
 
 
-# ---------------------------------------------------------------- RFID
 def _auto_register_card(device, raw_uid, ip_address=None):
-    """Đầu đọc của khoá đang trong cửa sổ đăng ký (auto_register_until còn hạn) + có chủ:
-    thẻ lạ quẹt vào sẽ được gắn cho CHỦ khoá, KHÔNG cần admin duyệt. Trả về AccessEvent nếu đã
-    xử lý (đăng ký xong), None nếu không áp dụng. Việc này không mở cửa và không tính vào bộ đếm sai."""
     if not device.owner_id:
         return None
     now = timezone.now()
@@ -1028,14 +927,13 @@ def _auto_register_card(device, raw_uid, ip_address=None):
 
 
 def verify_rfid_tap(device, raw_uid: str, ip_address=None, push: bool = True) -> AccessEvent:
-    """ESP32 đọc UID thẻ (RC522) và publish lên MQTT; server chỉ so khớp UID (đã hash) rồi ra lệnh mở."""
     with transaction.atomic():
         if in_lockout(device):
             return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
                               reason='DEVICE_LOCKED_OUT', ip_address=ip_address)
         card = AccessCard.objects.filter(
             card_uid_hash__in=[hash_card_uid(normalize_uid(raw_uid)),
-                               hash_token(normalize_uid(raw_uid))],   # hash cũ (SHA-256 trần) còn dùng được
+                               hash_token(normalize_uid(raw_uid))],
             is_active=True,
             carddeviceaccess__device=device, carddeviceaccess__is_active=True,
         ).first()
@@ -1045,7 +943,7 @@ def verify_rfid_tap(device, raw_uid: str, ip_address=None, push: bool = True) ->
                 return registered
             return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
                               reason='UNKNOWN_CARD', ip_address=ip_address)
-        if not user_has_live_access(card.user, device):      # chủ thẻ đã bị thu hồi / hết hạn chia sẻ
+        if not user_has_live_access(card.user, device):
             return _log_event(device=device, method=AccessEvent.METHOD_RFID, success=False,
                               reason='ACCESS_REVOKED', user=card.user, access_card=card, ip_address=ip_address)
 
@@ -1055,7 +953,6 @@ def verify_rfid_tap(device, raw_uid: str, ip_address=None, push: bool = True) ->
                       access_card=card, ip_address=ip_address)
 
 
-# ---------------------------------------------------------------- PIN (bàn phím)
 def verify_door_pin(device, raw_pin: str, ip_address=None, push: bool = True) -> AccessEvent:
     with transaction.atomic():
         if in_lockout(device):
@@ -1077,7 +974,6 @@ def verify_door_pin(device, raw_pin: str, ip_address=None, push: bool = True) ->
 
     ok = _push_unlock(device, 'pin', {'pin_id': str(matched.id)}, push)
     if not ok:
-        # Cửa chưa mở -> hoàn lại lượt dùng để PIN dùng-một-lần không bị "cháy" oan.
         DoorPinCode.objects.filter(pk=matched.pk, use_count__gt=0).update(use_count=F('use_count') - 1)
     return _log_event(device=device, method=AccessEvent.METHOD_PIN, success=ok,
                       reason=None if ok else 'MQTT_PUBLISH_FAILED',
@@ -1085,7 +981,6 @@ def verify_door_pin(device, raw_pin: str, ip_address=None, push: bool = True) ->
 
 
 def generate_unique_pin(device, digits: int = 6, attempts: int = 20) -> str:
-    """Sinh PIN ngẫu nhiên không trùng PIN đang hiệu lực của cùng thiết bị."""
     active = list(DoorPinCode.objects.filter(device=device, is_revoked=False, expires_at__gt=timezone.now()))
     for _ in range(attempts):
         pin = ''.join(secrets.choice('0123456789') for _ in range(digits))
@@ -1096,7 +991,6 @@ def generate_unique_pin(device, digits: int = 6, attempts: int = 20) -> str:
 
 def issue_door_pin(device, created_by, plain_pin: str, ttl_minutes: int,
                    label: str = '', max_uses: int = 1) -> DoorPinCode:
-    """Chủ nhà cấp PIN mới cho khách. plain_pin chỉ hiển thị 1 lần, không lưu dạng thô."""
     pin = DoorPinCode(device=device, created_by=created_by, label=label,
                       expires_at=timezone.now() + timedelta(minutes=ttl_minutes), max_uses=max_uses)
     pin.set_pin(plain_pin)
@@ -1108,8 +1002,6 @@ def issue_door_pin(device, created_by, plain_pin: str, ttl_minutes: int,
 
 def issue_unique_door_pin(device, created_by, ttl_minutes: int, label: str = '', max_uses: int = 1,
                           digits: int = 6):
-    """Sinh + lưu PIN trong 1 transaction, khoá dòng Device để 2 người cấp PIN cùng lúc không sinh trùng.
-    Trả về (DoorPinCode, plain_pin)."""
     with transaction.atomic():
         Device.objects.select_for_update().get(pk=device.pk)
         plain_pin = generate_unique_pin(device, digits=digits)
@@ -1118,22 +1010,17 @@ def issue_unique_door_pin(device, created_by, ttl_minutes: int, label: str = '',
     return pin, plain_pin
 
 
-# ---------------------------------------------------------------- Khuôn mặt (camera)
 def _euclidean_distance(a, b) -> float:
     if len(a) != len(b) or not a:
         return math.inf
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
-# Trần phía server: FaceProfile.threshold cao hơn cũng bị kẹp về mức này. 0.6 là mức chuẩn dlib nhưng lỏng cho khoá cửa -> mặc định 0.5,
-# chỉnh bằng settings.FACE_MAX_THRESHOLD. FACE_MIN_MARGIN: khoảng cách tới NGƯỜI KHÁC gần nhì phải cách xa ít nhất mức này (chống nhập nhằng).
 FACE_MAX_THRESHOLD = float(getattr(settings, 'FACE_MAX_THRESHOLD', 0.5))
 FACE_MIN_MARGIN = float(getattr(settings, 'FACE_MIN_MARGIN', 0.04))
 
 
 def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None, push: bool = True) -> AccessEvent:
-    """embedding do thiết bị biên/dịch vụ suy luận tính sẵn; server chỉ so khoảng cách Euclid
-    với các FaceProfile đang active VÀ đã có xác nhận đồng ý của device này."""
     if in_lockout(device):
         return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False,
                           reason='DEVICE_LOCKED_OUT', snapshot_url=snapshot_url, ip_address=ip_address)
@@ -1153,7 +1040,7 @@ def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None
         return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False,
                           reason='NO_MATCH', snapshot_url=snapshot_url, ip_address=ip_address)
 
-    if second_distance - best_distance < FACE_MIN_MARGIN:      # 2 người khác nhau đều gần như khớp -> từ chối
+    if second_distance - best_distance < FACE_MIN_MARGIN:
         return _log_event(device=device, method=AccessEvent.METHOD_FACE, success=False,
                           reason='AMBIGUOUS_MATCH', snapshot_url=snapshot_url, ip_address=ip_address)
 
@@ -1172,12 +1059,8 @@ def verify_face(device, embedding: list, snapshot_url: str = '', ip_address=None
 
 def register_face(device, user, embedding: list, name: str = '', consent_confirmed: bool = False,
                   request=None) -> FaceProfile:
-    """CHỈ được gọi từ giao diện app/web của chủ/người có quyền. Không được gọi từ subscriber MQTT
-    (khoá/camera không có đường đăng ký khuôn mặt)."""
     if not consent_confirmed:
         raise ValueError('Cần xác nhận đồng ý thu thập dữ liệu khuôn mặt.')
-    # embedding_encrypted là BinaryField NOT NULL: phải có sẵn ngay lúc INSERT (update_or_create không kèm nó
-    # sẽ lỗi ở lần đăng ký đầu tiên).
     probe = FaceProfile()
     probe.set_embedding(embedding)
     profile, _created = FaceProfile.objects.update_or_create(
@@ -1194,12 +1077,10 @@ def register_face(device, user, embedding: list, name: str = '', consent_confirm
     return profile
 
 
-# Đăng ký khuôn mặt bằng QUÉT: trình duyệt/app mở camera, tự trích vector đặc trưng của vài khung hình rồi gửi lên.
-# Người dùng KHÔNG bao giờ nhìn thấy hay gõ vector. Server kiểm tra chất lượng rồi lưu bản trung bình (đã mã hoá).
-FACE_DIM = 128                  # face-api.js / dlib ResNet: 128 chiều (phải cùng mô hình với bên so khớp ở camera)
+FACE_DIM = 128
 FACE_MIN_FRAMES = 3
 FACE_MAX_FRAMES = 10
-FACE_FRAME_SPREAD_MAX = 0.45    # mỗi khung hình phải cách vector trung bình <= mức này (cùng 1 người, cùng lần quét)
+FACE_FRAME_SPREAD_MAX = 0.45
 
 
 class FaceEnrollError(Exception):
@@ -1210,8 +1091,6 @@ class FaceEnrollError(Exception):
 
 
 def enroll_face(device, user, vectors, name: str = '', request=None) -> FaceProfile:
-    """vectors: danh sách vector (mỗi vector FACE_DIM số) của các khung hình trong 1 lần quét.
-    Ném FaceEnrollError (message tiếng Việt, hiển thị được cho người dùng)."""
     if not isinstance(vectors, list) or not (FACE_MIN_FRAMES <= len(vectors) <= FACE_MAX_FRAMES):
         raise FaceEnrollError('FRAME_COUNT', f'Cần {FACE_MIN_FRAMES}-{FACE_MAX_FRAMES} khung hình. Hãy quét lại.')
     clean = []
@@ -1222,7 +1101,7 @@ def enroll_face(device, user, vectors, name: str = '', request=None) -> FaceProf
             raise FaceEnrollError('BAD_VECTOR', 'Dữ liệu quét không hợp lệ. Hãy quét lại.')
         if len(vec) != FACE_DIM or not all(math.isfinite(x) and abs(x) < 10 for x in vec):
             raise FaceEnrollError('BAD_VECTOR', 'Dữ liệu quét không hợp lệ. Hãy quét lại.')
-        if max(vec) - min(vec) < 1e-3:       # vector phẳng/không có thông tin
+        if max(vec) - min(vec) < 1e-3:
             raise FaceEnrollError('BAD_VECTOR', 'Không nhận diện được khuôn mặt rõ ràng. Hãy quét lại.')
         clean.append(vec)
     centroid = [sum(col) / len(clean) for col in zip(*clean)]
@@ -1234,16 +1113,6 @@ def enroll_face(device, user, vectors, name: str = '', request=None) -> FaceProf
                          consent_confirmed=True, request=request)
 
 
-# ---------------------------------------------------------------- Điện thoại: Bluetooth + NFC giả lập thẻ (HCE)
-# Cả 2 kênh dùng cùng cơ chế "vé" ký HMAC; thiết bị TỰ kiểm tra chữ ký + hạn (không cần mạng) rồi
-# mở cửa, khi có mạng mới publish sự kiện kèm vé để server ghi log. Vé không có bản ghi DB;
-# thu hồi = để vé hết hạn (mặc định 1 giờ) hoặc xoay secret thiết bị.
-#
-#   key  = HMAC_SHA256(key=<provisioning_secret_hash ASCII>, msg=<nhãn kênh>)
-#   sig  = HMAC_SHA256(key, "<device_code>|<user_hex>|<exp>") -> hex, lấy 32 ký tự đầu
-#   vé   = "<user_hex>.<exp>.<sig>"          (user_hex = UUID bỏ dấu '-', exp = unix giây)
-# Nhãn kênh khác nhau => vé BLE không dùng được ở đầu đọc NFC và ngược lại. Nhãn BLE giữ nguyên
-# như trước nên firmware cũ vẫn chạy.
 PHONE_CHANNELS = {
     'ble': {'label': b'ble-ticket-v1', 'permission': 'BLUETOOTH', 'flag': 'bluetooth_enabled',
             'method': AccessEvent.METHOD_BLE, 'prefix': 'BLE', 'name': 'Bluetooth'},
@@ -1251,7 +1120,7 @@ PHONE_CHANNELS = {
             'method': AccessEvent.METHOD_NFC_PHONE, 'prefix': 'NFC_PHONE', 'name': 'NFC'},
 }
 TICKET_TTL_SECONDS = int(getattr(settings, 'BLE_TICKET_TTL_SECONDS', 3600))
-BLE_TICKET_TTL_SECONDS = TICKET_TTL_SECONDS     # tên cũ
+BLE_TICKET_TTL_SECONDS = TICKET_TTL_SECONDS
 
 
 def _ticket_sig(device, kind: str, user_hex: str, exp: int) -> str:
@@ -1262,14 +1131,12 @@ def _ticket_sig(device, kind: str, user_hex: str, exp: int) -> str:
 
 
 def issue_phone_ticket(device, user, kind: str, ttl: int = None):
-    """Trả (ticket, exp_unix). View phải kiểm tra quyền + cờ bật kênh của thiết bị trước."""
     exp = int(time.time()) + (ttl or TICKET_TTL_SECONDS)
     user_hex = user.id.hex
     return f'{user_hex}.{exp}.{_ticket_sig(device, kind, user_hex, exp)}', exp
 
 
 def parse_phone_ticket(device, ticket: str, kind: str):
-    """Trả (user, exp) nếu chữ ký hợp lệ và user tồn tại, ngược lại None. Không kiểm tra hạn."""
     try:
         user_hex, exp_s, sig = (ticket or '').strip().split('.')
         exp = int(exp_s)
@@ -1295,8 +1162,6 @@ def parse_ble_ticket(device, ticket: str):
 
 
 def _record_phone_unlock(device, kind, ticket='', ok=True, reason=None, at=None) -> AccessEvent:
-    """Thiết bị báo 1 lượt mở/từ chối qua điện thoại (cửa đã xử lý tại chỗ, server chỉ ghi log).
-    `at` = unix giây lúc xảy ra (sự kiện offline đến trễ)."""
     cfg = PHONE_CHANNELS[kind]
     now = timezone.now()
     occurred = None
@@ -1331,31 +1196,18 @@ def record_nfc_phone_unlock(device, ticket: str = '', ok: bool = True, reason=No
     return _record_phone_unlock(device, 'nfc', ticket, ok, reason, at)
 
 
-# ============================================================================
-# 5. ONLINE / OFFLINE CỦA THIẾT BỊ   (đã BỎ rule engine tự động hoá)
-# ============================================================================
-OFFLINE_AFTER_SECONDS = 180      # không nhận status > 3 phút -> coi là offline
+OFFLINE_AFTER_SECONDS = 180
 
 
 def evaluate_device_status(device, status_log) -> int:
-    """Đã bỏ tự động hoá. Hàm rỗng chỉ để subscriber cũ chưa sửa không bị lỗi - hãy XOÁ lời gọi này."""
     return 0
 
 
 def mark_offline_devices() -> int:
-    """Thiết bị 'online' mà lâu không gửi status -> 'offline'. Subscriber gọi định kỳ."""
     cutoff = timezone.now() - timedelta(seconds=OFFLINE_AFTER_SECONDS)
     return Device.objects.filter(status='online', last_seen_at__lt=cutoff).update(status='offline')
 
 
-# ============================================================================
-# 6. PUSH FCM (app Android)
-# ============================================================================
-# Mỗi Notification mới -> signal post_save gửi push tới các phiên app còn hạn có fcm_token.
-# Bật bằng `pip install firebase-admin` + đặt FIREBASE_CREDENTIALS_JSON (nội dung JSON) hoặc
-# GOOGLE_APPLICATION_CREDENTIALS (đường dẫn file). Chưa cấu hình -> bỏ qua êm.
-# Data gửi kèm (đều là chuỗi): notification_id, type, severity, device_id.
-# Kênh Android: smartlock_info | smartlock_warning | smartlock_critical (app phải tạo sẵn).
 _fcm_app = None
 _fcm_initialised = False
 
@@ -1389,7 +1241,6 @@ def _get_fcm_app():
 
 
 def send_notification_push(notification_id) -> int:
-    """Gửi push cho 1 Notification. Trả số tin gửi thành công. Không bao giờ ném lỗi."""
     try:
         from .models import MobileSession
         notification = Notification.objects.filter(pk=notification_id).first()
@@ -1424,7 +1275,7 @@ def send_notification_push(notification_id) -> int:
         for session, resp in zip(sessions, batch.responses):
             if resp.success:
                 sent += 1
-            elif isinstance(resp.exception, dead):     # token hết hạn / gỡ app -> dọn
+            elif isinstance(resp.exception, dead):
                 MobileSession.objects.filter(pk=session.pk).update(fcm_token='')
             else:
                 logger.warning('push: gửi thất bại tới phiên %s: %s', session.pk, resp.exception)
@@ -1438,14 +1289,14 @@ def _push_in_thread(notification_id):
     try:
         send_notification_push(notification_id)
     finally:
-        connections.close_all()          # luồng nền tự mở kết nối DB -> phải đóng khi xong
+        connections.close_all()
 
 
 def _on_notification_saved(sender, instance, created, **kwargs):
     if not created:
         return
     nid = instance.pk
-    if EMAIL_ASYNC:   # local/VPS: gọi FCM ở luồng nền, không chặn request. Vercel: giữ đồng bộ (luồng nền bị đóng băng).
+    if EMAIL_ASYNC:
         transaction.on_commit(lambda: threading.Thread(
             target=_push_in_thread, args=(nid,), name='fcm-push', daemon=True).start())
     else:
@@ -1453,18 +1304,10 @@ def _on_notification_saved(sender, instance, created, **kwargs):
 
 
 def register_signals():
-    """Gọi 1 lần trong AppConfig.ready()."""
     post_save.connect(_on_notification_saved, sender=Notification, dispatch_uid='push_on_notification')
 
-# ============================================================================
-# 7. VÒNG ĐỜI KHOÁ: KẾT NỐI / CLAIM / GỠ CHỦ / XOAY SECRET
-# ============================================================================
-# Quy tắc nghiệp vụ:
-#   - 'provisioning' = khoá mới, chưa từng có chủ  -> ADMIN hoặc USER đều gán/claim được.
-#   - 'revoked'      = đã bị gỡ chủ (factory_reset) -> CHỈ USER tự claim (kể cả chủ cũ); admin KHÔNG gán lại.
-#   - Mọi lần claim đều yêu cầu khoá ĐANG kết nối thật (có status/ack gần đây), kể cả khoá giả lập.
-ONLINE_WINDOW_SECONDS = 120        # status/ack trong vòng 2 phút => coi là đang kết nối
-CLAIM_MAX_FAILS = 5                # sai secret quá số lần này trong cửa sổ => tạm chặn user đó
+ONLINE_WINDOW_SECONDS = 120
+CLAIM_MAX_FAILS = 5
 CLAIM_FAIL_WINDOW_SECONDS = 600
 
 
@@ -1476,9 +1319,6 @@ class ClaimError(Exception):
 
 
 def touch_device(device, *, firmware=None, battery=None) -> None:
-    """SUBSCRIBER MQTT phải gọi hàm này mỗi khi nhận status/ack/event từ thiết bị.
-    Dùng queryset.update() nên KHÔNG vi phạm chk_devices_owner_vs_status: khoá chưa có chủ chỉ
-    được cập nhật last_seen_at, không bao giờ bị đặt 'online'."""
     now = timezone.now()
     fields = {'last_seen_at': now, 'updated_at': now}
     if firmware:
@@ -1493,8 +1333,6 @@ def touch_device(device, *, firmware=None, battery=None) -> None:
 
 
 def link_status(device, window: int = ONLINE_WINDOW_SECONDS) -> dict:
-    """Bằng chứng khoá đang nối với hệ thống: lần nhận tin MỚI NHẤT (last_seen_at hoặc
-    DeviceStatusLog) còn trong cửa sổ `window` giây. Kèm kết quả PING gần nhất (vòng hai chiều)."""
     device = Device.objects.get(pk=device.pk)
     last_log = (DeviceStatusLog.objects.filter(device=device).order_by('-recorded_at')
                 .values_list('recorded_at', flat=True).first())
@@ -1514,12 +1352,10 @@ def link_status(device, window: int = ONLINE_WINDOW_SECONDS) -> dict:
 
 
 def ping_device(device, issued_by) -> DeviceCommand:
-    """Gửi PING (hai chiều: thiết bị phải ack). issued_by bắt buộc vì khoá chưa có chủ."""
     return dispatch_command(device, 'PING', source='admin', issued_by=issued_by, ttl=15)
 
 
 def claim_device(device_id, new_owner, *, by_admin: bool) -> Device:
-    """Gán chủ cho khoá. Dùng chung cho admin và user (người gọi tự ghi audit)."""
     with transaction.atomic():
         device = Device.objects.select_for_update().get(pk=device_id)
         if device.owner_id:
@@ -1551,7 +1387,6 @@ def claim_device(device_id, new_owner, *, by_admin: bool) -> Device:
 
 
 def user_claim_device(user, device_code: str, secret: str, request=None) -> Device:
-    """User tự claim khoá bằng device_code + provisioning secret (kể cả chủ cũ). Có giới hạn thử sai."""
     since = timezone.now() - timedelta(seconds=CLAIM_FAIL_WINDOW_SECONDS)
     fails = AuditLog.objects.filter(actor_user=user, action='DEVICE_CLAIM_FAILED',
                                     created_at__gte=since).count()
@@ -1561,13 +1396,11 @@ def user_claim_device(user, device_code: str, secret: str, request=None) -> Devi
     device = Device.objects.filter(device_code=code).first()
     ok = bool(device and secret and safe_eq(device.provisioning_secret_hash, hash_token(secret)))
     if not ok:
-        raise ClaimError('BAD_CREDENTIALS', 'Mã thiết bị hoặc secret không đúng.')   # không lộ cái nào sai
+        raise ClaimError('BAD_CREDENTIALS', 'Mã thiết bị hoặc secret không đúng.')
     return claim_device(device.pk, user, by_admin=False)
 
 
 def release_device(device_id):
-    """Gỡ chủ: factory_reset (status=revoked, owner=None) + thu hồi mọi quyền truy cập cũ.
-    Trả về (device, chủ_cũ, số_lượng_đã_thu_hồi). Người gọi ghi audit + thông báo."""
     with transaction.atomic():
         device = Device.objects.select_for_update().select_related('owner').get(pk=device_id)
         if not device.owner_id:
@@ -1581,7 +1414,7 @@ def release_device(device_id):
             'pins': DoorPinCode.objects.filter(device=device, is_revoked=False)
                     .update(is_revoked=True, revoked_at=now),
             'faces': FaceProfile.objects.filter(device=device, is_active=True).update(is_active=False),
-            'share_codes': 0,      # đã bỏ mã chia sẻ; giữ khoá để code gọi release_device cũ không lỗi
+            'share_codes': 0,
             'commands': DeviceCommand.objects.filter(device=device, status__in=('pending', 'sent'))
                         .update(status='expired'),
         }
@@ -1590,8 +1423,6 @@ def release_device(device_id):
 
 
 def rotate_secret(device_id) -> tuple:
-    """Xoay provisioning secret. Trả về (device, secret_gốc). Thiết bị phải nạp lại secret mới;
-    vé BLE đã cấp (ký bằng secret cũ) cũng mất hiệu lực."""
     with transaction.atomic():
         device = Device.objects.select_for_update().get(pk=device_id)
         secret = secrets.token_hex(16)
@@ -1601,51 +1432,39 @@ def rotate_secret(device_id) -> tuple:
 
 
 def visible_logs(user):
-    """Log user được phép xem: mình làm, mình là đối tượng (bị admin/người khác tác động,
-    bị đăng nhập sai...), hoặc xảy ra trên thiết bị của mình. Dùng chung cho web + API."""
     return AuditLog.objects.filter(Q(actor_user=user) | Q(target_user=user) | Q(device__owner=user))
 
 
 def revoke_mobile_sessions(user) -> int:
-    """Thu hồi mọi phiên app còn hiệu lực của user (và xoá fcm_token để ngừng push). Trả về số phiên.
-    Dùng chung cho web (đổi/đặt lại mật khẩu), manage_sys và API."""
     from .models import MobileSession
     return MobileSession.objects.filter(user=user, revoked_at__isnull=True).update(
         revoked_at=timezone.now(), fcm_token='')
 
 
-# ============================================================================
-# HẰNG SỐ DÙNG CHUNG (trước đây là constants.py)
-# ============================================================================
 COMMAND_TTL_SECONDS = 120
-COMMAND_TTL_BY_TYPE = {'UNLOCK': 30}      # lệnh mở cửa sống ngắn: không để lệnh cũ mở cửa trễ
+COMMAND_TTL_BY_TYPE = {'UNLOCK': 30}
 
 
 def command_ttl(command: str) -> int:
     return COMMAND_TTL_BY_TYPE.get(command, COMMAND_TTL_SECONDS)
-# lệnh -> quyền cần có (None = chỉ chủ khoá)
 ALLOWED_COMMANDS = {'LOCK': 'LOCK', 'UNLOCK': 'UNLOCK', 'REBOOT': None}
 COMMAND_LABELS = {'LOCK': 'Khóa', 'UNLOCK': 'Mở khóa', 'REBOOT': 'Khởi động lại'}
 
-EVENTS_MAX_BACKLOG_SECONDS = 300     # tab mở lại sau lâu: không dội cả đống popup cũ
+EVENTS_MAX_BACKLOG_SECONDS = 300
 EVENTS_BATCH = 10
 
 RESET_NEUTRAL_MSG = ('Nếu email này đã đăng ký, chúng tôi đã gửi link đặt lại mật khẩu. '
                      'Vui lòng kiểm tra hộp thư (kể cả mục Spam).')
 
 
-# ============================================================================
-# 2FA DÙNG CHUNG WEB + APP: hash OTP, TOTP, mã email, khoá tạm thời (trước đây là twofa.py)
-# ============================================================================
 EMAIL_CODE_TTL_MIN = 10
-EMAIL_CODE_COOLDOWN = 60               # giây giữa 2 lần gửi mã
+EMAIL_CODE_COOLDOWN = 60
 EMAIL_CODE_MAX_ATTEMPTS = 5
-WEBAUTHN_TTL = 5 * 60                  # giây được phép hoàn tất 1 lượt passkey
+WEBAUTHN_TTL = 5 * 60
 TOTP_ISSUER = 'Smart Lock'
 
 
 def pepper_hash(user, value: str) -> str:
-    """HMAC-SHA256 gắn với SECRET_KEY + user để lưu hash của mã OTP."""
     msg = f'{user.pk}:{value}'.encode()
     return hmac.new(settings.SECRET_KEY.encode(), msg, hashlib.sha256).hexdigest()
 
@@ -1659,7 +1478,6 @@ def get_cfg(user) -> TwoFactorConfig:
 
 
 def verify_totp(cfg: TwoFactorConfig, code: str) -> bool:
-    """Kiểm tra mã TOTP (±1 bước 30s) và chặn dùng lại cùng một mã (replay)."""
     code = digits(code)
     secret = cfg.get_totp_secret()
     if len(code) != 6 or not secret:
@@ -1680,13 +1498,11 @@ def verify_totp(cfg: TwoFactorConfig, code: str) -> bool:
 
 
 def send_email_code(user, purpose):
-    """purpose: 'SETUP' (thiết lập Email OTP) hoặc 'VERIFY' (login/enable/disable).
-    Trả về 'sent' | 'cooldown' | 'failed'."""
     now = timezone.now()
     purposes = ('TF_SETUP', 'TF_VERIFY')
     code = f'{secrets.randbelow(10 ** 6):06d}'
     with transaction.atomic():
-        User.objects.select_for_update().get(pk=user.pk)          # tuần tự hoá: 2 request song song không cùng qua cooldown
+        User.objects.select_for_update().get(pk=user.pk)
         if OneTimeCode.objects.filter(user=user, purpose__in=purposes,
                                       created_at__gt=now - timedelta(seconds=EMAIL_CODE_COOLDOWN)).exists():
             return 'cooldown'
@@ -1702,7 +1518,7 @@ def send_email_code(user, purpose):
     })
     if send_mail(subject, plain, html, user.email, log_body=False):
         return 'sent'
-    OneTimeCode.objects.filter(pk=rec.pk).delete()                # gửi mail thất bại: bỏ mã chết để không dính cooldown 60s
+    OneTimeCode.objects.filter(pk=rec.pk).delete()
     return 'failed'
 
 
@@ -1737,5 +1553,4 @@ def lock_minutes(user) -> int:
 
 
 def webauthn_rp(request):
-    """(rp_id, origin, rp_name). Luôn lấy từ LINKS SERVER (SERVER_URL), không suy từ Host header của request."""
     return links.WEBAUTHN_RP_ID, links.WEBAUTHN_ORIGIN, getattr(settings, 'WEBAUTHN_RP_NAME', TOTP_ISSUER)

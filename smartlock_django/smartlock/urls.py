@@ -1,10 +1,10 @@
+# smartlock/urls.py
+
 from django.urls import path
 from . import views
 
 app_name = 'smartlock'
 
-# Các view ở đây CHỈ render khung trang. Dữ liệu và thao tác (đăng nhập, đăng xuất, 2FA, thiết bị, thẻ, PIN,
-# chia sẻ, thông báo, hồ sơ...) đều đi qua API dùng chung web/app: smartlock/api/urls.py.
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_view, name='login'),
@@ -31,7 +31,6 @@ urlpatterns = [
     path('audit/logs/', views.audit_logs, name='audit-logs'),
 
 
-    # DEMO: log toàn hệ thống real-time, không cần đăng nhập. Chỉ bật khi settings.DEMO_LOGS_ENABLED; gỡ trước khi deploy thật.
     path('demo/system-logs/', views.public_system_logs, name='public-system-logs'),
     path('demo/system-logs/data/', views.public_system_logs_api, name='public-system-logs-data'),
     path('demo/system-logs/overview/', views.overview_api, name='sysview-overview'),
