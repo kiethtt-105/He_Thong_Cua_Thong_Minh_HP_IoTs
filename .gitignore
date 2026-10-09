@@ -7,7 +7,7 @@ __pycache__/
 venv/
 env/
 
-# Secrets - KHÔNG được commit
+# Secrets 
 .env
 .env.*
 *.env.txt
@@ -19,4 +19,4 @@ env/
 db.sqlite3
 replica.sqlite3
 
-# staticfiles/ được commit để Vercel phục vụ (whitenoise), nên không ignore
+# staticfiles
