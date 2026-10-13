@@ -482,7 +482,9 @@ def webhook_authorized(request) -> bool:
             return True
         logger.error('MQTT_WEBHOOK_SECRET chưa được đặt: từ chối mọi webhook MQTT.')
         return False
-    return services.safe_eq(request.META.get('HTTP_X_WEBHOOK_SECRET', ''), secret)
+    # mosquitto-go-auth không gắn được header tuỳ ý -> chấp nhận thêm ?secret=... trên URI webhook.
+    given = request.META.get('HTTP_X_WEBHOOK_SECRET', '') or request.GET.get('secret', '')
+    return services.safe_eq(given, secret)
 
 
 def webhook_api(fn):

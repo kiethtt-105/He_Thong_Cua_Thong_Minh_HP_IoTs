@@ -582,8 +582,7 @@ def _new_device_code():
 
 
 def _mqtt_info():
-    return {'host': services.MQTT_BROKER_HOST, 'port': services.MQTT_BROKER_PORT, 'tls': services.MQTT_USE_TLS}
-
+    return {'host': links.MQTT_PUBLIC_HOST, 'port': links.MQTT_PUBLIC_PORT, 'tls': links.MQTT_PUBLIC_TLS}
 
 def _clean_mac(raw):
     return (raw or '').strip().upper().replace('-', ':')
@@ -709,10 +708,13 @@ def _device_ping(request, device):
     ok = cmd.status == 'sent'
     audit(request, 'MANAGE_DEVICE_PING', device=device, success=ok,
           metadata={'command_id': str(cmd.id), 'error': getattr(cmd, 'publish_error', '') or None})
-    if ok:
+    if ok and getattr(cmd, 'transport', 'mqtt') == 'http':
+        messages.warning(request, 'Broker MQTT không phản hồi - đã xếp PING vào hàng đợi HTTP, '
+                                  'thiết bị sẽ nhận ở lần kết nối kế tiếp (xem chỉ báo kết nối).')
+    elif ok:
         messages.success(request, 'Đã gửi PING, chờ thiết bị phản hồi (xem chỉ báo kết nối).')
     else:
-        messages.error(request, 'Không gửi được PING tới broker MQTT.')
+        messages.error(request, 'Không gửi được PING.')
 
 
 def _device_claim(request, device):

@@ -1402,7 +1402,8 @@ def user_claim_device(user, device_code: str, secret: str, request=None) -> Devi
 
 def release_device(device_id):
     with transaction.atomic():
-        device = Device.objects.select_for_update().select_related('owner').get(pk=device_id)
+        device = (Device.objects.select_for_update(of=('self',))
+                  .select_related('owner').get(pk=device_id))
         if not device.owner_id:
             raise ClaimError('NO_OWNER', 'Thiết bị hiện không có chủ.')
         previous = device.owner

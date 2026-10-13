@@ -92,6 +92,15 @@ except ValueError:
     MQTT_PORT = 1883
 MQTT_USE_TLS = _flag('MQTT_BROKER_USE_TLS') or MQTT_PORT == 8883
 
+# Địa chỉ MQTT cho THIẾT BỊ (chỉ để hiển thị ở trang admin, đi qua tunnel WebSocket).
+# Django tự nối broker vẫn dùng MQTT_HOST / MQTT_PORT ở trên.
+MQTT_PUBLIC_HOST = _env('MQTT_PUBLIC_HOST') or MQTT_HOST
+try:
+    MQTT_PUBLIC_PORT = int(_env('MQTT_PUBLIC_PORT') or MQTT_PORT)
+except ValueError:
+    MQTT_PUBLIC_PORT = MQTT_PORT
+MQTT_PUBLIC_TLS = _flag('MQTT_PUBLIC_TLS', MQTT_USE_TLS)
+
 WEBAUTHN_RP_ID = _env('WEBAUTHN_RP_ID') or SERVER_HOST
 WEBAUTHN_ORIGIN = SERVER_URL
 
