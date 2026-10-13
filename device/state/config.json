@@ -1,5 +1,12 @@
 {
   "hardware": {
     "mac": "A4:CF:12:4B:E5:8A"
+  },
+  "server": {
+    "active": "tunnel",
+    "urls": {
+      "tunnel": "https://d81h6zk7-8000.asse.devtunnels.ms",
+      "vercel ": "https://he-thong-cua-thong-minh-hp-iots.vercel.app"
+    }
   }
 }

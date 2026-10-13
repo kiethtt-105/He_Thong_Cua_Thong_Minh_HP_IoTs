@@ -1379,8 +1379,7 @@ def claim_device(device_id, new_owner, *, by_admin: bool) -> Device:
         device.status = 'online'
         fields = ['owner', 'status', 'updated_at']
         if not device.is_purchased:
-            device.is_purchased = True
-            device.purchased_at = timezone.now()
+            device.mark_purchased(save=False)
             fields += ['is_purchased', 'purchased_at']
         device.save(update_fields=fields)
         return device

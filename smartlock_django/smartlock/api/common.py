@@ -384,7 +384,8 @@ def rotate_refresh(request, refresh_token: str, fcm_token: str = ''):
 def user_json(u) -> dict:
     return {
         'id': str(u.id), 'email': u.email, 'username': u.username, 'full_name': u.full_name or '',
-        'phone': u.phone or '', 'avatar_url': u.avatar_url or '', 'email_verified': u.email_verified,
+        'phone': u.phone or '', 'avatar_url': u.avatar_url or '', 'avatar': u.avatar, 'initials': u.initials,
+        'email_verified': u.email_verified,
         'two_fa_enabled': u.two_fa_enabled, 'created_at': iso(u.created_at),
     }
 
@@ -401,6 +402,7 @@ def device_json(d, user, perms, lock_state=None) -> dict:
         'wifi_enabled': d.wifi_enabled, 'bluetooth_enabled': d.bluetooth_enabled, 'nfc_enabled': d.nfc_enabled,
         'is_owner': is_owner,
         'owner_name': (owner.full_name or owner.username) if owner else '',
+        'owner_avatar': owner.avatar if owner else '', 'owner_initials': owner.initials if owner else '',
         'permissions': sorted(perms), 'updated_at': iso(d.updated_at),
     }
 
@@ -418,6 +420,7 @@ def event_json(e) -> dict:
         'id': str(e.id), 'device_id': str(e.device_id), 'device_name': e.device.name,
         'method': e.method, 'success': e.success, 'reason': e.reason or '',
         'who': (e.user.full_name or e.user.username) if e.user_id else '',
+        'who_avatar': e.user.avatar if e.user_id else '', 'who_initials': e.user.initials if e.user_id else '',
         'confidence': e.confidence, 'snapshot_url': e.snapshot_url or '', 'created_at': iso(e.created_at),
     }
 

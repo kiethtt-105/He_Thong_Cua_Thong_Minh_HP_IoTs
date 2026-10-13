@@ -46,7 +46,11 @@ def auth_required(view_func):
 
 
 def _render(request, page, context=None):
-    return render(request, 'account/app.html', {**(context or {}), 'page': page})
+    ctx = {**(context or {}), 'page': page}
+    u = getattr(request, 'user', None)
+    if u is not None and u.is_authenticated:
+        ctx.update(me_avatar=u.avatar, me_initials=u.initials, me_name=u.full_name or u.username)
+    return render(request, 'account/app.html', ctx)
 
 
 def login_view(request):

@@ -157,35 +157,25 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.email
 
     @property
-    def one_time_codes(self):
-        return OneTimeCode.objects.filter(user=self)
+    def initials(self) -> str:
+        parts = (self.full_name or self.username or self.email or '?').replace('@', ' ').split()
+        return ''.join(p[0] for p in parts[:2]).upper() or '?'
 
     @property
-    def mobile_sessions(self):
-        return MobileSession.objects.filter(user=self)
+    def avatar(self) -> str:
+        """Ảnh đại diện hiển thị: avatar_url do người dùng đặt; không có thì dùng Gravatar identicon
+        (tắt bằng settings.AVATAR_GRAVATAR_FALLBACK = False -> trả '' để UI tự vẽ chữ cái đầu)."""
+        if self.avatar_url:
+            return self.avatar_url
+        from django.conf import settings as _s
+        if not getattr(_s, 'AVATAR_GRAVATAR_FALLBACK', True) or not self.email:
+            return ''
+        h = hashlib.sha256(self.email.strip().lower().encode()).hexdigest()
+        return f'https://www.gravatar.com/avatar/{h}?d=identicon&s=200'
 
     @property
     def fido2_credentials(self):
         return Fido2Credential.objects.filter(user=self)
-
-    @property
-    def access_cards(self):
-        return AccessCard.objects.filter(user=self)
-
-    @property
-    def face_profiles(self):
-        return FaceProfile.objects.filter(user=self)
-
-    @property
-    def created_door_pins(self):
-        return DoorPinCode.objects.filter(created_by=self)
-
-    @property
-    def two_factor(self):
-        cfg = TwoFactorConfig.objects.filter(user=self).first()
-        if cfg is None:
-            raise TwoFactorConfig.DoesNotExist('User chưa có cấu hình 2FA.')
-        return cfg
 
 
 class SystemSettings(models.Model):
@@ -283,18 +273,6 @@ class Device(models.Model):
         if save:
             self.save(update_fields=['is_purchased', 'purchased_at', 'updated_at'])
 
-    @property
-    def access_events(self):
-        return AccessEvent.objects.filter(device=self)
-
-    @property
-    def door_pins(self):
-        return DoorPinCode.objects.filter(device=self)
-
-    @property
-    def face_profiles(self):
-        return FaceProfile.objects.filter(device=self)
-
 
 class DeviceCommand(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -365,7 +343,6 @@ class NfcReader(models.Model):
     last_seen_at = models.DateTimeField(null=True, blank=True)
     auto_register = models.BooleanField(default=False)
     auto_register_until = models.DateTimeField(null=True, blank=True)
-    grant_permission = models.JSONField(default=list)
     valid_from = models.DateTimeField(default=timezone.now)
     expires_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -531,9 +508,6 @@ def delete_device_bound_logs(sender, instance, **kwargs):
 class AuditLog(ActivityLog):
     KIND = ActivityLog.KIND_AUDIT
     objects = KindManager(ActivityLog.KIND_AUDIT)
-    VISIBLE_FIELDS = ('id', 'actor_user', 'target_user', 'device', 'action', 'username_attempt', 'severity',
-                      'success', 'ip_address', 'user_agent', 'metadata', 'created_at')
-
     class Meta:
         proxy = True
 
@@ -541,9 +515,6 @@ class AuditLog(ActivityLog):
 class NfcLog(ActivityLog):
     KIND = ActivityLog.KIND_NFC
     objects = KindManager(ActivityLog.KIND_NFC)
-    VISIBLE_FIELDS = ('id', 'reader', 'nfc_tag', 'device', 'user', 'event_type', 'success', 'ip_address',
-                      'user_agent', 'metadata', 'created_at')
-
     class Meta:
         proxy = True
 
@@ -551,9 +522,6 @@ class NfcLog(ActivityLog):
 class AccessEvent(ActivityLog):
     KIND = ActivityLog.KIND_ACCESS
     objects = KindManager(ActivityLog.KIND_ACCESS)
-    VISIBLE_FIELDS = ('id', 'device', 'method', 'success', 'reason', 'user', 'access_card', 'door_pin',
-                      'face_profile', 'confidence', 'snapshot_url', 'ip_address', 'created_at')
-
     class Meta:
         proxy = True
 
@@ -565,9 +533,6 @@ class DeviceStatusLog(ActivityLog):
     KIND = ActivityLog.KIND_STATUS
     KIND_DEFAULTS = {'recorded_at': timezone.now}
     objects = KindManager(ActivityLog.KIND_STATUS)
-    VISIBLE_FIELDS = ('id', 'device', 'battery_level', 'signal_strength', 'lock_state', 'tamper_detected',
-                      'temperature', 'raw_payload', 'recorded_at')
-
     class Meta:
         proxy = True
 
@@ -657,8 +622,6 @@ class AccessCredential(KindModel):
 class AccessCard(AccessCredential):
     KIND = AccessCredential.KIND_CARD
     objects = KindManager(AccessCredential.KIND_CARD)
-    VISIBLE_FIELDS = ('id', 'user', 'name', 'card_uid_hash', 'is_active', 'created_at', 'updated_at')
-
     class Meta:
         proxy = True
 
@@ -667,9 +630,6 @@ class DoorPinCode(AccessCredential):
     KIND = AccessCredential.KIND_PIN
     KIND_DEFAULTS = {'valid_from': timezone.now}
     objects = KindManager(AccessCredential.KIND_PIN)
-    VISIBLE_FIELDS = ('id', 'device', 'created_by', 'label', 'pin_hash', 'valid_from', 'expires_at', 'max_uses',
-                      'use_count', 'is_revoked', 'revoked_at', 'created_at')
-
     class Meta:
         proxy = True
 
@@ -704,9 +664,6 @@ class DoorPinCode(AccessCredential):
 class FaceProfile(AccessCredential):
     KIND = AccessCredential.KIND_FACE
     objects = KindManager(AccessCredential.KIND_FACE)
-    VISIBLE_FIELDS = ('id', 'user', 'device', 'name', 'embedding_encrypted', 'threshold', 'consent_confirmed',
-                      'is_active', 'created_at', 'updated_at')
-
     class Meta:
         proxy = True
 
@@ -821,12 +778,8 @@ class SecurityRecord(KindModel):
 
 
 class OneTimeCode(SecurityRecord):
-    PURPOSE_CHOICES = OTP_PURPOSE_CHOICES
     KIND = SecurityRecord.KIND_OTP
     objects = KindManager(SecurityRecord.KIND_OTP)
-    VISIBLE_FIELDS = ('id', 'user', 'purpose', 'token_hash', 'attempts', 'is_used', 'used_at', 'expires_at',
-                      'created_at')
-
     class Meta:
         proxy = True
 
@@ -835,10 +788,6 @@ class MobileSession(SecurityRecord):
     KIND = SecurityRecord.KIND_SESSION
     KIND_DEFAULTS = {'platform': 'android'}
     objects = KindManager(SecurityRecord.KIND_SESSION)
-    VISIBLE_FIELDS = ('id', 'user', 'refresh_hash', 'prev_refresh_hash', 'device_name', 'platform', 'app_version',
-                      'fcm_token', 'push_enabled', 'ip_address', 'created_at', 'last_used_at', 'expires_at',
-                      'revoked_at')
-
     class Meta:
         proxy = True
         ordering = ['-created_at']
@@ -861,9 +810,6 @@ class Fido2Credential(SecurityRecord):
     KIND = SecurityRecord.KIND_PASSKEY
     KIND_DEFAULTS = {'name': 'Passkey'}
     objects = KindManager(SecurityRecord.KIND_PASSKEY)
-    VISIBLE_FIELDS = ('id', 'user', 'credential_id', 'public_key', 'sign_count', 'transports', 'name', 'rp_id',
-                      'created_at', 'last_used_at')
-
     class Meta:
         proxy = True
 
@@ -876,9 +822,6 @@ class TwoFactorConfig(SecurityRecord):
 
     KIND = SecurityRecord.KIND_TFCONFIG
     objects = KindManager(SecurityRecord.KIND_TFCONFIG)
-    VISIBLE_FIELDS = ('id', 'user', 'totp_secret_encrypted', 'totp_confirmed', 'totp_last_step',
-                      'email_otp_enabled', 'preferred_method', 'enabled_at', 'created_at', 'updated_at')
-
     class Meta:
         proxy = True
 

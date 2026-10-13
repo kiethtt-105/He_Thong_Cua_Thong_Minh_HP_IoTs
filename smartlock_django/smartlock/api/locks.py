@@ -565,6 +565,7 @@ def reader_detail(request, reader_id):
 
 def _face_json(f) -> dict:
     return {'id': str(f.id), 'device_id': str(f.device_id), 'name': f.name or '', 'user': f.user.username,
+            'avatar': f.user.avatar, 'initials': f.user.initials,
             'is_active': f.is_active, 'consent_confirmed': f.consent_confirmed, 'created_at': iso(f.created_at)}
 
 
@@ -640,8 +641,10 @@ def face_delete(request, profile_id):
 def _share_json(a) -> dict:
     return {
         'id': str(a.id), 'device_id': str(a.device_id), 'device_name': a.device.name,
-        'user': {'id': str(a.user_id), 'username': a.user.username, 'full_name': a.user.full_name or ''},
+        'user': {'id': str(a.user_id), 'username': a.user.username, 'full_name': a.user.full_name or '',
+                 'avatar': a.user.avatar, 'initials': a.user.initials},
         'shared_by': (a.created_by.full_name or a.created_by.username) if a.created_by_id else '',
+        'shared_by_avatar': a.created_by.avatar if a.created_by_id else '',
         'permissions': sorted(p.code for p in a.permissions.all()),
         'valid_from': iso(a.valid_from), 'expires_at': iso(a.expires_at), 'created_at': iso(a.created_at),
     }
