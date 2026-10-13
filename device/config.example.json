@@ -1,0 +1,53 @@
+{
+  "_doc": "Sao chép thành config.json rồi điền. config.json KHÔNG được commit (chứa secret + mật khẩu Wi-Fi). Đổi xong chạy lại: python run.py",
+  "device_code": "DEV-XXXXXXXX",
+  "secret": "",
+  "_secret_note": "Lấy từ trang admin (claim thiết bị). Lộ secret thì xoay lại ở trang admin.",
+  "server": {
+    "active": "local",
+    "urls": {
+      "local": "http://127.0.0.1:8000",
+      "tunnel": "https://xxxx-8000.asse.devtunnels.ms",
+      "vercel": "https://he-thong-cua-thong-minh-hp-iots.vercel.app"
+    }
+  },
+  "wifi": {
+    "source": "host",
+    "ssid": "",
+    "password": ""
+  },
+  "network": {
+    "http_timeout_seconds": 10,
+    "heartbeat_seconds": null,
+    "poll_seconds": null,
+    "offline_queue_max": 200
+  },
+  "mqtt": {
+    "enabled": false,
+    "url": "wss://xxxx-9001.asse.devtunnels.ms",
+    "transport": "websockets",
+    "keepalive": 30,
+    "publish_telemetry": false,
+    "tls_insecure": false,
+    "ca_file": "",
+    "headers": {}
+  },
+  "hardware": {
+    "hal": "sim",
+    "firmware": "1.0.0",
+    "mac": "",
+    "auto_lock_seconds": 5,
+    "door_left_open_seconds": 60,
+    "auto_ota": false,
+    "battery": 100,
+    "signal": -55,
+    "temperature": 27.0,
+    "battery_drain_minutes": 5,
+    "servo_seconds": 0.6,
+    "jam_chance": 0.0,
+    "tamper_clear_seconds": 30,
+    "_hal_note": "sim = giả lập (hiện tại) | auto = có lockcore/hal_pi.py thì dùng phần cứng, không thì sim | real = bắt buộc phần cứng",
+    "move_cost_pct": 0.02,
+    "face_seconds": 0.8
+  }
+}

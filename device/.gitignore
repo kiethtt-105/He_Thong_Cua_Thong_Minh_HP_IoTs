@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+# dữ liệu sinh lúc chạy (face.json là dữ liệu sinh trắc học)
+state/*
+!state/.gitkeep
+# chứa secret thiết bị + mật khẩu Wi-Fi: chỉ commit config.example.json
+config.json

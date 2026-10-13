@@ -1,6 +1,7 @@
 """Bộ điều khiển khoá - mô phỏng firmware ESP32: boot, heartbeat, nhận lệnh (HTTP polling + MQTT tuỳ chọn), mở khoá theo phán quyết server,
 kiểm vé offline, hàng đợi sự kiện offline, cảnh báo (TAMPER / FORCED_OPEN / DOOR_LEFT_OPEN), OTA, tự khoá lại."""
 import json
+import os
 import random
 import threading
 import time
@@ -8,7 +9,7 @@ from collections import OrderedDict, deque
 
 from . import netinfo, store, tickets
 from .api import ApiError, DeviceApi, NetError
-from .hal import SimHAL
+from .hal import get_hal
 from .mqttlink import MqttLink
 
 SCAN = [('Home_WiFi_2.4G', -48, True), ('Office_Net', -61, True), ('Hotspot_Phone', -55, True), ('Cafe_Free', -72, False)]
@@ -26,8 +27,15 @@ class Controller:
         self.wifi_live = {}
         self.cfg = store.load_config()
         self._ensure_mac()
-        self.hal = SimHAL(self.cfg['hardware'])
-        self.hal.on_door_change = self._on_door
+        self.hal = get_hal(self.cfg['hardware'], state_path=os.path.join(os.path.dirname(store.RUNTIME_PATH), 'hw_sim.json'))
+        h = self.hal                    # MỌI thứ từ thế giới bên ngoài vào controller qua các callback này (sim lẫn thật)
+        h.on_door_change = self._on_door
+        h.on_shock = lambda: self.set_tamper(True)
+        h.on_card = lambda uid: self.tap_card(uid)
+        h.on_pin = lambda pin: self.enter_pin(pin)
+        h.on_face_trigger = self._on_face_trigger
+        h.on_phone = lambda kind, ticket: self.phone_unlock(kind, ticket)
+        h.on_knob = lambda: self.manual_knob()
         self.api = DeviceApi(self._creds)
         self.api.timeout = float(self.cfg['network'].get('http_timeout_seconds') or 10)
         self._runtime_reset()
@@ -98,7 +106,9 @@ class Controller:
     def boot(self):
         self._stop = threading.Event()
         self._runtime_reset()
-        self.hal.lock_state = 'locked' if self.hal.lock_state != 'jammed' else 'jammed'
+        self.hal.on_boot()
+        if self.hal.lock_state == 'unlocked':        # khởi động lại khi đang mở khoá: vẫn phải tự khoá lại sau khi đóng cửa
+            self._opened_at = time.time()
         self.log(f'BOOT  code={self.cfg["device_code"]}  fw={self.cfg["hardware"]["firmware"]}  mac={self.cfg["hardware"]["mac"]}  server={self.server_url()}', 'ok')
         m = self.cfg.get('mqtt') or {}
         if m.get('enabled'):
@@ -233,7 +243,7 @@ class Controller:
     def _hb_payload(self):
         h = self.hal
         return {'battery': int(h.battery), 'signal': int(h.signal), 'lock_state': h.lock_state, 'tamper': bool(h.tamper),
-                'temperature': h.temperature, 'firmware': self.cfg['hardware']['firmware'], 'mac': self.cfg['hardware']['mac']}
+                'temperature': h.temperature, 'hal': self.hal.kind, 'firmware': self.cfg['hardware']['firmware'], 'mac': self.cfg['hardware']['mac']}
 
     def heartbeat(self):
         try:
@@ -286,9 +296,7 @@ class Controller:
         hw = self.cfg['hardware']
         while not stop.wait(0.5):
             h, now = self.hal, time.time()
-            drain = float(hw.get('battery_drain_minutes') or 0)
-            if drain and now - self._last_drain >= drain * 60:
-                self._last_drain, h.battery = now, max(0.0, h.battery - 1)
+            h.tick()                                  # vật lý của phần cứng (pin, nhiệt, cảm biến rung tự nhả)
             if h.lock_state == 'unlocked' and self._opened_at and not h.door_open \
                     and now - self._opened_at >= float(hw.get('auto_lock_seconds', 5)):
                 self._opened_at = None
@@ -526,6 +534,13 @@ class Controller:
             return self._deny('FACE', f'embedding phải có {dim} số')
         return self._online_access('FACE', 'access_face', [float(x) for x in embedding])
 
+    def _on_face_trigger(self):
+        """Nút / cảm biến tiệm cận kích hoạt -> camera chụp -> embedding -> server so khớp."""
+        emb = self.hal.capture_embedding()
+        if emb is None:
+            return self._deny('FACE', 'NO_FACE_DETECTED')
+        return self.scan_face(emb)
+
     def phone_unlock(self, kind, ticket):
         """BLE / NFC điện thoại: khoá tự kiểm vé offline, rồi báo log về server (xếp hàng nếu mất mạng)."""
         flag = 'bluetooth_enabled' if kind == 'ble' else 'nfc_enabled'
@@ -580,7 +595,7 @@ class Controller:
             'online': self.online, 'auth_failed': self.auth_failed, 'last_error': self.last_error,
             'last_hb_ago': int(time.time() - self.last_hb) if self.last_hb else None,
             'lock_state': h.lock_state, 'door_open': h.door_open, 'tamper': h.tamper, 'battery': int(h.battery), 'signal': h.signal,
-            'temperature': h.base_temp, 'led': h.led, 'locked_out': self.locked_out,
+            'temperature': getattr(h, 'base_temp', h.temperature), 'led': h.led, 'hal': h.kind, 'hw': h.describe(), 'locked_out': self.locked_out,
             'server_cfg': {k: self.sc.get(k) for k in ('status', 'has_owner', 'wifi_enabled', 'bluetooth_enabled', 'nfc_enabled',
                                                       'nfc_auto_register', 'ota', 'intervals')},
             'mqtt': {'enabled': bool((c.get('mqtt') or {}).get('enabled')), 'connected': bool(self.mqtt and self.mqtt.connected),
@@ -593,8 +608,11 @@ class Controller:
 
     def action(self, d):
         a = d.get('action')
-        if a == 'tap_card':    return self.tap_card(str(d.get('uid', '')))
-        if a == 'pin':         return self.enter_pin(str(d.get('pin', '')))
+        if a in ('tap_card', 'pin', 'face', 'phone', 'door', 'tamper', 'knob', 'battery', 'signal', 'temp', 'jam') \
+                and not self.hal.is_sim:
+            return {'ok': False, 'message': 'Chỉ dùng khi giả lập (hardware.hal = sim). Thiết bị thật đọc từ cảm biến/đầu đọc.'}
+        if a == 'tap_card':    return self.hal.sim_tap_card(str(d.get('uid', '')))
+        if a == 'pin':         return self.hal.sim_keypad(str(d.get('pin', '')))
         if a == 'face':
             if d.get('vector'):
                 vec = d['vector']
@@ -604,7 +622,8 @@ class Controller:
                 vec = store.load(store.FACE_PATH, {}).get('vector', [])
             else:
                 vec = [round(random.uniform(-0.2, 0.2), 6) for _ in range(128)]
-            return self.scan_face(vec)
+            self.hal.sim_set_face(vec)
+            return self.hal.sim_press_face()
         if a == 'save_face':
             vec = d.get('vector')
             if not isinstance(vec, list) or len(vec) != 128:
@@ -619,10 +638,10 @@ class Controller:
             if kind not in tickets.LABELS:
                 return {'ok': False, 'message': 'kind phải là ble|nfc'}
             return {'ok': True, 'ticket': tickets.make(self.cfg['secret'], self.cfg['device_code'], kind, uh, int(self.now()) + ttl), 'expires_in': ttl}
-        if a == 'phone':       return self.phone_unlock(d.get('kind', 'ble'), str(d.get('ticket', '')))
-        if a == 'door':        self.hal.set_door(bool(d.get('open'))); return {'ok': True}
-        if a == 'tamper':      self.set_tamper(bool(d.get('on'))); return {'ok': True}
-        if a == 'knob':        self.manual_knob(); return {'ok': True}
+        if a == 'phone':       return self.hal.sim_phone(d.get('kind', 'ble'), str(d.get('ticket', '')))
+        if a == 'door':        self.hal.sim_door(bool(d.get('open'))); return {'ok': True}
+        if a == 'tamper':      self.hal.sim_shock(bool(d.get('on'))); self._wake(); return {'ok': True}
+        if a == 'knob':        self.hal.sim_knob(); return {'ok': True}
         if a == 'battery':     self.hal.battery = max(0.0, min(100.0, float(d.get('value', 100)))); self._wake(); return {'ok': True}
         if a == 'signal':      self.hal.signal = int(d.get('value', -55)); return {'ok': True}
         if a == 'temp':        self.hal.base_temp = float(d.get('value', 27)); return {'ok': True}

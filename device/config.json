@@ -43,6 +43,10 @@
     "battery_drain_minutes": 5,
     "servo_seconds": 0.6,
     "jam_chance": 0.0,
-    "auto_ota": false
+    "auto_ota": false,
+    "hal": "sim",
+    "move_cost_pct": 0.02,
+    "face_seconds": 0.8,
+    "tamper_clear_seconds": 30
   }
 }

@@ -1,15 +1,15 @@
-# smartlock/management/commands/register_virtual_device.py
+# smartlock/management/commands/register_device.py   (thay cho register_virtual_device.py)
 """
-Đăng ký thiết bị ảo (do virtual_device.py tạo) vào DB ở trạng thái 'provisioning' (chưa có chủ),
-giống 1 khoá mới xuất xưởng. Sau đó user claim bằng Device code + Secret (trang /devices/claim/).
+Đăng ký 1 thiết bị (ảo HOẶC thật) vào DB ở trạng thái 'provisioning' (chưa có chủ) từ chính file config.json
+của thiết bị, rồi user claim bằng Device code + Secret ở /devices/claim/. Chỉ dùng khi DEV (DEBUG=True).
 
-    python manage.py register_virtual_device virtual_device/devices/DEV-XXXX/identity.json
-    python manage.py register_virtual_device --all          # đăng ký mọi thiết bị trong virtual_device/devices
-    python manage.py register_virtual_device --list
+    python manage.py register_device ../device/config.json                    # giả lập (mặc định)
+    python manage.py register_device ../device/config.json --mode physical     # board thật (Raspberry Pi...)
+    python manage.py register_device --list
 
-Chạy lại được: nếu khoá đã có chủ thì CHỈ cập nhật MAC/firmware (KHÔNG đụng owner/status/secret/mode).
-Khoá chưa có chủ thì cập nhật cả secret để nạp lại identity mới.
-Chỉ chạy khi DEBUG=True (file identity chứa secret dạng thô).
+Đọc: device_code, secret, hardware.mac/firmware. Nếu có state/config.json cạnh file đó (MAC do máy giả lập tự sinh)
+thì gộp vào. Chỉ lưu HASH của secret vào DB, không lưu secret thô.
+Chạy lại được: khoá đã có chủ -> CHỈ cập nhật MAC/firmware (không đụng owner/status/secret/mode).
 """
 import json
 from pathlib import Path
@@ -17,62 +17,78 @@ from pathlib import Path
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from smartlock import services
+from smartlock.api.device import MAC_RE
 from smartlock.models import Device
 
-DEFAULT_DIR = Path(settings.BASE_DIR) / 'virtual_device' / 'devices'
+
+def _load(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as e:
+        raise CommandError(f'Không đọc được {path}: {e}')
+
+
+def _merge(base: dict, over: dict) -> dict:
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _merge(base[k], v)
+        else:
+            base[k] = v
+    return base
 
 
 class Command(BaseCommand):
-    help = 'Đăng ký thiết bị ảo vào DB (provisioning, chưa có chủ) để claim như khoá thật.'
+    help = 'Đăng ký thiết bị ảo/thật từ device/config.json vào DB (provisioning, chưa có chủ).'
 
     def add_arguments(self, parser):
-        parser.add_argument('identity', nargs='?', help='Đường dẫn identity.json của thiết bị ảo.')
-        parser.add_argument('--all', action='store_true', help='Đăng ký mọi thiết bị trong virtual_device/devices.')
-        parser.add_argument('--list', action='store_true', help='Liệt kê thiết bị đã đăng ký (mode=simulated).')
+        parser.add_argument('config', nargs='?', help='Đường dẫn device/config.json')
+        parser.add_argument('--mode', choices=('simulated', 'physical'), default='simulated',
+                            help='simulated = máy giả lập (mặc định) | physical = board thật')
+        parser.add_argument('--name', help='Tên hiển thị (mặc định = device_code)')
+        parser.add_argument('--list', action='store_true', help='Liệt kê thiết bị chưa claim / đã claim.')
 
     def handle(self, *args, **opts):
         if opts['list']:
-            for d in Device.objects.filter(device_mode='simulated').select_related('owner').order_by('created_at'):
-                self.stdout.write(f'{d.device_code}  {d.status:12} owner={d.owner.email if d.owner_id else "-"}  {d.name}')
+            for d in Device.objects.select_related('owner').order_by('created_at'):
+                self.stdout.write(f'{d.device_code}  {d.device_mode:9} {d.status:12} '
+                                  f'owner={d.owner.email if d.owner_id else "-"}  {d.name}')
             return
         if not settings.DEBUG:
-            raise CommandError('register_virtual_device chỉ chạy khi DEBUG=True.')
-        if opts['all']:
-            paths = sorted(DEFAULT_DIR.glob('*/identity.json'))
-        elif opts['identity']:
-            paths = [Path(opts['identity'])]
-        else:
-            raise CommandError('Cần đường dẫn identity.json hoặc --all.')
-        if not paths:
-            raise CommandError(f'Không có identity.json nào (thư mục {DEFAULT_DIR}).')
-        for p in paths:
-            self._register(p)
+            raise CommandError('register_device chỉ chạy khi DEBUG=True. Production: tạo thiết bị ở trang admin.')
+        if not opts['config']:
+            raise CommandError('Cần đường dẫn device/config.json (hoặc --list).')
 
-    def _register(self, path):
-        try:
-            ident = json.loads(Path(path).read_text(encoding='utf-8'))
-            code, secret_hash = ident['device_code'].strip().upper(), ident['secret_hash']
-        except (OSError, ValueError, KeyError) as e:
-            raise CommandError(f'identity.json không hợp lệ ({path}): {e}')
-        hw = {'provisioning_secret_hash': secret_hash, 'mac_address': (ident.get('mac') or '').upper() or None,
-              'firmware_version': (ident.get('firmware') or '')[:30] or None,
-              'device_mode': 'simulated'}
+        path = Path(opts['config']).resolve()
+        cfg = _load(path)
+        state_cfg = path.parent / 'state' / 'config.json'
+        if state_cfg.exists():
+            _merge(cfg, _load(state_cfg))
+        code = str(cfg.get('device_code') or '').strip().upper()
+        secret = str(cfg.get('secret') or '')
+        if not code or not secret:
+            raise CommandError('config.json thiếu device_code hoặc secret.')
+        hwc = cfg.get('hardware') or {}
+        mac = str(hwc.get('mac') or '').upper()
+        mac = mac if MAC_RE.match(mac) else None
+        fw = str(hwc.get('firmware') or '')[:30] or None
+
         device = Device.objects.filter(device_code=code).first()
         if device is None:
-            Device.objects.create(device_code=code, name=ident.get('name') or code, location=ident.get('location'),
-                                  status='provisioning', owner=None, **hw)   # đúng chk_devices_owner_vs_status
+            Device.objects.create(
+                device_code=code, name=opts['name'] or code, status='provisioning', owner=None,   # chk_devices_owner_vs_status
+                provisioning_secret_hash=services.hash_token(secret), device_mode=opts['mode'],
+                mac_address=mac, firmware_version=fw)
             self.stdout.write(self.style.SUCCESS(
-                f'Đã đăng ký {code} (provisioning). Chạy thiết bị ảo rồi claim bằng secret trong device_info.txt.'))
+                f'Đã đăng ký {code} ({opts["mode"]}, provisioning). Vào /devices/claim/ nhập code + secret trong config.json.'))
             return
-        if device.owner_id:     # đã có chủ: không đè secret chủ đã xoay, không đổi chế độ khoá thật
-            hw.pop('provisioning_secret_hash')
-            hw.pop('device_mode')
-        for k, v in hw.items():
+
+        fields = {'mac_address': mac, 'firmware_version': fw}
+        if not device.owner_id:                                  # chưa có chủ: nạp lại identity mới
+            fields.update(provisioning_secret_hash=services.hash_token(secret), device_mode=opts['mode'])
+        for k, v in fields.items():
             setattr(device, k, v)
-        device.save(update_fields=list(hw) + ['updated_at'])
-        if device.owner_id:
-            self.stdout.write(self.style.WARNING(
-                f'{code} đã có chủ ({device.owner.email}): chỉ cập nhật MAC/firmware.'))
-        else:
-            self.stdout.write(self.style.WARNING(
-                f'{code} đã tồn tại (status={device.status}): cập nhật secret/MAC/firmware.'))
+        device.save(update_fields=list(fields) + ['updated_at'])
+        self.stdout.write(self.style.WARNING(
+            f'{code} đã tồn tại: ' + (f'đã có chủ ({device.owner.email}) -> chỉ cập nhật MAC/firmware.'
+                                      if device.owner_id else 'cập nhật secret/MAC/firmware.')))
