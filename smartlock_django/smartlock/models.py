@@ -109,6 +109,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     full_name = models.CharField(max_length=100, blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
     avatar_url = models.URLField(max_length=512, blank=True, null=True)
+    avatar_updated_at = models.DateTimeField(null=True, blank=True,
+                                             help_text='Có giá trị = người dùng đã tải ảnh lên (ảnh nằm ở UserAvatar).')
     is_admin = models.BooleanField(default=False)
     is_active = models.BooleanField(default=False)
     email_verified = models.BooleanField(default=False)
@@ -157,6 +159,10 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.email
 
     @property
+    def has_custom_avatar(self) -> bool:
+        return bool(self.avatar_updated_at or self.avatar_url)
+
+    @property
     def initials(self) -> str:
         parts = (self.full_name or self.username or self.email or '?').replace('@', ' ').split()
         return ''.join(p[0] for p in parts[:2]).upper() or '?'
@@ -165,6 +171,8 @@ class User(AbstractBaseUser, PermissionsMixin):
     def avatar(self) -> str:
         """Ảnh đại diện hiển thị: avatar_url do người dùng đặt; không có thì dùng Gravatar identicon
         (tắt bằng settings.AVATAR_GRAVATAR_FALLBACK = False -> trả '' để UI tự vẽ chữ cái đầu)."""
+        if self.avatar_updated_at:
+            return f'/api/app/users/{self.pk}/avatar/?v={int(self.avatar_updated_at.timestamp())}'
         if self.avatar_url:
             return self.avatar_url
         from django.conf import settings as _s
@@ -176,6 +184,15 @@ class User(AbstractBaseUser, PermissionsMixin):
     @property
     def fido2_credentials(self):
         return Fido2Credential.objects.filter(user=self)
+
+
+class UserAvatar(models.Model):
+    """Ảnh đại diện người dùng tải lên (đã cắt vuông + nén JPEG ở server). Tách bảng riêng để
+    các truy vấn User không phải kéo theo dữ liệu ảnh."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True, related_name='avatar_blob')
+    data = models.BinaryField()
+    mime = models.CharField(max_length=30, default='image/jpeg')
+    updated_at = models.DateTimeField(auto_now=True)
 
 
 class SystemSettings(models.Model):

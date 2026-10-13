@@ -1554,3 +1554,71 @@ def lock_minutes(user) -> int:
 
 def webauthn_rp(request):
     return links.WEBAUTHN_RP_ID, links.WEBAUTHN_ORIGIN, getattr(settings, 'WEBAUTHN_RP_NAME', TOTP_ISSUER)
+
+
+# ======================================================================
+# AVATAR: người dùng tải ảnh lên trực tiếp (không dùng URL ngoài)
+# ======================================================================
+
+AVATAR_MAX_UPLOAD = 5 * 1024 * 1024          # tối đa 5 MB file gốc
+AVATAR_SIZE = 256                             # lưu vuông 256x256 JPEG
+AVATAR_MAX_PIXELS = 40_000_000                # chặn ảnh "bom" giải nén
+
+
+class AvatarError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def process_avatar(raw: bytes) -> bytes:
+    """Kiểm tra ảnh, xoay theo EXIF, cắt vuông giữa, thu về 256x256, xoá EXIF, xuất JPEG."""
+    import io
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        raise AvatarError('AVATAR_UNSUPPORTED', 'Máy chủ chưa cài Pillow nên chưa nhận ảnh tải lên (pip install Pillow).')
+    try:
+        img = Image.open(io.BytesIO(raw))
+        if img.format not in ('JPEG', 'PNG', 'WEBP'):
+            raise AvatarError('BAD_IMAGE', 'Chỉ hỗ trợ ảnh JPG, PNG hoặc WebP.')
+        if img.size[0] * img.size[1] > AVATAR_MAX_PIXELS:
+            raise AvatarError('BAD_IMAGE', 'Ảnh quá lớn (độ phân giải). Hãy chọn ảnh nhỏ hơn.')
+        img.load()
+        img = ImageOps.exif_transpose(img)
+    except AvatarError:
+        raise
+    except Exception:
+        raise AvatarError('BAD_IMAGE', 'Không đọc được ảnh. Hãy chọn tệp JPG, PNG hoặc WebP hợp lệ.')
+    if img.mode in ('RGBA', 'LA', 'P'):
+        img = img.convert('RGBA')
+        bg = Image.new('RGB', img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    else:
+        img = img.convert('RGB')
+    resample = getattr(getattr(Image, 'Resampling', Image), 'LANCZOS')
+    img = ImageOps.fit(img, (AVATAR_SIZE, AVATAR_SIZE), resample, centering=(0.5, 0.5))
+    out = io.BytesIO()
+    img.save(out, 'JPEG', quality=85, optimize=True)
+    return out.getvalue()
+
+
+def save_user_avatar(user, raw: bytes) -> None:
+    from .models import User, UserAvatar
+    data = process_avatar(raw)
+    now = timezone.now()
+    UserAvatar.objects.update_or_create(user=user, defaults={'data': data, 'mime': 'image/jpeg'})
+    User.objects.filter(pk=user.pk).update(avatar_updated_at=now, updated_at=now)
+    user.avatar_updated_at = now
+
+
+def clear_user_avatar(user) -> None:
+    """Gỡ cả ảnh tải lên lẫn avatar_url cũ -> quay về ảnh mặc định."""
+    from .models import User, UserAvatar
+    UserAvatar.objects.filter(user=user).delete()
+    User.objects.filter(pk=user.pk).update(avatar_updated_at=None, avatar_url=None, updated_at=timezone.now())
+    user.avatar_updated_at = None
+    user.avatar_url = None
+

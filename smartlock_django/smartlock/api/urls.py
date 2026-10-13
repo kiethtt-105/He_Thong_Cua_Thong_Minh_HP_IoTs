@@ -33,6 +33,8 @@ app_patterns = [
     # ---------- tài khoản ----------
     path('me/', acc.me, name='me'),                                                 # GET · PATCH · DELETE (xoá tài khoản)
     path('me/export/', locks.me_export, name='me-export'),                           # tải dữ liệu cá nhân (JSON)
+    path('me/avatar/', acc.me_avatar, name='me-avatar'),                              # POST multipart `file` · DELETE
+    path('users/<uuid:user_id>/avatar/', acc.user_avatar, name='user-avatar'),       # ảnh đại diện công khai (img src)
     path('me/password/', acc.change_password, name='change-password'),
     path('me/sessions/', acc.sessions_list, name='sessions'),                       # GET danh sách · DELETE đăng xuất mọi phiên khác
     path('me/sessions/<uuid:session_id>/', acc.session_revoke, name='session-revoke'),

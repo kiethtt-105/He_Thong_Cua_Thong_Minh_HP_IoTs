@@ -510,6 +510,21 @@ def _send_reset_link(request, target):
             messages.error(request, 'Không gửi được email. Kiểm tra cấu hình SMTP rồi thử lại.')
 
 
+def _clear_avatar(request, target):
+    if not target.has_custom_avatar:
+        messages.info(request, 'Tài khoản này chưa đặt ảnh đại diện.')
+        return
+    was_upload = bool(target.avatar_updated_at)
+    old_url = target.avatar_url or ''
+    services.clear_user_avatar(target)
+    audit(request, 'MANAGE_AVATAR_CLEARED', target_user=target, severity='warning',
+          metadata={'uploaded': was_upload, 'avatar_url': old_url[:200]})
+    notify(target, 'Ảnh đại diện đã được gỡ',
+           'Quản trị viên đã gỡ ảnh đại diện của bạn. Bạn có thể đặt ảnh khác trong phần Hồ sơ.',
+           severity='warning', type_='SECURITY')
+    messages.success(request, 'Đã gỡ ảnh đại diện.')
+
+
 def _user_actions(request, target):
     action = request.POST.get('action')
     reason = modify_denied_reason(request.user, target)
@@ -537,6 +552,8 @@ def _user_actions(request, target):
         messages.success(request, 'Đã mở khóa đăng nhập.')
     elif action == 'send_reset_link':
         _send_reset_link(request, target)
+    elif action == 'clear_avatar':
+        _clear_avatar(request, target)
     else:
         messages.error(request, 'Hành động không hợp lệ.')
     return redirect('manage_sys:user-detail', user_id=target.id)

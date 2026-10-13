@@ -15,6 +15,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.http import HttpResponse, HttpResponseNotModified
 from django.db.models import Q
 from django.middleware.csrf import get_token
 from django.utils import timezone
@@ -593,6 +594,46 @@ def me(request):
     return ok({'user': user_json(user),
                'device_count': Device.objects.filter(owner=user).count(),
                'card_count': AccessCard.objects.filter(user=user).count()})
+
+
+@api('POST', 'DELETE', auth='any')
+def me_avatar(request):
+    """POST multipart (field `file`) = tải ảnh đại diện lên · DELETE = gỡ về ảnh mặc định."""
+    user = request.user
+    if request.method == 'DELETE':
+        if user.has_custom_avatar:
+            services.clear_user_avatar(user)
+            services.audit(request, 'AVATAR_REMOVED', target_user=user)
+        return ok({'user': user_json(user)})
+    f = request.FILES.get('file')
+    if f is None:
+        raise ApiError('MISSING_FIELD', 'Chưa chọn ảnh.', 400, field='file')
+    if f.size > services.AVATAR_MAX_UPLOAD:
+        raise ApiError('FILE_TOO_LARGE', 'Ảnh quá lớn (tối đa 5 MB).', 413)
+    try:
+        services.save_user_avatar(user, f.read())
+    except services.AvatarError as exc:
+        raise ApiError(exc.code, exc.message, 501 if exc.code == 'AVATAR_UNSUPPORTED' else 400)
+    services.audit(request, 'AVATAR_UPDATED', target_user=user)
+    return ok({'user': user_json(user)})
+
+
+@api('GET', auth=False)
+def user_avatar(request, user_id):
+    """Ảnh đại diện công khai theo UUID (dùng cho <img src>); URL kèm ?v=<timestamp> nên cache lâu được."""
+    from smartlock.models import UserAvatar
+    row = UserAvatar.objects.filter(user_id=user_id).first()
+    if row is None:
+        raise ApiError('NOT_FOUND', 'Không có ảnh đại diện.', 404)
+    etag = '"%d"' % int(row.updated_at.timestamp())
+    if request.headers.get('If-None-Match') == etag:
+        resp = HttpResponseNotModified()
+    else:
+        resp = HttpResponse(bytes(row.data), content_type=row.mime)
+    resp['ETag'] = etag
+    resp['Cache-Control'] = 'public, max-age=31536000, immutable'
+    resp['X-Content-Type-Options'] = 'nosniff'
+    return resp
 
 
 @api('POST', auth='any')

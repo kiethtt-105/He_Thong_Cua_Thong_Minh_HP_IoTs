@@ -25,4 +25,5 @@
     <input type="text" name="confirm" class="form-control form-control-sm mono mb-2" placeholder="{{ prompt }}: {{ expect }}" required autocomplete="off"{% if cap %} autocapitalize="{{ cap }}"{% endif %}>
     <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Nhập lại mật khẩu của bạn" required autocomplete="current-password">
     <button class="btn {{ btn }} btn-sm w-100"><i class="fa-solid fa-{{ icon }} me-2"></i>{{ text }}</button></form>
+{% elif part == 'user_chip' %}{% if usr %}<span class="user-chip"><span class="avatar-xs">{{ usr.initials }}{% if usr.avatar %}<img src="{{ usr.avatar }}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">{% endif %}</span>{% if ulink %}<a href="{% url 'manage_sys:user-detail' usr.id %}" class="text-break">{{ usr.email }}</a>{% else %}<span class="text-break">{{ usr.email }}</span>{% endif %}</span>{% elif ufb %}<span class="text-break">{{ ufb }}</span>{% else %}—{% endif %}
 {% endif %}

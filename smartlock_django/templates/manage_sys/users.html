@@ -32,7 +32,7 @@
             <tbody>
             {% for u in page_obj %}
                 <tr>
-                    <td class="text-break">{{ u.email }} {% if u.role == 'superuser' %}<span class="role-badge role-superuser">Superuser</span>{% elif u.role == 'admin' %}<span class="role-badge role-admin">Admin</span>{% endif %}</td>
+                    <td class="text-break">{% include 'manage_sys/_ui.html' with part="user_chip" usr=u %} {% if u.role == 'superuser' %}<span class="role-badge role-superuser">Superuser</span>{% elif u.role == 'admin' %}<span class="role-badge role-admin">Admin</span>{% endif %}</td>
                     <td>{{ u.username }}</td>
                     <td>{{ u.full_name|default:"—" }}</td>
                     <td class="text-center">{{ u.device_count }}</td>
@@ -59,10 +59,15 @@
         <div class="card mb-4">
             <div class="card-header">Thông tin tài khoản</div>
             <div class="card-body">
+                <div class="d-flex align-items-center gap-3 mb-3">
+                    <div class="avatar-lg">{{ target.initials }}{% if target.avatar %}<img src="{{ target.avatar }}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">{% endif %}</div>
+                    <div class="min-w-0"><div class="fw-semibold text-break">{{ target.full_name|default:target.username }}</div><div class="small text-muted text-break">{{ target.email }}</div></div>
+                </div>
                 <dl class="kv">
                     <dt>Username</dt><dd>{{ target.username }}</dd>
                     <dt>Họ tên</dt><dd>{{ target.full_name|default:"—" }}</dd>
                     <dt>SĐT</dt><dd>{{ target.phone|default:"—" }}</dd>
+                    <dt>Ảnh đại diện</dt><dd>{% if target.avatar_updated_at %}Đã tải lên ({{ target.avatar_updated_at|date:"d/m/Y H:i" }}){% elif target.avatar_url %}<a href="{{ target.avatar_url }}" target="_blank" rel="noopener noreferrer" class="small text-break">{{ target.avatar_url|truncatechars:40 }}</a>{% else %}<span class="text-muted">Mặc định</span>{% endif %}</dd>
                     <dt>Email xác thực</dt><dd>{{ target.email_verified|yesno:"Có,Chưa" }}</dd>
                     <dt>Quyền</dt><dd>{% if target_role == 'superuser' %}Superuser{% elif target_role == 'admin' %}Admin{% else %}User{% endif %}</dd>
                     <dt>Đăng ký</dt><dd>{{ target.created_at|date:"d/m/Y H:i" }}</dd>
@@ -97,6 +102,12 @@
                         </div>
                         <button class="btn btn-outline-primary w-100"><i class="fa-solid fa-envelope me-2"></i>Gửi link đặt lại mật khẩu</button>
                         <div class="form-text">Link chỉ gửi tới email của người dùng; quản trị viên không xem được link và không đặt/đổi mật khẩu trực tiếp.</div>
+                    </form>
+                    {% endif %}
+                    {% if target.has_custom_avatar %}
+                    <form method="post" onsubmit="return confirm('Gỡ ảnh đại diện của người dùng này?')">
+                        {% csrf_token %}<input type="hidden" name="action" value="clear_avatar">
+                        <button class="btn btn-outline-secondary w-100"><i class="fa-solid fa-image-portrait me-2"></i>Gỡ ảnh đại diện</button>
                     </form>
                     {% endif %}
                     {% if is_locked or lock.failed_attempts %}
