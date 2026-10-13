@@ -102,7 +102,7 @@ except ValueError:
 MQTT_PUBLIC_TLS = _flag('MQTT_PUBLIC_TLS', MQTT_USE_TLS)
 
 WEBAUTHN_RP_ID = _env('WEBAUTHN_RP_ID') or SERVER_HOST
-WEBAUTHN_ORIGIN = SERVER_URL
+WEBAUTHN_ORIGIN = _env('WEBAUTHN_ORIGIN').rstrip('/') or SERVER_URL
 
 
 def absolute(path='/'):

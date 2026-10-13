@@ -958,7 +958,8 @@ def _snapshot_payload(request) -> dict:
     # ---- bảo mật tài khoản (không có bí mật TOTP, không có khoá công khai) ----
     cfg = TwoFactorConfig.objects.filter(user=user).first()
     passkeys = Fido2Credential.objects.filter(user=user).order_by('created_at')
-    rp_here = services.webauthn_rp(request)[0]
+    from .account import _rp as _rp_here
+    rp_here = _rp_here(request)[0]
     sessions = MobileSession.objects.filter(user=user, revoked_at__isnull=True,
                                             expires_at__gt=now).order_by('-created_at')
     current = request.api_session.id if request.api_session else None

@@ -18,7 +18,7 @@ from datetime import timedelta
 from django.apps import apps
 from django.core.cache import cache
 from django.db import connection
-from django.db.models import Avg, Count, F, OuterRef, Q, Subquery
+from django.db.models import Avg, Count, F, Max, OuterRef, Q, Subquery
 from django.db.models.functions import TruncHour, TruncMinute
 from django.http import JsonResponse
 from django.urls import URLPattern, URLResolver, get_resolver
@@ -490,132 +490,312 @@ def _login_attempts():
     return AuditLog.objects.filter(action__in=_LOGIN_OK_ACTIONS + _LOGIN_FAIL_ACTIONS)
 
 
-LOG_ROW_LIMIT = 100
+# ======================================================================
+#  API còn thiếu cho trang system_logs.html (chỉ đọc)
+# ======================================================================
+def _brief(u):
+    """Thông tin rút gọn của người dùng cho cột avatar/email trên giao diện."""
+    if not u:
+        return None
+    return {'id': str(u.pk), 'email': u.email, 'username': u.username, 'full_name': u.full_name,
+            'initials': u.initials, 'avatar': u.avatar}
 
 
-def public_system_logs_api(request):
-    _require_demo_logs(request)
-    cached = cache.get('sysview:public-snapshot')
-    if cached is not None:
-        return JsonResponse(cached)
-    _ls = DeviceStatusLog.objects.filter(device=OuterRef('pk')).order_by('-recorded_at')
-    devices = (Device.objects.select_related('owner')
-               .annotate(l_lock=Subquery(_ls.values('lock_state')[:1]),
-                         l_tamper=Subquery(_ls.values('tamper_detected')[:1]),
-                         l_temp=Subquery(_ls.values('temperature')[:1]),
-                         l_sig=Subquery(_ls.values('signal_strength')[:1]))
-               .order_by('name'))
-    device_rows = []
-    for d in devices:
-        device_rows.append({
-            'id': str(d.id), 'name': d.name, 'code': d.device_code, 'status': d.status,
-            'battery_level': d.battery_level,
-            'lock_state': d.l_lock,
-            'tamper_detected': bool(d.l_tamper),
-            'temperature': str(d.l_temp) if d.l_temp is not None else None,
-            'signal_strength': d.l_sig,
-            'last_seen_at': d.last_seen_at.isoformat() if d.last_seen_at else None,
-            'owner': d.owner.username if d.owner else None,
-            'bluetooth_enabled': d.bluetooth_enabled, 'wifi_enabled': d.wifi_enabled,
-            'nfc_enabled': d.nfc_enabled,
+def _role(u):
+    return 'superuser' if u.is_superuser else 'admin' if u.is_admin else 'user'
+
+
+def _page(g, default=25):
+    return _int(g.get('size'), default, 10, 200), _int(g.get('page'), 1, 1, 1000000)
+
+
+@_guard
+def users_api(request):
+    g = request.GET
+    now = timezone.now()
+    qs = User.objects.annotate(device_count=Count('device', distinct=True))
+    st = g.get('status')
+    if st == 'active':
+        qs = qs.filter(is_active=True)
+    elif st == 'inactive':
+        qs = qs.filter(is_active=False)
+    elif st == 'unverified':
+        qs = qs.filter(email_verified=False)
+    elif st == 'locked':
+        qs = qs.filter(login_locked_until__gt=now)
+    elif st == 'admin':
+        qs = qs.filter(Q(is_admin=True) | Q(is_superuser=True))
+    elif st == '2fa':
+        qs = qs.filter(two_fa_enabled=True)
+    q = (g.get('q') or '').strip()[:80]
+    if q:
+        qs = qs.filter(Q(email__icontains=q) | Q(username__icontains=q) | Q(full_name__icontains=q)
+                       | Q(phone__icontains=q))
+    total = qs.count()
+    size, page = _page(g)
+    rows = []
+    for u in qs.order_by('-created_at')[(page - 1) * size: page * size]:
+        rows.append({
+            **_brief(u), 'phone': u.phone, 'role': _role(u), 'is_active': u.is_active,
+            'email_verified': u.email_verified, 'two_fa_enabled': u.two_fa_enabled,
+            'is_locked': bool(u.login_locked_until and u.login_locked_until > now),
+            'login_locked_until': _iso(u.login_locked_until),
+            'login_failed_attempts': u.login_failed_attempts,
+            'login_last_failed_ip': u.login_last_failed_ip,
+            'device_count': u.device_count, 'last_login': _iso(u.last_login),
+            'created_at': _iso(u.created_at), 'updated_at': _iso(u.updated_at),
         })
+    return JsonResponse({'total': total, 'page': page, 'size': size, 'rows': rows})
 
-    commands = (DeviceCommand.objects.select_related('device', 'issued_by')
-                .order_by('-created_at')[:LOG_ROW_LIMIT])
-    command_rows = [{
-        'time': c.created_at.isoformat(), 'device': c.device.name if c.device else '—',
-        'command_type': c.command_type, 'status': c.status,
-        'issued_by': c.issued_by.username if c.issued_by else '—',
-        'expires_at': c.expires_at.isoformat() if c.expires_at else None,
-        'acknowledged_at': c.acknowledged_at.isoformat() if c.acknowledged_at else None,
-    } for c in commands]
 
-    status_logs = DeviceStatusLog.objects.select_related('device').order_by('-recorded_at')[:LOG_ROW_LIMIT]
-    status_rows = [{
-        'time': s.recorded_at.isoformat(), 'device': s.device.name if s.device else '—',
-        'battery_level': s.battery_level, 'lock_state': s.lock_state,
-        'tamper_detected': s.tamper_detected,
-        'temperature': str(s.temperature) if s.temperature is not None else None,
-        'signal_strength': s.signal_strength,
-    } for s in status_logs]
-
-    nfc_logs = NfcLog.objects.select_related('device', 'user', 'reader').order_by('-created_at')[:LOG_ROW_LIMIT]
-    nfc_rows = [{
-        'time': n.created_at.isoformat(), 'device': n.device.name if n.device else '—',
-        'user': n.user.username if n.user else '—', 'event_type': n.event_type,
-        'success': n.success, 'ip': n.ip_address,
-        'reader': n.reader.id and str(n.reader) if n.reader else '—',
-    } for n in nfc_logs]
-
-    audit_logs = (AuditLog.objects.select_related('device', 'actor_user', 'target_user')
-                  .order_by('-created_at')[:LOG_ROW_LIMIT])
-    audit_rows = [{
-        'time': a.created_at.isoformat(), 'action': a.action,
-        'actor': a.actor_user.username if a.actor_user else (a.username_attempt or '—'),
-        'target': a.target_user.username if a.target_user else '—',
-        'device': a.device.name if a.device else '—',
-        'severity': a.severity, 'success': a.success, 'ip': a.ip_address,
-    } for a in audit_logs]
-
-    login_attempts = (_login_attempts().select_related('actor_user', 'target_user')
-                      .order_by('-created_at')[:LOG_ROW_LIMIT])
-    login_rows = []
-    for la in login_attempts:
-        who = la.target_user or la.actor_user
-        login_rows.append({
-            'time': la.created_at.isoformat(),
-            'identifier': la.username_attempt or (who.email if who else '—'),
-            'user': who.username if who else '—', 'success': la.action in _LOGIN_OK_ACTIONS,
-            'ip': la.ip_address,
+@_guard
+def logins_api(request):
+    g = request.GET
+    qs = _login_attempts().select_related('actor_user', 'target_user')
+    if g.get('status') == 'ok':
+        qs = qs.filter(action__in=_LOGIN_OK_ACTIONS)
+    elif g.get('status') == 'fail':
+        qs = qs.filter(action__in=_LOGIN_FAIL_ACTIONS)
+    q = (g.get('q') or '').strip()[:80]
+    if q:
+        qs = qs.filter(Q(username_attempt__icontains=q) | Q(ip_address__startswith=q)
+                       | Q(actor_user__email__icontains=q) | Q(target_user__email__icontains=q)
+                       | Q(action__icontains=q))
+    total = qs.count()
+    size, page = _page(g)
+    rows = []
+    for a in qs.order_by('-created_at')[(page - 1) * size: page * size]:
+        who = a.target_user or a.actor_user
+        rows.append({
+            'id': str(a.id), 'created_at': _iso(a.created_at),
+            'identifier': a.username_attempt or (who.email if who else None),
+            'user': _brief(who), 'ip_address': a.ip_address,
+            'is_manage_portal': bool(who and who.is_admin and a.action in _LOGIN_OK_ACTIONS),
+            'success': a.action in _LOGIN_OK_ACTIONS, 'action': a.action,
+            'user_agent': (a.user_agent or '')[:200], 'reason': a.reason,
         })
+    return JsonResponse({'total': total, 'page': page, 'size': size, 'rows': rows})
 
-    labels, lock_series = _bucketed_counts(DeviceCommand.objects.filter(command_type='LOCK'), 'created_at')
-    _, unlock_series = _bucketed_counts(DeviceCommand.objects.filter(command_type='UNLOCK'), 'created_at')
-    _, nfc_ok_series = _bucketed_counts(NfcLog.objects.filter(success=True), 'created_at')
-    _, nfc_fail_series = _bucketed_counts(NfcLog.objects.filter(success=False), 'created_at')
-    _, audit_total_series = _bucketed_counts(AuditLog.objects.all(), 'created_at')
-    _, audit_fail_series = _bucketed_counts(AuditLog.objects.filter(success=False), 'created_at')
-    _, login_ok_series = _bucketed_counts(AuditLog.objects.filter(action__in=_LOGIN_OK_ACTIONS), 'created_at')
-    _, login_fail_series = _bucketed_counts(AuditLog.objects.filter(action__in=_LOGIN_FAIL_ACTIONS), 'created_at')
-    _, status_report_series = _bucketed_counts(DeviceStatusLog.objects.all(), 'recorded_at')
-    _, tamper_series = _bucketed_counts(DeviceStatusLog.objects.filter(tamper_detected=True), 'recorded_at')
-    _, avg_battery_series = _bucketed_avg(DeviceStatusLog.objects.all(), 'recorded_at', 'battery_level')
-    _, avg_temp_series = _bucketed_avg(DeviceStatusLog.objects.all(), 'recorded_at', 'temperature')
 
-    since_24h = timezone.now() - timedelta(hours=24)
-    stats = {
-        'total_devices': devices.count(),
-        'devices_online': devices.filter(status='online').count(),
-        'total_users': User.objects.count(),
-        'total_commands': DeviceCommand.objects.count(),
-        'total_status_logs': DeviceStatusLog.objects.count(),
-        'total_nfc_logs': NfcLog.objects.count(),
-        'total_audit_logs': AuditLog.objects.count(),
-        'total_login_attempts': _login_attempts().count(),
-        'failed_audit_24h': AuditLog.objects.filter(success=False, created_at__gte=since_24h).count(),
-        'failed_nfc_24h': NfcLog.objects.filter(success=False, created_at__gte=since_24h).count(),
-        'failed_login_24h': AuditLog.objects.filter(action__in=_LOGIN_FAIL_ACTIONS, created_at__gte=since_24h).count(),
+@_guard
+def announcements_api(request):
+    g = request.GET
+    qs = Announcement.objects.select_related('created_by')
+    if g.get('status') == 'active':
+        qs = qs.filter(is_active=True)
+    elif g.get('status') == 'inactive':
+        qs = qs.filter(is_active=False)
+    q = (g.get('q') or '').strip()[:80]
+    if q:
+        qs = qs.filter(Q(title__icontains=q) | Q(body__icontains=q))
+    total = qs.count()
+    size, page = _page(g)
+    rows = [{'id': str(a.id), 'title': a.title, 'body': a.body, 'level': a.level, 'is_active': a.is_active,
+             'created_by': _brief(a.created_by), 'created_at': _iso(a.created_at)}
+            for a in qs.order_by('-created_at')[(page - 1) * size: page * size]]
+    return JsonResponse({'total': total, 'page': page, 'size': size, 'rows': rows})
+
+
+@_guard
+def admin_settings_api(request):
+    from .models import SystemSettings, default_lockout_stage_minutes
+    s = SystemSettings.objects.select_related('updated_by').filter(pk=1).first()
+    cfg = {
+        'registration_enabled': s.registration_enabled if s else True,
+        'verification_token_expiry_minutes': s.verification_token_expiry_minutes if s else 30,
+        'share_code_expiry_minutes': s.share_code_expiry_minutes if s else 15,
+        'login_lockout_stage_minutes': (s.login_lockout_stage_minutes if s else default_lockout_stage_minutes()),
+        'session_timeout_hours': s.session_timeout_hours if s else 24,
+        'updated_at': _iso(s.updated_at) if s else None,
+        'updated_by': _brief(s.updated_by) if s else None,
     }
+    sup = User.objects.filter(is_superuser=True).count()
+    adm = User.objects.filter(is_admin=True, is_superuser=False).count()
+    admins = [{'email': u.email, 'username': u.username, 'role': _role(u), 'last_login': _iso(u.last_login)}
+              for u in User.objects.filter(Q(is_admin=True) | Q(is_superuser=True)).order_by('email')]
+    full = getattr(dj_settings, 'ADMIN_FULL_POWER', None)
+    if full is None:
+        full = os.environ.get('ADMIN_FULL_POWER', '').lower() in ('1', 'true', 'yes')
+    return JsonResponse({
+        'settings': cfg,
+        'roles': {'superuser': sup, 'admin': adm, 'user': User.objects.count() - sup - adm},
+        'admin_full_power': bool(full),
+        'session_seconds': getattr(dj_settings, 'SESSION_COOKIE_AGE', 1209600),
+        'admins': admins,
+    })
 
-    payload = {
-        'server_time': timezone.now().isoformat(),
-        'stats': stats,
-        'devices': device_rows,
-        'commands': command_rows,
-        'status_logs': status_rows,
-        'nfc_logs': nfc_rows,
-        'rule_logs': [],
-        'audit_logs': audit_rows,
-        'login_attempts': login_rows,
-        'chart': {
-            'labels': labels, 'lock': lock_series, 'unlock': unlock_series,
-            'nfc_ok': nfc_ok_series, 'nfc_fail': nfc_fail_series,
-            'audit_total': audit_total_series, 'audit_fail': audit_fail_series,
-            'login_ok': login_ok_series, 'login_fail': login_fail_series,
-            'rule_fires': [0] * len(labels), 'status_reports': status_report_series,
-            'tamper_events': tamper_series,
-            'avg_battery': avg_battery_series, 'avg_temp': avg_temp_series,
-        },
-    }
-    cache.set('sysview:public-snapshot', payload, 2)
-    return JsonResponse(payload)
+
+@_guard
+def device_detail_api(request, device_id):
+    d = Device.objects.select_related('owner').filter(pk=device_id).first()
+    if not d:
+        return JsonResponse({'error': 'Thiết bị không tồn tại'}, status=404)
+    device = {f.attname: _cell(f.name, getattr(d, f.attname)) for f in Device._meta.concrete_fields}
+    device['owner'] = _brief(d.owner)
+    status = [{'time': _iso(s.recorded_at), 'battery': s.battery_level, 'lock': s.lock_state,
+               'tamper': s.tamper_detected, 'temp': str(s.temperature) if s.temperature is not None else None,
+               'signal': s.signal_strength}
+              for s in DeviceStatusLog.objects.filter(device=d).order_by('-recorded_at')[:20]]
+    commands = [{'time': _iso(c.created_at), 'type': c.command_type, 'status': c.status,
+                 'by': c.issued_by.username, 'ack': _iso(c.acknowledged_at)}
+                for c in DeviceCommand.objects.filter(device=d).select_related('issued_by').order_by('-created_at')[:10]]
+    events = [{'time': _iso(a.created_at), 'kind': a.kind, 'what': a.action or a.event_type or a.method,
+               'ok': a.success, 'sev': a.severity, 'ip': a.ip_address}
+              for a in ActivityLog.objects.filter(device=d).exclude(kind='STATUS').order_by('-created_at')[:20]]
+    return JsonResponse({'device': device, 'status_logs': status, 'commands': commands, 'events': events})
+
+
+def _ago(dt, now):
+    if not dt:
+        return 'chưa từng'
+    n = int((now - dt).total_seconds())
+    return (f'{n} giây' if n < 60 else f'{n // 60} phút' if n < 3600
+            else f'{n // 3600} giờ' if n < 86400 else f'{n // 86400} ngày')
+
+
+@_guard
+def alerts_api(request):
+    """Cảnh báo chi tiết: danh sách hợp nhất theo mức độ + xu hướng 24 giờ + bảng phân tích nguyên nhân."""
+    now = timezone.now()
+    d24 = now - timedelta(hours=24)
+    A = []
+
+    def add(sev, cat, title, detail, time=None, ref=None):
+        A.append({'sev': sev, 'cat': cat, 'title': title, 'detail': detail, 'time': _iso(time), 'ref': ref or {}})
+
+    # ---- thiết bị ----
+    devices = []
+    for d in Device.objects.select_related('owner').exclude(status__in=('provisioning', 'revoked')).order_by('name')[:300]:
+        st = DeviceStatusLog.objects.filter(device=d).order_by('-recorded_at').first()
+        tam = (DeviceStatusLog.objects.filter(device=d, tamper_detected=True).order_by('-recorded_at').first()
+               if st and st.tamper_detected else None)
+        age = (now - d.last_seen_at).total_seconds() if d.last_seen_at else None
+        issues = []
+        owner = d.owner.username if d.owner else 'chưa có chủ'
+        if st and st.tamper_detected:
+            issues.append('tamper')
+            add('critical', 'device', f'Thiết bị bị tháo: {d.name}',
+                f'Cảm biến chống tháo đang kích hoạt (ghi nhận lúc {fmt_time(tam.recorded_at) if tam else "?"}). '
+                f'Chủ khóa: {owner}. Pin {d.battery_level}%.', tam.recorded_at if tam else None,
+                {'device': str(d.id), 'code': d.device_code})
+        if age is None or age > services.OFFLINE_AFTER_SECONDS:
+            issues.append('stale')
+            long_ = age is None or age > 86400
+            add('warning' if long_ else 'info', 'device', f'Mất tín hiệu: {d.name}',
+                f'Lần cuối thấy thiết bị: {_ago(d.last_seen_at, now)} trước (ngưỡng offline {services.OFFLINE_AFTER_SECONDS}s). '
+                f'Trạng thái: {d.status}; pin {d.battery_level}%; chủ khóa: {owner}.', d.last_seen_at,
+                {'device': str(d.id), 'code': d.device_code})
+        if d.battery_level < 20:
+            issues.append('low_battery')
+            add('critical' if d.battery_level < 10 else 'warning', 'device', f'Pin yếu: {d.name}',
+                f'Pin còn {d.battery_level}%. Cần thay pin/sạc trước khi thiết bị tắt.', None,
+                {'device': str(d.id), 'code': d.device_code})
+        if issues:
+            devices.append({'id': str(d.id), 'name': d.name, 'code': d.device_code, 'issues': issues,
+                            'battery': d.battery_level, 'fw': d.firmware_version, 'mode': d.device_mode,
+                            'status': d.status, 'lock': st.lock_state if st else None,
+                            'temp': str(st.temperature) if st and st.temperature is not None else None,
+                            'signal': st.signal_strength if st else None, 'owner': d.owner.username if d.owner else None,
+                            'last_seen': _iso(d.last_seen_at), 'offline_for': _ago(d.last_seen_at, now)})
+
+    # ---- đăng nhập ----
+    fails = _login_attempts().filter(action__in=_LOGIN_FAIL_ACTIONS, created_at__gte=d24)
+    suspect_ips = [{'ip': r['ip_address'], 'n': r['n'], 'accounts': r['accounts'], 'last': _iso(r['last'])}
+                   for r in fails.exclude(ip_address__isnull=True).values('ip_address')
+                   .annotate(n=Count('id'), accounts=Count('username_attempt', distinct=True), last=Max('created_at'))
+                   .filter(n__gte=3).order_by('-n')[:15]]
+    for r in suspect_ips:
+        add('critical' if r['n'] >= 10 or r['accounts'] >= 3 else 'warning', 'login',
+            f'IP đăng nhập sai nhiều lần: {r["ip"]}',
+            f'{r["n"]} lần sai trong 24 giờ, thử {r["accounts"]} tài khoản khác nhau'
+            + (' (dấu hiệu dò tài khoản).' if r['accounts'] >= 3 else '.'), None, {'ip': r['ip']})
+    top_accounts = [{'account': r['username_attempt'], 'n': r['n'], 'ips': r['ips'], 'last': _iso(r['last'])}
+                    for r in fails.exclude(username_attempt__isnull=True).exclude(username_attempt='')
+                    .values('username_attempt').annotate(n=Count('id'), ips=Count('ip_address', distinct=True),
+                                                         last=Max('created_at'))
+                    .filter(n__gte=2).order_by('-n')[:10]]
+    locked = [{**_brief(u), 'until': _iso(u.login_locked_until), 'attempts': u.login_failed_attempts,
+               'stage': u.login_lock_stage, 'ip': u.login_last_failed_ip, 'last_failed': _iso(u.login_last_failed_at)}
+              for u in User.objects.filter(login_locked_until__gt=now).order_by('-login_locked_until')[:30]]
+    for u in locked:
+        add('warning', 'account', f'Tài khoản bị khóa đăng nhập: {u["email"]}',
+            f'Sai {u["attempts"]} lần (mức khóa {u["stage"]}), IP gần nhất {u["ip"] or "—"}; khóa đến {u["until"]}.',
+            None, {'user': u['id']})
+    for u in User.objects.filter(Q(is_admin=True) | Q(is_superuser=True), two_fa_enabled=False, is_active=True)[:20]:
+        add('warning', 'account', f'Quản trị viên chưa bật 2FA: {u.email}',
+            'Tài khoản có quyền quản trị nhưng chưa bật xác thực hai lớp.', None, {'user': str(u.pk)})
+
+    # ---- sự kiện nghiêm trọng, ra vào, NFC ----
+    crit_qs = ActivityLog.objects.filter(severity='critical', created_at__gte=d24)
+    critical = []
+    for a in crit_qs.select_related('device', 'actor_user', 'user', 'target_user').order_by('-created_at')[:25]:
+        who = a.actor_user or a.user or a.target_user
+        row = {'time': _iso(a.created_at), 'kind': a.kind, 'what': a.action or a.event_type or a.method or '',
+               'who': who.username if who else a.username_attempt, 'device': a.device.name if a.device else None,
+               'ip': a.ip_address, 'reason': a.reason}
+        critical.append(row)
+        add('critical', 'event', f'Sự kiện nghiêm trọng: {row["what"] or a.kind}',
+            f'Loại {a.kind}; người: {row["who"] or "—"}; thiết bị: {row["device"] or "—"}; IP: {row["ip"] or "—"}'
+            + (f'; lý do: {a.reason}' if a.reason else '.'), a.created_at, {'id': str(a.id)})
+    access_fail = [{'device': r['device__name'], 'method': r['method'], 'reason': r['reason'], 'n': r['n']}
+                   for r in ActivityLog.objects.filter(kind='ACCESS', success=False, created_at__gte=d24)
+                   .values('device__name', 'method', 'reason').annotate(n=Count('id')).order_by('-n')[:15]]
+    for r in access_fail:
+        if r['n'] >= 3:
+            add('warning', 'access', f'Mở khóa thất bại nhiều lần: {r["device"] or "?"}',
+                f'{r["n"]} lần qua kênh {r["method"] or "?"} trong 24 giờ; lý do: {r["reason"] or "không rõ"}.', None,
+                {'device_name': r['device']})
+    nfc_fail = [{'device': r['device__name'], 'event': r['event_type'], 'n': r['n']}
+                for r in NfcLog.objects.filter(success=False, created_at__gte=d24)
+                .values('device__name', 'event_type').annotate(n=Count('id')).order_by('-n')[:15]]
+    for r in nfc_fail:
+        if r['n'] >= 5:
+            add('warning', 'nfc', f'NFC thất bại nhiều: {r["device"] or "?"}',
+                f'{r["n"]} lần "{r["event"] or "không rõ"}" trong 24 giờ (có thể thẻ lạ hoặc đầu đọc lỗi).', None,
+                {'device_name': r['device']})
+
+    # ---- lệnh điều khiển ----
+    cmds = [{'time': _iso(c.created_at), 'device': c.device.name, 'type': c.command_type, 'status': c.status,
+             'by': c.issued_by.username, 'expires': _iso(c.expires_at)}
+            for c in DeviceCommand.objects.filter(created_at__gte=d24, status__in=('failed', 'expired'))
+            .select_related('device', 'issued_by').order_by('-created_at')[:25]]
+    for c in cmds[:10]:
+        add('warning', 'command', f'Lệnh {c["type"]} {c["status"]}: {c["device"]}',
+            f'Người gửi {c["by"]}; hết hạn {c["expires"]}.', None, {})
+
+    # ---- cấu hình thiếu ----
+    for k in ENV_KEYS:
+        if not os.environ.get(k):
+            add('warning', 'config', f'Thiếu biến cấu hình: {k}', 'Biến môi trường chưa được đặt.', None, {})
+
+    # ---- xu hướng 24 giờ ----
+    hour0 = now.replace(minute=0, second=0, microsecond=0)
+    hours = [hour0 - timedelta(hours=i) for i in range(23, -1, -1)]
+
+    def series(qs):
+        m = {r['h']: r['n'] for r in qs.annotate(h=TruncHour('created_at')).values('h').annotate(n=Count('id'))}
+        return [m.get(h, 0) for h in hours]
+
+    trend = {'hours': [h.strftime('%H:00') for h in hours],
+             'login_fail': series(fails),
+             'access_fail': series(ActivityLog.objects.filter(kind='ACCESS', success=False, created_at__gte=d24)),
+             'nfc_fail': series(NfcLog.objects.filter(success=False, created_at__gte=d24)),
+             'critical': series(crit_qs)}
+
+    order = {'critical': 0, 'warning': 1, 'info': 2}
+    A.sort(key=lambda x: (order[x['sev']], x['time'] is None, '' if not x['time'] else
+                          ''.join(chr(255 - ord(ch)) for ch in x['time'])))
+    for i, x in enumerate(A):
+        x['id'] = i
+    by_sev = {k: sum(1 for x in A if x['sev'] == k) for k in order}
+    by_cat = {}
+    for x in A:
+        by_cat[x['cat']] = by_cat.get(x['cat'], 0) + 1
+    return JsonResponse({
+        'server_time': now.isoformat(), 'by_sev': by_sev, 'by_cat': by_cat, 'alerts': A, 'trend': trend,
+        'devices': devices, 'suspect_ips': suspect_ips, 'top_accounts': top_accounts, 'locked_users': locked,
+        'access_fail': access_fail, 'nfc_fail': nfc_fail, 'critical': critical, 'commands': cmds})
+
+
+def fmt_time(dt):
+    return timezone.localtime(dt).strftime('%d/%m/%Y %H:%M:%S') if dt else '?'

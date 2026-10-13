@@ -92,10 +92,19 @@ def _burn_password_check(password):
     check_password(password, _DUMMY_HASH)
 
 
+
+def _rp(request):
+    """(rp_id, origin, rp_name) lấy từ CẤU HÌNH (.env): WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN, mặc định theo SERVER_URL.
+    Không phụ thuộc Host/Origin do proxy-tunnel gửi vào => chạy đúng cả local, devtunnel lẫn Vercel.
+    Người dùng phải mở web đúng địa chỉ SERVER_URL (hoặc subdomain của WEBAUTHN_RP_ID)."""
+    from django.conf import settings as _st
+    return _st.WEBAUTHN_RP_ID, _st.WEBAUTHN_ORIGIN, _st.WEBAUTHN_RP_NAME
+
+
 def _passkeys_here(user, request=None):
     """Passkey dùng được trên tên miền ĐANG CHẠY (rp_id trùng RP ID hiện tại; rp_id rỗng/NULL = bản cũ, coi như dùng được).
     Passkey gắn chặt với tên miền: đăng ký ở devtunnel thì không dùng được ở Vercel và ngược lại."""
-    rp_id = services.webauthn_rp(request)[0]
+    rp_id = _rp(request)[0]
     return Fido2Credential.objects.filter(user=user).filter(Q(rp_id=rp_id) | Q(rp_id='') | Q(rp_id__isnull=True))
 
 
@@ -377,7 +386,7 @@ def two_factor_passkey_options(request):
              for c in _passkeys_here(user, request)]
     if not creds:
         raise ApiError('NO_PASSKEY', 'Tài khoản chưa có passkey đăng ký ở địa chỉ này.', 400)
-    rp_id, _origin, _name = services.webauthn_rp(request)
+    rp_id, _origin, _name = _rp(request)
     options = generate_authentication_options(rp_id=rp_id, allow_credentials=creds,
                                               user_verification=UserVerificationRequirement.PREFERRED)
     request.session['webauthn_auth'] = {'challenge': bytes_to_base64url(options.challenge),
@@ -405,7 +414,7 @@ def two_factor_passkey_finish(request):
     credential = data.get('credential')
     credential = credential if isinstance(credential, dict) else {}
     cred = _passkeys_here(user, request).filter(credential_id=credential.get('id') or '').first()
-    rp_id, origin, _name = services.webauthn_rp(request)
+    rp_id, origin, _name = _rp(request)
     good = False
     if cred:
         try:
@@ -889,7 +898,7 @@ def email_confirm(request):
 def passkey_options(request):
     _web_only(request)
     user = request.user
-    rp_id, _origin, rp_name = services.webauthn_rp(request)
+    rp_id, _origin, rp_name = _rp(request)
     options = generate_registration_options(
         rp_id=rp_id, rp_name=rp_name, user_id=user.pk.bytes, user_name=user.email,
         user_display_name=user.full_name or user.username,
@@ -911,15 +920,19 @@ def passkey_register(request):
     if not state or int(timezone.now().timestamp()) - int(state.get('ts', 0)) > services.WEBAUTHN_TTL:
         raise ApiError('PASSKEY_EXPIRED', 'Yêu cầu không hợp lệ hoặc đã hết hạn. Hãy thử lại.', 400)
     credential = data.get('credential') if isinstance(data.get('credential'), dict) else {}
-    rp_id, origin, _name = services.webauthn_rp(request)
+    rp_id, origin, _name = _rp(request)
     try:
         v = verify_registration_response(credential=credential,
                                          expected_challenge=base64url_to_bytes(state['challenge']),
                                          expected_rp_id=rp_id, expected_origin=origin,
                                          require_user_verification=False)
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.getLogger('smartlock').exception('PASSKEY_REGISTER_FAILED rp_id=%s origin=%s', rp_id, origin)
         services.audit(request, 'PASSKEY_REGISTER_FAILED', success=False, severity='warning', target_user=user)
-        raise ApiError('PASSKEY_INVALID', 'Không xác minh được passkey.', 400)
+        from django.conf import settings as _st
+        _why = f' [{type(exc).__name__}: {exc}]' if _st.DEBUG else ''
+        raise ApiError('PASSKEY_INVALID', 'Không xác minh được passkey.' + _why, 400)
     cred_id = bytes_to_base64url(v.credential_id)
     if len(cred_id) > 512 or Fido2Credential.objects.filter(credential_id=cred_id).exists():
         raise ApiError('PASSKEY_EXISTS', 'Passkey này đã được đăng ký.', 409)

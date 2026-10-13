@@ -1,0 +1,8 @@
+account: 	https://d81h6zk7-8000.asse.devtunnels.ms/
+		127.0.0.1:8000
+admin:		https://d81h6zk7-8000.asse.devtunnels.ms/manage-sys
+		127.0.0.1:8000//manage-sys
+real devide:	https://d81h6zk7-8080.asse.devtunnels.ms/
+		http://127.0.0.1:8080/
+demolog:	https://d81h6zk7-8000.asse.devtunnels.ms/system-logs/
+		http://127.0.0.1:8000/demo/system-logs/

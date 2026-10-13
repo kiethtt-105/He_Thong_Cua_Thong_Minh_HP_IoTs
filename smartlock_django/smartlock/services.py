@@ -1614,11 +1614,7 @@ def save_user_avatar(user, raw: bytes) -> None:
     user.avatar_updated_at = now
 
 
-def clear_user_avatar(user) -> None:
-    """Gỡ cả ảnh tải lên lẫn avatar_url cũ -> quay về ảnh mặc định."""
-    from .models import User, UserAvatar
-    UserAvatar.objects.filter(user=user).delete()
-    User.objects.filter(pk=user.pk).update(avatar_updated_at=None, avatar_url=None, updated_at=timezone.now())
-    user.avatar_updated_at = None
-    user.avatar_url = None
-
+def clear_user_avatar(user):
+    from .models import UserAvatar
+    UserAvatar.objects.filter(user_id=user.pk).delete()
+    User.objects.filter(pk=user.pk).update(avatar_updated_at=None, updated_at=timezone.now())

@@ -13,29 +13,39 @@ function slTheme(){var r=document.documentElement,dk=r.dataset.theme?r.dataset.t
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#000;--card:#1c1c1e;--card2:#2c2c2e;--ink:#fff;--mut:#98989f;--line:rgba(84,84,88,.5);--soft:rgba(120,120,128,.24);--ok:#30d158;--bad:#ff453a;--warn:#ff9f0a;--sh:none;--glow:rgba(10,132,255,.22)}}
 :root[data-theme=dark]{color-scheme:dark;--bg:#000;--card:#1c1c1e;--card2:#2c2c2e;--ink:#fff;--mut:#98989f;--line:rgba(84,84,88,.5);--soft:rgba(120,120,128,.24);--ok:#30d158;--bad:#ff453a;--warn:#ff9f0a;--sh:none;--glow:rgba(10,132,255,.22)}
 *{box-sizing:border-box}html,body{height:100%;margin:0}html{scroll-behavior:smooth}
-body{font:15px/1.5 "Plus Jakarta Sans",-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;display:grid;grid-template-rows:auto 1fr;grid-template-columns:230px 1fr}
+body{font:15px/1.5 "Plus Jakarta Sans",-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums;display:flex;flex-direction:column;overflow:hidden}
 :focus-visible,#rail button:focus-visible,#sub button:focus-visible,.sd button:focus-visible{outline:2px solid var(--a);outline-offset:2px}
 ::selection{background:var(--glow)}
 /* ---- thanh trên (giống .tnav của app người dùng) ---- */
-header{grid-column:1/3;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px clamp(14px,3vw,36px);background:color-mix(in srgb,var(--bg) 78%,transparent);backdrop-filter:saturate(180%) blur(22px);border-bottom:1px solid var(--line);position:relative;z-index:3}
-h1{font-size:18px;margin:0 6px 0 0;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
+header{flex:none;display:flex;gap:8px;align-items:center;padding:12px clamp(14px,3vw,36px);background:color-mix(in srgb,var(--bg) 78%,transparent);backdrop-filter:saturate(180%) blur(22px);border-bottom:1px solid var(--line);position:relative;z-index:3}
+h1{font-size:19px;margin:0 14px 0 0;white-space:nowrap;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
 h1::before{content:"";width:34px;height:34px;border-radius:11px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='11' width='16' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E") center/18px no-repeat,linear-gradient(135deg,var(--a),var(--a2))}
 .bd{display:inline-flex;align-items:center;padding:4px 11px;border:0;border-radius:99px;font:700 12px/1.5 inherit;background:var(--soft);color:var(--mut)}
 button.bd{cursor:pointer;color:var(--ink)}button.bd:hover{background:color-mix(in srgb,var(--ink) 9%,var(--soft))}
 .bd.ro{background:color-mix(in srgb,var(--a) 14%,transparent);color:var(--a)}
 .bd.bad{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
-#clock{margin-left:auto;font:600 14px ui-monospace,Consolas,monospace;color:var(--mut)}
+#clock{font:600 14px ui-monospace,Consolas,monospace;color:var(--mut)}
 #sync::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:8px}
 #sync.ld::before{background:var(--warn);animation:pulse 1s ease-in-out infinite}#sync.bad::before{background:var(--warn)}
 @keyframes pulse{50%{transform:scale(1.7);opacity:.35}}
-/* ---- cột nhóm chức năng (giống thanh bên của trang quản trị) ---- */
-#rail{padding:14px 12px;border-right:1px solid var(--line);background:var(--card);display:flex;flex-direction:column;gap:4px;overflow:auto;position:relative;z-index:2}
-#rail button{all:unset;cursor:pointer;padding:10px 14px;border-radius:14px;color:var(--mut);font-size:14px;font-weight:600;transition:background .15s,color .15s}
+/* ---- thanh tab trên cùng (giống thanh điều hướng của app người dùng) ---- */
+#rail{display:flex;gap:2px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none}
+#rail::-webkit-scrollbar{display:none}
+#rail button{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:99px;color:var(--mut);font-size:14px;font-weight:600;white-space:nowrap;transition:background .15s,color .15s}
+#rail button svg,.ib svg{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #rail button:hover{background:var(--soft);color:var(--ink)}
-#rail button[aria-selected=true]{background:var(--soft);color:var(--a)}
+#rail button[aria-selected=true]{background:var(--soft);color:var(--ink)}
+/* nút sáng/tối tròn như app người dùng */
+.ib{all:unset;cursor:pointer;flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--soft);color:var(--ink);transition:background .15s,transform .15s}
+.ib:hover{background:color-mix(in srgb,var(--ink) 12%,var(--soft))}.ib:active{transform:scale(.94)}.ib svg{width:20px;height:20px}
+.ib .sun{display:none}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]) .ib .sun{display:block}:root:not([data-theme=light]) .ib .moon{display:none}}
+:root[data-theme=dark] .ib .sun{display:block}:root[data-theme=dark] .ib .moon{display:none}
 /* ---- tab nhỏ: dạng segmented như .tabs của app người dùng ---- */
 #wrap{display:flex;flex-direction:column;min-width:0;min-height:0}
-#sub{display:flex;gap:2px;flex:none;width:fit-content;max-width:calc(100% - 2*clamp(14px,3vw,36px));margin:18px clamp(14px,3vw,36px) 0;padding:3px;background:var(--soft);border-radius:14px;overflow-x:auto}
+#top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:18px clamp(14px,3vw,36px) 0}
+#stat{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#sub{display:flex;gap:2px;flex:none;width:fit-content;max-width:100%;margin:0;padding:3px;background:var(--soft);border-radius:14px;overflow-x:auto}
 #sub:empty{display:none}
 #sub button{all:unset;cursor:pointer;padding:8px 16px;border-radius:11px;color:var(--mut);font-weight:600;font-size:14px;white-space:nowrap;transition:background .15s,color .15s}
 #sub button:hover{color:var(--ink)}
@@ -85,21 +95,26 @@ tr.dt pre{animation:dn .25s var(--e)}@keyframes dn{from{opacity:0;transform:tran
 #o:empty,#b:empty{min-height:220px;border-radius:var(--r);background:linear-gradient(90deg,var(--soft),color-mix(in srgb,var(--soft) 35%,transparent),var(--soft));background-size:220% 100%;animation:sk 1.3s linear infinite}
 @keyframes sk{from{background-position:100% 0}to{background-position:0 0}}
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(120,120,128,.4);border-radius:9px;border:2px solid transparent;background-clip:content-box}
-@media(max-width:800px){body{grid-template-columns:1fr}header{grid-column:1}#rail{flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:8px 12px}.sp{flex-direction:column}.sd{width:100%;max-height:200px}}
+@media(max-width:800px){header{flex-wrap:wrap}h1{margin-right:auto}#rail{order:3;flex-basis:100%}#stat{margin-left:0}.sp{flex-direction:column}.sd{width:100%;max-height:200px}}
 @media(prefers-reduced-motion:reduce){*,*::before{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
 </style>
 </head>
 <body>
 <header>
   <h1>Giám sát toàn hệ thống</h1>
-  <span class="bd ro">Chỉ xem · không ghi dữ liệu</span>
-  <span class="bd" id="dbi">DB…</span>
-  <span class="bd" id="sync">đang tải…</span>
-  <span id="clock"></span>
-  <button class="bd" id="th" type="button" onclick="slTheme()" aria-label="Sáng / tối">◐ Sáng / tối</button>
+  <nav id="rail" role="tablist" aria-label="Nhóm chức năng"></nav>
+  <button class="ib" id="th" type="button" onclick="slTheme()" aria-label="Sáng / tối" title="Sáng / tối">
+    <svg class="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    <svg class="moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+  </button>
 </header>
-<nav id="rail" role="tablist" aria-label="Nhóm chức năng"></nav>
-<div id="wrap"><div id="sub" role="tablist" aria-label="Tab nhỏ"></div><div id="pane"></div></div>
+<div id="wrap">
+  <div id="top">
+    <div id="sub" role="tablist" aria-label="Tab nhỏ"></div>
+    <div id="stat"><span class="bd" id="dbi">DB…</span><span class="bd" id="sync">đang tải…</span><span id="clock"></span></div>
+  </div>
+  <div id="pane"></div>
+</div>
 
 <script>
 const $=s=>document.querySelector(s),BASE=location.pathname.replace(/\/?$/,'/');
@@ -131,14 +146,16 @@ setInterval(()=>{if(!document.hidden&&REF)REF()},10000);
 
 /* ---- cấu trúc tab ---- */
 const G={
- ov:{n:'🏠 Tổng quan',s:[['kpi','Chỉ số chính'],['act','Hoạt động 24 giờ'],['cfg','Cấu hình & sức khỏe']]},
- dv:{n:'🔒 Thiết bị',s:[['all','Tất cả'],['physical','Khóa vật lý'],['simulated','Khóa ảo'],['alert','Cảnh báo']]},
- ev:{n:'📜 Nhật ký',s:[['all','Tất cả'],['AUDIT','Audit'],['ACCESS','Ra vào'],['NFC','NFC'],['STATUS','Trạng thái thiết bị'],['fail','Thất bại']]},
- ad:{n:'👤 Quản trị',s:[['users','Người dùng'],['logins','Lượt đăng nhập'],['ann','Thông báo hệ thống'],['cfg','Cấu hình & phân quyền']]},
- ch:{n:'🔌 API & kênh',s:[['api','Endpoint API'],['cmd','Lệnh MQTT'],['ses','Phiên app']]},
- db:{n:'🗄️ Cơ sở dữ liệu',s:[['app','Dữ liệu ứng dụng'],['sys','Django & bảo mật']]}};
+ ov:{n:'Tổng quan',s:[['kpi','Chỉ số chính'],['act','Hoạt động 24 giờ'],['cfg','Cấu hình & sức khỏe'],['alert','Cảnh báo']]},
+ dv:{n:'Thiết bị',s:[['all','Tất cả'],['physical','Khóa vật lý'],['simulated','Khóa ảo'],['alert','Cảnh báo']]},
+ ev:{n:'Nhật ký',s:[['all','Tất cả'],['AUDIT','Audit'],['ACCESS','Ra vào'],['NFC','NFC'],['STATUS','Trạng thái thiết bị'],['fail','Thất bại']]},
+ ad:{n:'Quản trị',s:[['users','Người dùng'],['logins','Lượt đăng nhập'],['ann','Thông báo hệ thống'],['cfg','Cấu hình & phân quyền']]},
+ ch:{n:'API & kênh',s:[['api','Endpoint API'],['cmd','Lệnh MQTT'],['ses','Phiên app']]},
+ db:{n:'Cơ sở dữ liệu',s:[['app','Dữ liệu ứng dụng'],['sys','Django & bảo mật']]}};
+const SV=p=>`<svg viewBox="0 0 24 24" aria-hidden="true">${p}</svg>`;
+const IC={ov:SV('<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>'),dv:SV('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),ev:SV('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),ad:SV('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),ch:SV('<path d="M3 12h4l3-8 4 16 3-8h4"/>'),db:SV('<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>')};
 function nav(){
-  $('#rail').innerHTML=Object.entries(G).map(([k,g])=>`<button role="tab" data-g="${k}" aria-selected="${k===ST.g}">${g.n}</button>`).join('');
+  $('#rail').innerHTML=Object.entries(G).map(([k,g])=>`<button role="tab" data-g="${k}" aria-selected="${k===ST.g}">${IC[k]}${g.n}</button>`).join('');
   $('#sub').innerHTML=G[ST.g].s.map(([k,n])=>`<button role="tab" data-s="${k}" aria-selected="${k===ST.s[ST.g]}">${n}</button>`).join('');
   $('#rail').querySelectorAll('button').forEach(b=>b.onclick=()=>go(b.dataset.g));
   $('#sub').querySelectorAll('button').forEach(b=>b.onclick=()=>go(ST.g,b.dataset.s));
@@ -152,6 +169,7 @@ const V={};
 
 /* ================= TỔNG QUAN ================= */
 V.ov=s=>{
+  if(s==='alert')return ALERTS();
   $('#pane').innerHTML='<div id="o"></div>';
   const draw=(j,e)=>{const o=$('#o');if(!j){o.textContent=e;return}
     const d=j.devices,u=j.users,k=j.kinds,f=j.fail24,c=j.commands,st=d.filter(x=>x.stale).length,tp=d.filter(x=>x.tamper).length;
@@ -171,6 +189,43 @@ V.ov=s=>{
     else o.innerHTML=tg('Cơ sở dữ liệu',tile(j.db.vendor,'loại DB','a')+tile(j.db.latency_ms+' ms','độ trễ truy vấn',j.db.latency_ms>1000?'w':'g',j.db.latency_ms>1000?'DB ở xa nên trang lưu cache trong tab':'')+tile(j.db.tables,'số bảng'))+
       tg('Biến cấu hình (chỉ báo đã đặt hay chưa)',Object.entries(j.config).map(([a,b])=>tile(b?'Đã đặt':'THIẾU',a,b?'g':'r')).join(''))};
   REF=()=>load('overview/',{},draw);REF()};
+
+/* ================= CẢNH BÁO ================= */
+const SEV={critical:['Nghiêm trọng','er'],warning:['Cảnh báo','wa'],info:['Thông tin','']};
+const CAT={device:'Thiết bị',login:'Đăng nhập',account:'Tài khoản',event:'Sự kiện',access:'Ra vào',nfc:'NFC',command:'Lệnh',config:'Cấu hình'};
+function ALERTS(){
+  const f=flt('al',{sev:'',cat:'',q:''});let J=null;
+  $('#pane').innerHTML=`<div id="o"></div>`;
+  const tbl=(h,rows,empty)=>`<div class="tw" style="max-height:none"><table><thead><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows||none(h.length,empty)}</tbody></table></div>`;
+  const IS={tamper:['bị tháo','er'],stale:['mất tín hiệu','wa'],low_battery:['pin yếu','wa']};
+  const chart=t=>{const S=[['login_fail','Đăng nhập sai','#ff9500'],['access_fail','Mở khóa thất bại','#5e5ce6'],['nfc_fail','NFC thất bại','#32ade6'],['critical','Nghiêm trọng','#ff3b30']],W=760,H=150,n=t.hours.length,bw=W/n;let mx=1;
+    for(let i=0;i<n;i++)mx=Math.max(mx,S.reduce((a,x)=>a+t[x[0]][i],0));
+    let sv=`<svg viewBox="0 0 ${W} ${H+18}" width="100%" role="img" aria-label="Xu hướng bất thường theo giờ">`;
+    for(let i=0;i<n;i++){let y=H;for(const[k,nm,c]of S){const v=t[k][i],h=v/mx*H;y-=h;sv+=`<rect x="${i*bw+1}" y="${y}" width="${bw-2}" height="${h}" fill="${c}"><title>${t.hours[i]} · ${nm}: ${v}</title></rect>`}if(i%3===0)sv+=`<text x="${i*bw}" y="${H+13}" font-size="11" fill="#8e8e93">${t.hours[i]}</text>`}
+    return `<div class="bx"><h3>Xu hướng bất thường theo giờ (cao nhất ${mx}/giờ)</h3>${sv}</svg><div style="margin-top:8px">${S.map(x=>`<span class="ch"><i style="color:${x[2]}">■</i>${x[1]}</span>`).join('')}</div></div>`};
+  const list=()=>{const q=f.q.toLowerCase(),r=J.alerts.filter(a=>(!f.sev||a.sev===f.sev)&&(!f.cat||a.cat===f.cat)&&(!q||(a.title+' '+a.detail).toLowerCase().includes(q)));
+    $('#an').textContent=`${r.length}/${J.alerts.length} cảnh báo`;
+    $('#ab').innerHTML=r.map((a,i)=>`<tr class="rw" data-i="${i}"><td>${pill(SEV[a.sev][0],SEV[a.sev][1])}</td><td>${CAT[a.cat]||a.cat}</td><td style="max-width:260px">${esc(a.title)}</td><td style="max-width:520px" title="${esc(a.detail)}">${esc(a.detail)}</td><td>${a.time?ago(a.time):'—'}</td></tr>`).join('')||none(5,J.alerts.length?'Không có cảnh báo khớp bộ lọc.':'Hệ thống bình thường, không có cảnh báo.');
+    $('#ab').onclick=e=>{const tr=e.target.closest('tr.rw');if(tr)detail(tr,r[tr.dataset.i])}};
+  const draw=(j,e)=>{const o=$('#o');if(!j){o.textContent=e;return}J=j;const b=j.by_sev,c=j.by_cat;
+    const ok=!b.critical&&!b.warning;
+    o.innerHTML=tg('Mức độ',tile(b.critical,'nghiêm trọng',b.critical?'r':'g')+tile(b.warning,'cảnh báo',b.warning?'w':'g')+tile(b.info,'thông tin','a')+tile(ok?'Ổn định':'Cần xem','đánh giá chung',ok?'g':b.critical?'r':'w','cập nhật '+fmt(j.server_time)))+
+    tg('Theo nhóm',Object.keys(CAT).map(k=>tile(c[k]||0,CAT[k],(c[k]||0)?'w':'g')).join(''))+
+    chart(j.trend)+
+    `<h3>Tất cả cảnh báo</h3><div class="bar"><label>Mức<select id="fs"><option value="">Mọi mức</option><option value="critical">Nghiêm trọng</option><option value="warning">Cảnh báo</option><option value="info">Thông tin</option></select></label><label>Nhóm<select id="fc2"><option value="">Mọi nhóm</option>${Object.entries(CAT).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></label><label>Tìm<input id="fq" value="${esc(f.q)}" placeholder="tên thiết bị, IP, tài khoản..."></label><span class="mu" id="an"></span></div>`+
+    `<div class="tw" style="max-height:none"><table><thead><tr><th>Mức</th><th>Nhóm</th><th>Cảnh báo</th><th>Chi tiết</th><th>Thời điểm</th></tr></thead><tbody id="ab"></tbody></table></div><p class="mu">Bấm vào một dòng để xem dữ liệu đầy đủ.</p>`+
+    `<h3>Thiết bị có vấn đề</h3>`+tbl(['Thiết bị','Vấn đề','Pin','Khóa','Nhiệt độ','Sóng','Firmware','Chủ khóa','Mất tín hiệu'],j.devices.map(x=>`<tr><td>${esc(x.name)}<br><code>${esc(x.code)}</code></td><td>${x.issues.map(i=>pill(IS[i][0],IS[i][1])).join(' ')}</td><td class="${x.battery<20?'er':''}">${x.battery}%</td><td>${esc(x.lock||'—')}</td><td>${x.temp??'—'}</td><td>${x.signal??'—'}</td><td>${esc(x.fw||'—')}</td><td>${esc(x.owner||'—')}</td><td title="${fmt(x.last_seen)}">${x.last_seen?esc(x.offline_for)+' trước':'chưa bao giờ'}</td></tr>`).join(''),'Tất cả thiết bị đều bình thường.')+
+    `<h3>IP đăng nhập sai (24 giờ, từ 3 lần)</h3>`+tbl(['IP','Số lần sai','Số tài khoản thử','Lần gần nhất'],j.suspect_ips.map(x=>`<tr><td><code>${esc(x.ip)}</code></td><td class="er">${x.n}</td><td class="${x.accounts>2?'er':''}">${x.accounts}</td><td>${fmt(x.last)}</td></tr>`).join(''),'Không có IP đáng ngờ.')+
+    `<h3>Tài khoản bị thử mật khẩu nhiều nhất (24 giờ)</h3>`+tbl(['Tài khoản thử','Số lần sai','Số IP khác nhau','Lần gần nhất'],j.top_accounts.map(x=>`<tr><td>${esc(x.account)}</td><td class="er">${x.n}</td><td>${x.ips}</td><td>${fmt(x.last)}</td></tr>`).join(''),'Không có tài khoản nào bị thử nhiều lần.')+
+    `<h3>Tài khoản đang bị khóa đăng nhập</h3>`+tbl(['Tài khoản','Số lần sai','Mức khóa','IP sai gần nhất','Sai lần cuối','Khóa đến'],j.locked_users.map(x=>`<tr><td>${avc(x)}</td><td>${x.attempts}</td><td>${x.stage}</td><td>${esc(x.ip||'—')}</td><td>${fmt(x.last_failed)}</td><td>${fmt(x.until)}</td></tr>`).join(''),'Không có tài khoản bị khóa.')+
+    `<h3>Mở khóa thất bại theo thiết bị / kênh / lý do (24 giờ)</h3>`+tbl(['Thiết bị','Kênh','Lý do','Số lần'],j.access_fail.map(x=>`<tr><td>${esc(x.device||'—')}</td><td>${esc(x.method||'—')}</td><td>${esc(x.reason||'không rõ')}</td><td class="${x.n>=3?'er':''}">${x.n}</td></tr>`).join(''),'Không có lượt mở khóa thất bại.')+
+    `<h3>NFC thất bại (24 giờ)</h3>`+tbl(['Thiết bị','Sự kiện','Số lần'],j.nfc_fail.map(x=>`<tr><td>${esc(x.device||'—')}</td><td>${esc(x.event||'—')}</td><td class="${x.n>=5?'er':''}">${x.n}</td></tr>`).join(''),'Không có NFC thất bại.')+
+    `<h3>Sự kiện nghiêm trọng (24 giờ)</h3>`+tbl(['Thời gian','Loại','Sự kiện','Người','Thiết bị','IP','Lý do'],j.critical.map(x=>`<tr><td>${fmt(x.time)}</td><td>${x.kind}</td><td>${esc(x.what||'—')}</td><td>${esc(x.who||'—')}</td><td>${esc(x.device||'—')}</td><td>${esc(x.ip||'—')}</td><td>${esc(x.reason||'—')}</td></tr>`).join(''),'Không có sự kiện nghiêm trọng.')+
+    `<h3>Lệnh thất bại / hết hạn (24 giờ)</h3>`+tbl(['Thời gian','Thiết bị','Lệnh','Trạng thái','Người gửi','Hết hạn'],j.commands.map(x=>`<tr><td>${fmt(x.time)}</td><td>${esc(x.device)}</td><td>${x.type}</td><td>${pill(x.status,x.status==='failed'?'er':'wa')}</td><td>${esc(x.by)}</td><td>${fmt(x.expires)}</td></tr>`).join(''),'Không có lệnh lỗi.');
+    $('#fs').value=f.sev;$('#fc2').value=f.cat;
+    $('#fs').onchange=e=>{f.sev=e.target.value;save();list()};$('#fc2').onchange=e=>{f.cat=e.target.value;save();list()};
+    $('#fq').oninput=e=>{f.q=e.target.value;save();list()};list()};
+  REF=()=>{const a=document.activeElement;if(a&&a.id==='fq')return;load('alerts/',{},draw)};REF()}
 
 /* ================= THIẾT BỊ ================= */
 V.dv=s=>{

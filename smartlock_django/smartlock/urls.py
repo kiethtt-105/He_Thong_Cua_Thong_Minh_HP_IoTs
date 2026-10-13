@@ -30,13 +30,19 @@ urlpatterns = [
     path('profile/', views.profile, name='profile'),
     path('audit/logs/', views.audit_logs, name='audit-logs'),
 
-
+    # ---- Giám sát toàn hệ thống (system_logs.html) ----
+    # Trang dùng URL tương đối nên mọi API phải nằm ngay dưới demo/system-logs/
     path('demo/system-logs/', views.public_system_logs, name='public-system-logs'),
-    path('demo/system-logs/data/', views.public_system_logs_api, name='public-system-logs-data'),
     path('demo/system-logs/overview/', views.overview_api, name='sysview-overview'),
     path('demo/system-logs/events/', views.events_api, name='sysview-events'),
-    path('demo/system-logs/db/tables/', views.db_tables_api, name='sysview-db-tables'),
+    path('demo/system-logs/alerts/', views.alerts_api, name='sysview-alerts'),
+    path('demo/system-logs/users/', views.users_api, name='sysview-users'),
+    path('demo/system-logs/logins/', views.logins_api, name='sysview-logins'),
+    path('demo/system-logs/announcements/', views.announcements_api, name='sysview-announcements'),
+    path('demo/system-logs/admin-settings/', views.admin_settings_api, name='sysview-admin-settings'),
     path('demo/system-logs/api/', views.api_api, name='sysview-api'),
     path('demo/system-logs/channels/', views.channels_api, name='sysview-channels'),
+    path('demo/system-logs/db/tables/', views.db_tables_api, name='sysview-db-tables'),
     path('demo/system-logs/db/rows/', views.db_rows_api, name='sysview-db-rows'),
+    path('demo/system-logs/device/<uuid:device_id>/', views.device_detail_api, name='sysview-device'),
 ]
