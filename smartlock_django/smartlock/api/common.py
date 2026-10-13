@@ -384,7 +384,7 @@ def rotate_refresh(request, refresh_token: str, fcm_token: str = ''):
 def user_json(u) -> dict:
     return {
         'id': str(u.id), 'email': u.email, 'username': u.username, 'full_name': u.full_name or '',
-        'phone': u.phone or '', 'avatar_url': u.avatar_url or '', 'avatar': u.avatar, 'initials': u.initials,
+        'phone': u.phone or '', 'avatar': u.avatar, 'initials': u.initials,
         'email_verified': u.email_verified,
         'two_fa_enabled': u.two_fa_enabled, 'created_at': iso(u.created_at),
     }

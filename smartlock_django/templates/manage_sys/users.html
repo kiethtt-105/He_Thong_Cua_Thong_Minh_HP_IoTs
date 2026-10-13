@@ -67,7 +67,7 @@
                     <dt>Username</dt><dd>{{ target.username }}</dd>
                     <dt>Họ tên</dt><dd>{{ target.full_name|default:"—" }}</dd>
                     <dt>SĐT</dt><dd>{{ target.phone|default:"—" }}</dd>
-                    <dt>Ảnh đại diện</dt><dd>{% if target.avatar_updated_at %}Đã tải lên ({{ target.avatar_updated_at|date:"d/m/Y H:i" }}){% elif target.avatar_url %}<a href="{{ target.avatar_url }}" target="_blank" rel="noopener noreferrer" class="small text-break">{{ target.avatar_url|truncatechars:40 }}</a>{% else %}<span class="text-muted">Mặc định</span>{% endif %}</dd>
+                    <dt>Ảnh đại diện</dt><dd>{% if target.avatar_updated_at %}Đã tải lên ({{ target.avatar_updated_at|date:"d/m/Y H:i" }}){% else %}<span class="text-muted">Mặc định</span>{% endif %}</dd>
                     <dt>Email xác thực</dt><dd>{{ target.email_verified|yesno:"Có,Chưa" }}</dd>
                     <dt>Quyền</dt><dd>{% if target_role == 'superuser' %}Superuser{% elif target_role == 'admin' %}Admin{% else %}User{% endif %}</dd>
                     <dt>Đăng ký</dt><dd>{{ target.created_at|date:"d/m/Y H:i" }}</dd>

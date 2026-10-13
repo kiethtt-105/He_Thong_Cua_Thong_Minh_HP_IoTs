@@ -108,7 +108,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     username = models.CharField(max_length=50, unique=True)
     full_name = models.CharField(max_length=100, blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
-    avatar_url = models.URLField(max_length=512, blank=True, null=True)
     avatar_updated_at = models.DateTimeField(null=True, blank=True,
                                              help_text='Có giá trị = người dùng đã tải ảnh lên (ảnh nằm ở UserAvatar).')
     is_admin = models.BooleanField(default=False)
@@ -160,7 +159,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     @property
     def has_custom_avatar(self) -> bool:
-        return bool(self.avatar_updated_at or self.avatar_url)
+        return bool(self.avatar_updated_at)
 
     @property
     def initials(self) -> str:
@@ -169,12 +168,10 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     @property
     def avatar(self) -> str:
-        """Ảnh đại diện hiển thị: avatar_url do người dùng đặt; không có thì dùng Gravatar identicon
+        """Ảnh đại diện hiển thị: ảnh người dùng tải lên (UserAvatar); không có thì dùng Gravatar identicon
         (tắt bằng settings.AVATAR_GRAVATAR_FALLBACK = False -> trả '' để UI tự vẽ chữ cái đầu)."""
         if self.avatar_updated_at:
             return f'/api/app/users/{self.pk}/avatar/?v={int(self.avatar_updated_at.timestamp())}'
-        if self.avatar_url:
-            return self.avatar_url
         from django.conf import settings as _s
         if not getattr(_s, 'AVATAR_GRAVATAR_FALLBACK', True) or not self.email:
             return ''

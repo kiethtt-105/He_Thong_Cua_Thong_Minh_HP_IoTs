@@ -4,15 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="csrf-token" content="{{ csrf_token }}">
-<meta name="theme-color" content="#0b1020">
+<meta name="theme-color" content="#0a84ff">
 <title>{% block title %}{% if page == 'login' %}Đăng nhập quản trị{% else %}{{ page_heading|default:'Quản trị' }}{% endif %}{% endblock %} · Manage Sys</title>
-<script>document.documentElement.setAttribute('data-bs-theme', window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');</script>
+<script>(function(){var t=null;try{t=localStorage.sl_theme}catch(e){}if(t!=='light'&&t!=='dark')t=window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.setAttribute('data-bs-theme',t)})();
+function slTheme(){var r=document.documentElement,n=r.getAttribute('data-bs-theme')==='dark'?'light':'dark';r.setAttribute('data-bs-theme',n);try{localStorage.sl_theme=n}catch(e){}}</script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
-:root{--accent:#6366f1;--accent-2:#06b6d4;--page-bg:#f4f6fb;--sb-bg:#0b1020;--sb-text:#94a3b8;--sb-w:250px;
-      --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--shadow:0 8px 30px rgba(15,23,42,.07);--radius:14px}
-[data-bs-theme=dark]{--page-bg:#0b1020;--shadow:0 8px 30px rgba(0,0,0,.35)}
+:root{--bg:#f2f2f7;--card:#fff;--card2:#fafafc;--ink:#1c1c1e;--mut:#8e8e93;--line:rgba(60,60,67,.12);--soft:rgba(120,120,128,.12);--a:#0a84ff;--a2:#5e5ce6;--ok:#28a745;--bad:#ff3b30;--warn:#ff9500;--r:26px;--sh:0 1px 2px rgba(0,0,0,.04),0 10px 28px -14px rgba(0,0,0,.14);--glow:rgba(10,132,255,.16);
+      --accent:var(--a);--accent-2:var(--a2);--page-bg:var(--bg);--sb-bg:var(--card);--sb-text:var(--mut);--sb-w:250px;
+      --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--shadow:var(--sh);--radius:var(--r)}
+[data-bs-theme=dark]{--bg:#000;--card:#1c1c1e;--card2:#2c2c2e;--ink:#fff;--mut:#98989f;--line:rgba(84,84,88,.5);--soft:rgba(120,120,128,.24);--ok:#30d158;--bad:#ff453a;--warn:#ff9f0a;--sh:none;--glow:rgba(10,132,255,.22)}
 html,body{height:100%}
 body{background:var(--page-bg);padding-top:env(safe-area-inset-top)}
 .btn-primary{--bs-btn-bg:var(--accent);--bs-btn-border-color:var(--accent);--bs-btn-hover-bg:#4f46e5;--bs-btn-hover-border-color:#4f46e5;--bs-btn-active-bg:#4338ca;--bs-btn-active-border-color:#4338ca;--bs-btn-disabled-bg:var(--accent);--bs-btn-disabled-border-color:var(--accent)}
@@ -91,10 +94,91 @@ a.stat-card:hover{transform:translateY(-2px);box-shadow:0 12px 28px -14px rgba(1
 .pagination{flex-wrap:wrap}
 @media (hover:none){a.stat-card:hover{transform:none;box-shadow:var(--shadow)}}
 
-.auth-bg{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(900px 500px at 10% -10%,rgba(99,102,241,.35),transparent),radial-gradient(800px 500px at 100% 110%,rgba(6,182,212,.3),transparent),#0b1020}
+.auth-bg{min-height:100vh;display:flex;align-items:center;justify-content:center}
 .auth-bg>.container{width:100%}
 .brand-icon{width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:grid;place-items:center;color:#fff;font-size:1.5rem}
 .auth-card{border:0}
+
+/* ===== ĐỒNG BỘ GIAO DIỆN với app người dùng: cùng token màu, font, bo góc, nút, input, pill ===== */
+html[data-bs-theme]{--bs-body-font-family:"Plus Jakarta Sans",-apple-system,system-ui,"Segoe UI",Roboto,sans-serif;--bs-body-font-size:.9375rem;--bs-body-bg:var(--bg);--bs-body-color:var(--ink);--bs-secondary-color:var(--mut);--bs-secondary-bg:var(--soft);--bs-tertiary-bg:var(--soft);--bs-border-color:var(--line);--bs-border-color-translucent:var(--line);
+  --bs-primary:#0a84ff;--bs-primary-rgb:10,132,255;--bs-link-color:var(--a);--bs-link-color-rgb:10,132,255;--bs-link-hover-color:var(--a);--bs-link-hover-color-rgb:10,132,255;
+  --bs-primary-bg-subtle:color-mix(in srgb,var(--a) 14%,transparent);--bs-primary-text-emphasis:var(--a);--bs-primary-border-subtle:color-mix(in srgb,var(--a) 25%,transparent);
+  --bs-success-bg-subtle:color-mix(in srgb,var(--ok) 14%,transparent);--bs-success-text-emphasis:var(--ok);--bs-success-border-subtle:color-mix(in srgb,var(--ok) 25%,transparent);
+  --bs-danger-bg-subtle:color-mix(in srgb,var(--bad) 14%,transparent);--bs-danger-text-emphasis:var(--bad);--bs-danger-border-subtle:color-mix(in srgb,var(--bad) 25%,transparent);
+  --bs-warning-bg-subtle:color-mix(in srgb,var(--warn) 16%,transparent);--bs-warning-text-emphasis:var(--warn);--bs-warning-border-subtle:color-mix(in srgb,var(--warn) 25%,transparent);
+  --bs-info-bg-subtle:color-mix(in srgb,var(--bs-info) 14%,transparent);--bs-info-text-emphasis:var(--bs-info);--bs-info-border-subtle:color-mix(in srgb,var(--bs-info) 25%,transparent);
+  --bs-secondary-bg-subtle:var(--soft);--bs-secondary-text-emphasis:var(--mut);--bs-light-bg-subtle:var(--soft)}
+html[data-bs-theme=light]{--bs-body-color-rgb:28,28,30;--bs-emphasis-color:#000;--bs-emphasis-color-rgb:0,0,0;--bs-success:#28a745;--bs-success-rgb:40,167,69;--bs-danger:#ff3b30;--bs-danger-rgb:255,59,48;--bs-warning:#ff9500;--bs-warning-rgb:255,149,0;--bs-info:#32ade6;--bs-info-rgb:50,173,230}
+html[data-bs-theme=dark]{--bs-body-color-rgb:255,255,255;--bs-emphasis-color:#fff;--bs-emphasis-color-rgb:255,255,255;--bs-success:#30d158;--bs-success-rgb:48,209,88;--bs-danger:#ff453a;--bs-danger-rgb:255,69,58;--bs-warning:#ff9f0a;--bs-warning-rgb:255,159,10;--bs-info:#64d2ff;--bs-info-rgb:100,210,255}
+body{-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+::selection{background:var(--glow)}
+h1,h2,h3,h4,h5,h6{font-weight:700;letter-spacing:-.02em}
+.bg-light{background-color:var(--soft)!important}
+/* thẻ */
+.card{--bs-card-bg:var(--card);--bs-card-cap-bg:transparent;--bs-card-border-width:0;--bs-card-border-radius:var(--r);background:var(--card);border:0;border-radius:var(--r);box-shadow:var(--sh)}
+.card-header{background:transparent;border-bottom:1px solid var(--line);font-weight:700;padding:1rem 1.25rem}
+.card-body{padding:1.25rem}
+.card-footer{background:transparent;border-top:1px solid var(--line)}
+/* nút: cùng kiểu với .btn của app người dùng */
+.btn{border-radius:14px;font-weight:700;padding:.6rem 1.1rem;transition:filter .15s,transform .15s,background .15s}
+.btn:active{transform:scale(.97)}
+.btn-sm{border-radius:12px;padding:.4rem .8rem;font-size:.8125rem}
+.btn-primary{--bs-btn-bg:var(--a);--bs-btn-border-color:var(--a);--bs-btn-hover-bg:color-mix(in srgb,var(--a) 88%,#000);--bs-btn-hover-border-color:color-mix(in srgb,var(--a) 88%,#000);--bs-btn-active-bg:color-mix(in srgb,var(--a) 80%,#000);--bs-btn-active-border-color:color-mix(in srgb,var(--a) 80%,#000);--bs-btn-disabled-bg:var(--a);--bs-btn-disabled-border-color:var(--a)}
+.btn-outline-secondary{--bs-btn-color:var(--ink);--bs-btn-bg:var(--soft);--bs-btn-border-color:transparent;--bs-btn-hover-color:var(--ink);--bs-btn-hover-bg:color-mix(in srgb,var(--ink) 9%,var(--soft));--bs-btn-hover-border-color:transparent;--bs-btn-active-color:var(--ink);--bs-btn-active-bg:color-mix(in srgb,var(--ink) 14%,var(--soft));--bs-btn-active-border-color:transparent;--bs-btn-disabled-color:var(--mut);--bs-btn-disabled-bg:var(--soft);--bs-btn-disabled-border-color:transparent}
+.btn-outline-primary{--bs-btn-color:var(--a);--bs-btn-bg:color-mix(in srgb,var(--a) 14%,transparent);--bs-btn-border-color:transparent;--bs-btn-hover-color:#fff;--bs-btn-hover-bg:var(--a);--bs-btn-hover-border-color:var(--a);--bs-btn-active-color:#fff;--bs-btn-active-bg:var(--a);--bs-btn-active-border-color:var(--a)}
+.btn-outline-danger{--bs-btn-color:var(--bad);--bs-btn-bg:color-mix(in srgb,var(--bad) 14%,transparent);--bs-btn-border-color:transparent;--bs-btn-hover-color:#fff;--bs-btn-hover-bg:var(--bad);--bs-btn-hover-border-color:var(--bad);--bs-btn-active-color:#fff;--bs-btn-active-bg:var(--bad);--bs-btn-active-border-color:var(--bad)}
+.btn-outline-warning{--bs-btn-color:var(--warn);--bs-btn-bg:color-mix(in srgb,var(--warn) 16%,transparent);--bs-btn-border-color:transparent;--bs-btn-hover-color:#fff;--bs-btn-hover-bg:var(--warn);--bs-btn-hover-border-color:var(--warn);--bs-btn-active-color:#fff;--bs-btn-active-bg:var(--warn);--bs-btn-active-border-color:var(--warn)}
+.btn-outline-success{--bs-btn-color:var(--ok);--bs-btn-bg:color-mix(in srgb,var(--ok) 14%,transparent);--bs-btn-border-color:transparent;--bs-btn-hover-color:#fff;--bs-btn-hover-bg:var(--ok);--bs-btn-hover-border-color:var(--ok);--bs-btn-active-color:#fff;--bs-btn-active-bg:var(--ok);--bs-btn-active-border-color:var(--ok)}
+/* ô nhập: nền mờ, không viền, vòng sáng khi focus */
+.form-control,.form-select{border:0;border-radius:14px;background-color:var(--soft);color:var(--ink);padding:.7rem .95rem;transition:box-shadow .15s,background-color .15s}
+.form-control:focus,.form-select:focus{background-color:var(--card2);color:var(--ink);box-shadow:0 0 0 3px var(--glow)}
+.form-control:disabled,.form-select:disabled{background-color:var(--soft);opacity:.55}
+.form-control-sm,.form-select-sm{border-radius:12px;padding:.4rem .7rem}
+.form-label,.form-text{font-size:.75rem}.form-label{font-weight:700;color:var(--mut)}
+.form-check-input:checked{background-color:var(--a);border-color:var(--a)}
+.input-group-text{background:var(--soft);border:0;color:var(--mut)}
+/* bảng, badge, cảnh báo, phân trang */
+.table{--bs-table-color:var(--ink);--bs-table-border-color:var(--line);--bs-table-hover-bg:var(--soft);--bs-table-striped-bg:var(--soft)}
+.table>thead>tr>th,.table-light{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;font-weight:700;--bs-table-bg:transparent;--bs-table-color:var(--mut);--bs-table-border-color:var(--line)}
+.badge{border-radius:99px;font-weight:700;padding:.4em .8em}
+.alert{border:0;border-radius:16px;font-weight:500}
+.alert-danger{--bs-alert-bg:color-mix(in srgb,var(--bad) 12%,transparent);--bs-alert-color:var(--bad);--bs-alert-border-color:transparent}
+.alert-success{--bs-alert-bg:color-mix(in srgb,var(--ok) 12%,transparent);--bs-alert-color:var(--ok);--bs-alert-border-color:transparent}
+.alert-warning{--bs-alert-bg:color-mix(in srgb,var(--warn) 14%,transparent);--bs-alert-color:var(--warn);--bs-alert-border-color:transparent}
+.alert-info,.alert-primary{--bs-alert-bg:color-mix(in srgb,var(--a) 12%,transparent);--bs-alert-color:var(--a);--bs-alert-border-color:transparent}
+.page-link{border:0;border-radius:12px!important;margin:0 2px;background:var(--soft);color:var(--ink)}
+.page-item.active .page-link{background:var(--a);color:#fff}.page-item.disabled .page-link{background:var(--soft);color:var(--mut);opacity:.6}
+.nav-pills .nav-link{border-radius:99px;font-weight:600;color:var(--mut)}.nav-pills .nav-link.active{background:var(--soft);color:var(--ink)}
+.modal-content{background:var(--card);border:0;border-radius:var(--r)}
+.dropdown-menu{--bs-dropdown-bg:var(--card);--bs-dropdown-border-width:0;--bs-dropdown-border-radius:16px;box-shadow:0 14px 40px -10px rgba(0,0,0,.3)}
+/* thanh bên: sáng như app người dùng */
+.sidebar{background:var(--card);border-right:1px solid var(--line)}
+.sb-brand{color:var(--ink)}.brand-word{font-weight:800;letter-spacing:-.02em}.brand-sub{color:var(--mut);font-weight:500}
+.sb-label{color:var(--mut);font-weight:700}
+.sb-link{border-radius:14px;font-weight:600;color:var(--mut)}
+.sb-link:hover{background:var(--soft);color:var(--ink)}
+.sb-link.active{background:var(--soft);color:var(--a)}
+.sb-foot{border-top:1px solid var(--line)}
+.sb-user .name{color:var(--ink);font-weight:700}.sb-user small{color:var(--mut)}
+.sb-logout{background:var(--soft);color:var(--ink);border-radius:14px;font-weight:700}
+.sb-logout:hover{background:color-mix(in srgb,var(--bad) 14%,transparent);color:var(--bad)}
+.m-top{background:color-mix(in srgb,var(--bg) 78%,transparent);backdrop-filter:saturate(180%) blur(22px);color:var(--ink);border-bottom:1px solid var(--line)}
+.m-brand{color:var(--ink);font-weight:800}
+.bottom-nav{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));padding:6px;border:0;border-radius:28px;background:color-mix(in srgb,var(--card) 86%,transparent);backdrop-filter:blur(20px);box-shadow:0 14px 40px -10px rgba(0,0,0,.3)}
+.bn-item{border-radius:22px;padding:7px 12px;font-weight:600;color:var(--mut)}.bn-item.active{color:var(--a);background:var(--soft)}
+/* tiêu đề trang, thẻ số liệu, biểu đồ, avatar */
+.page-title{font-size:1.75rem;font-weight:800;letter-spacing:-.03em}
+.stat-num{font-size:1.9rem;font-weight:800;letter-spacing:-.03em}.stat-card.sm .stat-num{font-size:1.5rem}
+.stat-icon{border-radius:50%}
+a.stat-card:hover{box-shadow:0 20px 44px -20px rgba(0,0,0,.35)}
+.bar-wrap .bar{border-radius:10px;background:linear-gradient(var(--a),var(--a2));opacity:1}
+.avatar-sm,.avatar-xs,.avatar-lg{font-weight:800}
+.role-admin{background:var(--a2);color:#fff}
+.main{padding-bottom:110px}
+/* đăng nhập quản trị: nền giống trang đăng nhập của người dùng */
+.auth-bg{background:radial-gradient(700px 420px at 15% -5%,color-mix(in srgb,var(--a) 28%,transparent),transparent),radial-gradient(700px 420px at 100% 105%,color-mix(in srgb,var(--a2) 24%,transparent),transparent),var(--bg)}
+.auth-card{border:0;border-radius:32px}
+:focus-visible{outline:2px solid var(--a);outline-offset:2px}
 </style>
 {% block extra_head %}{% if page == 'login' %}<meta name="robots" content="noindex,nofollow">{% endif %}{% endblock %}
 </head>
@@ -104,7 +188,7 @@ a.stat-card:hover{transform:translateY(-2px);box-shadow:0 12px 28px -14px rgba(1
 <div class="auth-bg">
     <div class="container px-3 py-4">
         <div class="mx-auto" style="max-width:440px">
-            <div class="text-center text-white mb-4">
+            <div class="text-center mb-4">
                 <div class="brand-icon mx-auto mb-3"><i class="fa-solid fa-shield-halved"></i></div>
                 <h4 class="mb-1">Manage Sys</h4>
                 <div class="small" style="color:var(--sb-text)">Khu vực dành riêng cho quản trị viên</div>
@@ -165,6 +249,7 @@ a.stat-card:hover{transform:translateY(-2px);box-shadow:0 12px 28px -14px rgba(1
                     {% if request.user.is_superuser %}<span class="role-badge role-superuser">Superuser</span>{% else %}<span class="role-badge role-admin">Admin</span>{% endif %}
                 </div>
             </div>
+            <button type="button" class="sb-logout mb-2" onclick="slTheme()"><i class="fa-solid fa-circle-half-stroke me-2"></i>Sáng / tối</button>
             <form method="post" action="{% url 'manage_sys:logout' %}" class="mb-0">
                 {% csrf_token %}
                 <button class="sb-logout"><i class="fa-solid fa-right-from-bracket me-2"></i>Đăng xuất</button>
@@ -176,7 +261,7 @@ a.stat-card:hover{transform:translateY(-2px);box-shadow:0 12px 28px -14px rgba(1
     <div class="content-wrap">
         <header class="m-top d-lg-none">
             <a class="m-brand" href="{% url 'manage_sys:dashboard' %}"><span class="brand-mark sm"><i class="fa-solid fa-shield-halved"></i></span><span>Manage Sys</span></a>
-            <button type="button" class="sb-toggle border-0 text-white bg-transparent" onclick="document.body.classList.toggle('sb-open')" aria-label="Menu"><i class="fa-solid fa-bars"></i></button>
+            <button type="button" class="sb-toggle border-0 text-body bg-transparent" onclick="document.body.classList.toggle('sb-open')" aria-label="Menu"><i class="fa-solid fa-bars"></i></button>
         </header>
         <main class="main">
             <div class="page-head">

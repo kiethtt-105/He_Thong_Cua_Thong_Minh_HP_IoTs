@@ -577,18 +577,14 @@ def me(request):
         return _delete_account(request)
     if request.method == 'PATCH':
         data = read_json(request)
-        before = {'full_name': user.full_name, 'phone': user.phone, 'avatar_url': user.avatar_url}
+        before = {'full_name': user.full_name, 'phone': user.phone}
         if 'full_name' in data:
             user.full_name = s(data, 'full_name', 100) or None
         if 'phone' in data:
             user.phone = s(data, 'phone', 20) or None
-        if 'avatar_url' in data:
-            url = s(data, 'avatar_url', 512)
-            if url and not url.lower().startswith(('https://', 'http://')):
-                raise ApiError('BAD_FIELD', 'avatar_url phải là http(s).', 400, field='avatar_url')
-            user.avatar_url = url or None
-        user.save(update_fields=['full_name', 'phone', 'avatar_url', 'updated_at'])
-        after = {'full_name': user.full_name, 'phone': user.phone, 'avatar_url': user.avatar_url}
+        # Ảnh đại diện CHỈ nhận qua me_avatar (upload file) — không nhận đường link từ người dùng.
+        user.save(update_fields=['full_name', 'phone', 'updated_at'])
+        after = {'full_name': user.full_name, 'phone': user.phone}
         changes = {k: [before[k], after[k]] for k in after if before[k] != after[k]}
         services.audit(request, 'PROFILE_UPDATED', target_user=user, metadata={'changes': changes} if changes else None)
     return ok({'user': user_json(user),
