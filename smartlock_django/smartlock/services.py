@@ -912,6 +912,8 @@ def _auto_register_card(device, raw_uid, ip_address=None):
         NfcLog.objects.create(reader=reader, nfc_tag=card, device=device, user=device.owner,
                               event_type='CARD_REGISTER', ip_address=ip_address,
                               metadata={'via': 'reader_tap', 'auto_register': True})
+        reader.auto_register = False          # mỗi lần bấm "Thêm thẻ" chỉ nhận ĐÚNG 1 thẻ
+        reader.save()
         AuditLog.objects.create(actor_user=None, target_user=device.owner, device=device,
                                 action='CARD_AUTO_REGISTERED', ip_address=ip_address,
                                 metadata={'card_id': str(card.id), 'reader_id': str(reader.id),

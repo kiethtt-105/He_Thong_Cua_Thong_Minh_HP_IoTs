@@ -517,13 +517,8 @@ def device_readers(request, device_id):
         need_owner(request, device, 'NFC_READER')
         if not device.nfc_enabled:
             raise ApiError('NFC_DISABLED', 'NFC của khoá đang tắt.', 409)
-        name = s(read_json(request), 'name', 100) or 'Đầu đọc mô phỏng'
-        with transaction.atomic():
-            reader = NfcReader.objects.create(device=device, reader_mode='simulated', name=name, is_active=True)
-            NfcLog.objects.create(reader=reader, device=device, user=request.user, event_type='READER_CONNECTED',
-                                  ip_address=services.client_ip(request), user_agent=services.user_agent(request))
-        services.audit(request, 'NFC_READER_ADDED', device=device, metadata={'reader_id': str(reader.id)})
-        return ok({'reader': _reader_json(reader)}, 201)
+        # Đầu đọc là MỘT PHẦN của khoá -> không cho thêm tay; trả về đầu đọc có sẵn (tự tạo nếu chưa có).
+        return ok({'reader': _reader_json(_ensure_reader(device))})
     return ok({'readers': [_reader_json(r) for r in NfcReader.objects.filter(device=device).order_by('-created_at')]})
 
 
@@ -557,6 +552,60 @@ def reader_detail(request, reader_id):
                           ip_address=services.client_ip(request), user_agent=services.user_agent(request))
     services.audit(request, audit_action, device=reader.device, metadata={'reader_id': str(reader.id)})
     return ok({'reader': _reader_json(reader)})
+
+
+def _ensure_reader(device):
+    """Mỗi khoá có đúng 1 đầu đọc, tạo tự động (không để người dùng tự thêm)."""
+    reader = NfcReader.objects.filter(device=device).order_by('created_at').first()
+    if reader is None:
+        reader = NfcReader.objects.create(device=device, reader_mode=device.device_mode or 'physical',
+                                          name='Đầu đọc NFC', is_active=True)
+    elif not reader.is_active:
+        reader.is_active = True
+        reader.save()
+    return reader
+
+
+@api('GET', 'POST', 'DELETE', auth='any')
+def card_enroll(request, device_id):
+    """Thêm thẻ bằng cách quét tại khoá.
+    POST   -> mở cửa sổ 60 giây; thẻ đầu tiên chạm đầu đọc của khoá sẽ được đăng ký cho chủ khoá.
+    GET    -> ?since=<iso trả về lúc POST>: còn chờ không + thẻ đã đăng ký từ lúc đó.
+    DELETE -> huỷ cửa sổ."""
+    device = managed_device(request, device_id, 'manage_nfc')
+    need_owner(request, device, 'NFC_ENROLL')
+    if not device.nfc_enabled:
+        raise ApiError('NFC_DISABLED', 'NFC của khoá đang tắt.', 409)
+    reader = _ensure_reader(device)
+    now = timezone.now()
+    if request.method == 'POST':
+        if device.status != 'online':
+            raise ApiError('DEVICE_OFFLINE', 'Khoá phải đang online để quét thẻ mới.', 409)
+        reader.auto_register = True
+        reader.auto_register_until = None          # signal pre_save mở lại cửa sổ 60 giây
+        reader.save()
+        NfcLog.objects.create(reader=reader, device=device, user=request.user, event_type='CONFIG_UPDATED',
+                              ip_address=services.client_ip(request), user_agent=services.user_agent(request))
+        services.audit(request, 'NFC_AUTO_REGISTER_ON', device=device, metadata={'reader_id': str(reader.id)})
+        reader.refresh_from_db()
+        return ok({'enroll': _enroll_json(reader, [], now)}, 201)
+    if request.method == 'DELETE':
+        reader.auto_register = False
+        reader.save()
+        services.audit(request, 'NFC_AUTO_REGISTER_OFF', device=device, metadata={'reader_id': str(reader.id)})
+        return ok({'enroll': _enroll_json(reader, [], now)})
+    since = parse_iso(request.GET.get('since'), 'since') or (now - timedelta(seconds=120))
+    logs = (NfcLog.objects.filter(device=device, reader=reader, event_type='CARD_REGISTER', created_at__gte=since)
+            .select_related('nfc_tag').order_by('created_at'))
+    done = [{'id': str(l.nfc_tag_id), 'name': (l.nfc_tag.name if l.nfc_tag else '') or ''}
+            for l in logs if l.nfc_tag_id and (l.metadata or {}).get('via') == 'reader_tap']
+    return ok({'enroll': _enroll_json(reader, done, now)})
+
+
+def _enroll_json(reader, registered, now):
+    left = max(0, int((reader.auto_register_until - now).total_seconds())) if reader.auto_register_active else 0
+    return {'active': reader.auto_register_active, 'seconds_left': left, 'since': iso(now),
+            'registered': registered}
 
 
 # ======================================================================

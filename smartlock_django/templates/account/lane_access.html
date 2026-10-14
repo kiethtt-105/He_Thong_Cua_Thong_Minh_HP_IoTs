@@ -13,9 +13,10 @@ Object.assign(ACT,{
 async readAll(){await after(await api('POST','notifications/read/',{all:true}))},
 async leave(el){if(confirm('Rời khỏi chia sẻ này?'))await after(await api('POST',`shares/${el.dataset.id}/leave/`),'Đã rời')},
 async cardTog(el){await after(await api('PATCH',`cards/${el.dataset.id}/`,{is_active:el.dataset.v==='1'}))},
-cardNew(){mform('Thêm thẻ NFC',`<label>Khóa</label>${devSel()}<label>UID thẻ</label><input name="uid" required><label>Tên gợi nhớ</label><input name="name">`,'card')},
+cardNew(){const o=(S.devices||[]).filter(d=>d.is_owner&&d.nfc_enabled);if(!o.length)return toast('Chưa có khóa nào bật NFC.',1);if(o.length===1)return ACT.enroll({dataset:{id:o[0].id,n:o[0].name}});mform('Chọn khóa để thêm thẻ',`<label>Khóa</label>${devSel()}`,'cardPick')},
 });
 Object.assign(FORMS,{
+async cardPick(b){const d=(S.devices||[]).find(x=>x.id===b.device_id);closeModal();ACT.enroll({dataset:{id:b.device_id,n:d?d.name:''}})},
 async card(b){await after(await api('POST',`devices/${b.device_id}/cards/`,{uid:b.uid,name:b.name}),'Đã thêm thẻ')},
 });
 </script>
