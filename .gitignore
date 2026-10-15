@@ -1,8 +1,12 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -20,53 +24,164 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual environments
-.venv/
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+*.lcov
+.hypothesis/
+.pytest_cache/
+cover/
+.idea/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Sphinx documentation
+docs/_build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+# .python-version
+
+# pipenv
+# Pipfile.lock
+
+# uv
+# uv.lock
+
+# poetry
+# poetry.lock
+# poetry.toml
+
+# pdm
+# pdm.lock
+# pdm.toml
+.pdm-python
+.pdm-build/
+
+# pixi
+.pixi/*
+!.pixi/config.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule*
+celerybeat.pid
+
+# Redis
+*.rdb
+*.aof
+*.pid
+
+# RabbitMQ
+mnesia/
+rabbitmq/
+rabbitmq-data/
+
+# ActiveMQ
+activemq-data/
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.envrc
+.venv
 venv/
 env/
 ENV/
 env.bak/
 venv.bak/
 
-# Secrets
-.env
-.env.*
-*.env.txt
-!.env.example
-.env.local
-.env.*.local
+# Spyder project settings
+.spyderproject
+.spyproject
 
-# Logs
-*.log
-logs/
-*.log.*
+# Rope project settings
+.ropeproject
 
-# OS
-.DS_Store
-.AppleDouble
-.LSOverride
+# mkdocs/Zensical documentation
+/site
 
-# Editor
-.vscode/
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
 .idea/
-*.swp
-*.swo
-*~
 
-# Database
-db.sqlite3
-db.sqlite3-journal
-*.sqlite3
-*.sqlite3-journal
-replica.sqlite3
+# Abstra
+.abstra/
 
-# Static files (Django)
-staticfiles/
-*.collectstatic
-*.cache
+# Visual Studio Code
+.vscode/
 
-# Windows batch files
+# Temporary file for partial code execution
+tempCodeRunnerFile.py
+
+# Ruff stuff:
+.ruff_cache/
+
+# PyPI configuration file
+.pypirc
+
+# Marimo
+marimo/_static/
+marimo/_lsp/
+__marimo__/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Windows batch files (bạn đã bảo ko up file.bat)
 *.bat
 *.cmd
 
@@ -77,7 +192,11 @@ ehthumbs_vista.db
 *.stackdump
 [Dd]esktop.ini
 
-# IDE temporary files
-*.sublime-project
-*.sublime-workspace
-*.code-workspace
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+logs/
+*.log.*
