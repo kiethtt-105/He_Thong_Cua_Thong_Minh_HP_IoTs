@@ -8,6 +8,7 @@ from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.http import Http404
 from django.shortcuts import redirect, render
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from .services import audit as _audit, is_admin as _is_admin
 import os
@@ -56,7 +57,13 @@ def _render(request, page, context=None):
 def login_view(request):
     if request.user.is_authenticated:
         return redirect('smartlock:dashboard')
-    return _render(request, 'login', {'next': request.GET.get('next') or ''})
+    nxt = request.GET.get('next') or ''
+    # Chỉ chấp nhận đường dẫn nội bộ: chặn open-redirect và URL javascript:
+    if not (nxt.startswith('/') and not nxt.startswith('//') and '\\' not in nxt
+            and url_has_allowed_host_and_scheme(nxt, allowed_hosts={request.get_host()},
+                                                require_https=request.is_secure())):
+        nxt = ''
+    return _render(request, 'login', {'next': nxt})
 
 
 def register(request):
