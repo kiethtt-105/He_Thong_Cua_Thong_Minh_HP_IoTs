@@ -1,22 +1,83 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
 # Virtual environments
 .venv/
 venv/
 env/
+ENV/
+env.bak/
+venv.bak/
 
-# Secrets 
+# Secrets
 .env
 .env.*
 *.env.txt
 !.env.example
+.env.local
+.env.*.local
 
-# Logs, OS, local DB
+# Logs
 *.log
+logs/
+*.log.*
+
+# OS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Database
 db.sqlite3
+db.sqlite3-journal
+*.sqlite3
+*.sqlite3-journal
 replica.sqlite3
 
-# staticfiles
+# Static files (Django)
+staticfiles/
+*.collectstatic
+*.cache
+
+# Windows batch files
+*.bat
+*.cmd
+
+# Windows temp files
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+
+# IDE temporary files
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
