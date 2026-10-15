@@ -1,4 +1,9 @@
 {
-  "events": [],
+  "events": [
+    {
+      "type": "BOOT",
+      "at": 1792063693
+    }
+  ],
   "phone": []
 }
