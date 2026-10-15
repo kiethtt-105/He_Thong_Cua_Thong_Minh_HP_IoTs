@@ -3,3 +3,4 @@ __pycache__/
 run_django.bat
 rundocker.bat
 share_ports.bat
+.env
