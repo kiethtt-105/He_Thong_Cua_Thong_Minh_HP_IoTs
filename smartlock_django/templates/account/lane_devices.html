@@ -27,7 +27,7 @@ device(){const d=dev(ROUTE.id);if(!d)return shell(none('Không tìm thấy thi�
 });
 let LIVE_DATA=null;const BUSY=new Set();
 ACT.bleOpen=async el=>{
- if(!navigator.bluetooth){toast('Trình duyệt này không hỗ trợ Bluetooth. Dùng Chrome/Edge (Android hoặc máy tính) qua HTTPS.',1);return}
+ if(!navigator.bluetooth){toast('Web Bluetooth không chạy trong WebView/iOS. Dùng Chrome (Android/máy tính, HTTPS) hoặc gửi lệnh qua Wi-Fi.',1);return}
  const cfg=(()=>{try{return JSON.parse(localStorage.sl_ble||'{}')}catch(e){return{}}})();
  const SV=cfg.s||'0000ffe0-0000-1000-8000-00805f9b34fb',CH=cfg.c||'0000ffe1-0000-1000-8000-00805f9b34fb';
  el.disabled=true;
@@ -66,7 +66,7 @@ const loadFace=()=>FAPI||(FAPI=new Promise((ok,no)=>{const x=document.createElem
  x.onerror=()=>{FAPI=null;no(new Error('Không tải được thư viện nhận diện (kiểm tra mạng).'))};document.head.append(x)}));
 Object.assign(ACT,{
 claim:claimModal,
-async cmd(el){const did=el.dataset.id;if(BUSY.has(did))return toast('Đang chờ khóa phản hồi…');if(el.dataset.c==='REBOOT'&&!confirm('Khởi động lại khóa này?'))return;BUSY.add(did);try{el.disabled=true;const r=await api('POST',`devices/${el.dataset.id}/commands/`,{command:el.dataset.c});if(!r.ok){toast(em(r),1);el.disabled=false;return}toast(r.d.message||'Đã gửi lệnh');let st=r.d.command.status;const id=r.d.command.id;
+async cmd(el){const did=el.dataset.id;if(BUSY.has(did))return toast('Đang chờ khóa phản hồi…');if(el.dataset.c==='REBOOT'&&!await ask('Khởi động lại khóa này?'))return;BUSY.add(did);try{el.disabled=true;const r=await api('POST',`devices/${el.dataset.id}/commands/`,{command:el.dataset.c});if(!r.ok){toast(em(r),1);el.disabled=false;return}toast(r.d.message||'Đã gửi lệnh');let st=r.d.command.status;const id=r.d.command.id;
  for(let i=0;i<20&&!['acknowledged','failed','expired'].includes(st);i++){await new Promise(x=>setTimeout(x,1000));const q=await api('GET','commands/'+id+'/');if(q.ok)st=(q.d.command||q.d).status||st}
  toast(st==='acknowledged'?'Thiết bị đã thực hiện ✓':['failed','expired'].includes(st)?'Lệnh thất bại ('+st+')':'Thiết bị chưa phản hồi',st!=='acknowledged');el.disabled=false;await load(true);render()}finally{BUSY.delete(did)}},
 dis(el){LS.set('sl_dis2',LS.get('sl_dis2').split(',').filter(Boolean).concat(el.dataset.id).slice(-50).join(','));render()},
