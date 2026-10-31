@@ -1,0 +1,121 @@
+{# LANE flow: khung 4 mục, Tổng quan, trang khóa 4 tab, wizard thêm cách mở, Hoạt động. Nạp SAU các lane khác để ghi đè. #}
+<style>
+.strip{display:flex;align-items:center;gap:14px;width:100%;text-align:left;border:0;padding:18px 20px;border-radius:var(--r);font:600 17px/1.35 "Be Vietnam Pro",system-ui,sans-serif;color:#fff;background:var(--g);cursor:pointer;margin-bottom:16px;min-height:64px}
+.strip.warn{background:#8f6410}.strip.bad{background:#a32d2d}.strip svg{flex:none}
+.rail{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;margin:0 -16px 16px;padding:4px 16px;scrollbar-width:none}.rail::-webkit-scrollbar{display:none}
+.rail>.card{flex:0 0 min(330px,86%);scroll-snap-align:center;text-align:center}
+.rail .orb{width:156px;height:156px;margin:6px auto 16px}.rail .orb svg{width:62px;height:62px}
+.rail .nm{font:700 19px "Bricolage Grotesque",system-ui,sans-serif;color:inherit;display:block}
+.rail .meta{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:10px}
+.sec{margin:22px 0 10px;font:700 18px "Bricolage Grotesque",system-ui,sans-serif}
+.sec.row2{display:flex;justify-content:space-between;align-items:center}
+.lnk{background:none;border:0;color:var(--a);font:600 14px inherit;font-family:inherit;cursor:pointer;padding:10px 4px;min-height:44px}
+.chipset{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 16px}
+.chipset button{min-height:44px;padding:0 16px;border-radius:99px;border:1px solid var(--line);background:var(--card2);color:var(--ink);font:600 14px inherit;font-family:inherit;cursor:pointer}
+.chipset button.on{background:var(--g);color:#fff;border-color:transparent}
+.pick{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:14px;margin-bottom:10px;border-radius:16px;border:1px solid var(--line);background:var(--card2);color:var(--ink);font:inherit;font-family:inherit;cursor:pointer;min-height:64px}
+.pick b{display:block}.pick small{color:var(--mut)}
+.danger{border:1.5px solid var(--bad);margin-top:22px}.danger h2{color:var(--bad)}
+.filt{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}.filt select{width:auto;min-width:160px;margin:0}
+.filt label{display:flex;align-items:center;gap:8px;min-height:46px}.filt input{width:auto;margin:0}
+.nl:empty{display:none}
+@media(min-width:901px){
+.rail{flex-wrap:wrap;overflow:visible;margin:0 0 16px;padding:0}.rail>.card{flex:1 1 300px;max-width:420px}
+body.collapsed .side{transform:none;width:76px}body.collapsed main{margin-left:76px;margin-right:0;margin-inline:76px 0}
+body.collapsed .ni span,body.collapsed .nl,body.collapsed .brand,body.collapsed .side-f .f,body.collapsed .side-f .ib,body.collapsed .cnt{display:none}
+body.collapsed .side-h{justify-content:center;padding:18px 0}body.collapsed .ni{justify-content:center;padding:0}body.collapsed .side-f{justify-content:center;padding:14px 0}body.collapsed .mtop{display:none}}
+</style>
+<script>
+/* ---- 1. Khung điều hướng: 4 mục ---- */
+NAV.splice(0,NAV.length,['/','home','Tổng quan','home',0,'Tổng quan'],['/devices/','devices','Khóa','lock',0,'Khóa'],['/access/history/','history','Hoạt động','door',0,'Hoạt động'],['/profile/','profile','Tài khoản','user',0,'Tài khoản']);
+NAVG.splice(0,NAVG.length,['',['home','devices','history','profile']]);BNAV.splice(0,BNAV.length,'home','devices','history','profile');
+
+/* ---- 2. Tổng quan: "nhà mình đang an toàn không?" ---- */
+const todo=D=>{const T=[],n=Date.now();D.forEach(d=>{const h=`/devices/${d.id}/`;
+ if(d.status!=='online')T.push({l:'bad',i:'wifi',t:`${d.name} đang offline`,s:'Kiểm tra Wi-Fi tại cửa',h});
+ if(d.lock_state==='unlocked')T.push({l:'warn',i:'open',t:`${d.name} đang mở`,s:'Mở trang khóa để khóa lại',h});
+ if(d.battery_level!=null&&d.battery_level<=20)T.push({l:'warn',i:'battery',t:`${d.name} pin yếu (${d.battery_level}%)`,s:'Nên thay pin sớm',h})});
+ (S.pins||[]).filter(p=>p.is_valid_now&&p.expires_at&&new Date(p.expires_at)-n<864e5).forEach(p=>T.push({l:'warn',i:'pin',t:`PIN “${p.label||'Mã khách'}” sắp hết hạn`,s:fdt(p.expires_at),h:`/devices/${p.device_id}/`}));
+ const f=(S.history||[]).filter(e=>!e.success&&n-new Date(e.created_at)<864e5);if(f.length>=3)T.push({l:'bad',i:'alert',t:`${f.length} lần mở thất bại trong 24 giờ`,s:'Xem ở mục Hoạt động',h:'/access/history/'});
+ return T.sort((a,b)=>(b.l==='bad')-(a.l==='bad'))};
+const rail=d=>{const own=d.is_owner,P=d.permissions||[],un=d.lock_state==='unlocked',can=own||P.includes(un?'LOCK':'UNLOCK'),ico=ic(un?'open':'lock',62);
+ return`<div class="card"><a data-l href="/devices/${d.id}/" class="nm">${esc(d.name)}</a>${can?`<button class="orb ${d.lock_state}${un?'':' hold'}" data-a="cmd" data-id="${d.id}" data-c="${un?'LOCK':'UNLOCK'}" aria-label="${un?'Khóa':'Giữ để mở'} ${esc(d.name)}">${ico}</button><div class="orb-h">${un?'Chạm để khóa':'Giữ để mở khóa'}</div>`:`<div class="lock ${d.lock_state}" style="width:120px;height:120px;margin:10px auto 18px">${ico}</div>`}<div class="ctrl-s" style="font-size:22px">${lockTxt[d.lock_state]||'Chưa rõ'}</div><div class="meta"><span class="pill ${d.status==='online'?'ok':'bad'}">${d.status==='online'?'Online':'Offline'}</span><span class="pill">${ic('battery',14)} ${d.battery_level??'—'}%</span></div></div>`};
+V.home=()=>{const D=S.devices||[],a=S.activity||{labels:[],values:[]},T=todo(D),lv=T.some(x=>x.l==='bad')?'bad':T.length?'warn':'',
+ msg=!D.length?'Chưa có khóa nào. Thêm khóa đầu tiên để bắt đầu.':T.length?T[0].t+(T.length>1?` · còn ${T.length-1} việc khác`:''):`Tất cả ${D.length} khóa đã khóa, mọi thứ ổn.`;
+ if(!D.length)return shell(`<div class="card" style="text-align:center;padding:34px 22px"><div class="logo" style="margin:0 auto 16px;width:56px;height:56px">${ic('lock',28)}</div><h2>Bắt đầu với 3 bước</h2><div style="text-align:left;max-width:360px;margin:0 auto 20px"><div class="row"><div class="f"><b>Thêm khóa</b><div class="sm mut">Nhập mã thiết bị và secret in trên khóa.</div></div></div><div class="row"><div class="f"><b>Bật xác thực 2 lớp</b><div class="sm mut">Vào Tài khoản để bảo vệ quyền mở cửa.</div></div></div><div class="row"><div class="f"><b>Mời người thân</b><div class="sm mut">Chia sẻ khóa theo vai trò, không cần đưa mã.</div></div></div></div><a data-l class="btn" href="/devices/claim/">${ic('plus',16)} Thêm khóa</a></div>`,'Tổng quan');
+ return shell(`<button class="strip ${lv}" data-a="goTodo" ${T.length?'':'tabindex="-1"'}>${ic(lv?'alert':'shield',26)}<span>${esc(msg)}</span></button>
+ <div class="rail" aria-label="Danh sách khóa">${D.map(rail).join('')}</div>
+ ${T.length?`<div class="sec" id="todo">Cần xử lý</div><div class="card">${T.map(x=>`<a data-l href="${x.h}" class="row" style="color:inherit"><div class="ib ${x.l}">${ic(x.i,18)}</div><div class="f"><b>${esc(x.t)}</b><div class="sm mut">${esc(x.s)}</div></div></a>`).join('')}</div>`:''}
+ <div class="sec row2">Ra vào gần đây<a data-l class="lnk" href="/access/history/">Xem tất cả</a></div><div class="card tl">${(S.history||[]).slice(0,5).map(evRow).join('')||none('Chưa có lượt ra vào. Khi có người mở khóa, lượt đầu tiên sẽ hiện ở đây.')}</div>
+ <div class="sec">7 ngày qua</div><div class="card" style="padding:14px">${spark(a.values,a.labels)}</div>
+ <div style="text-align:center;margin-top:22px"><button class="btn d s" data-a="lockAll">Khóa tất cả cửa</button></div>`,'Tổng quan')};
+
+/* ---- 3. Trang một khóa: 4 tab ---- */
+const ways=id=>{const R=[];(S.pins||[]).filter(p=>p.device_id===id).forEach(p=>R.push({i:'pin',t:p.label||'Mã PIN khách',k:'PIN',s:(p.expires_at?'Hết hạn '+fdt(p.expires_at):'Không hết hạn')+` · dùng ${p.use_count}/${p.max_uses||'∞'} lần`,ok:p.is_valid_now,own:'',u:`pins/${p.id}/`,m:'Thu hồi mã PIN này?',b:'Thu hồi'}));
+ (S.cards||[]).filter(c=>c.devices.some(x=>x.device_id===id)).forEach(c=>R.push({i:'card',t:c.name||'Thẻ NFC',k:'Thẻ NFC',s:'Chủ thẻ: '+(c.is_mine?'bạn':c.owner),ok:c.is_active,u:`cards/${c.id}/`,m:'Xóa thẻ này?',b:'Xóa',tg:c.is_mine?{a:'cardTog',id:c.id,v:c.is_active?0:1}:0}));
+ (S.faces||[]).filter(f=>f.device_id===id).forEach(f=>R.push({i:'face',t:f.name||f.user,k:'Khuôn mặt',s:`${f.user} · thêm ${ago(f.created_at)}`,ok:f.is_active,u:`faces/${f.id}/`,m:'Xóa vĩnh viễn dữ liệu khuôn mặt này?',b:'Xóa',tg:{a:'faceTog',id:f.id,v:f.is_active?0:1}}));return R};
+V.device=()=>{const d=dev(ROUTE.id);if(!d)return shell(none('Không tìm thấy khóa này. Quay lại danh sách để chọn khóa khác.'),'Khóa');
+ const id=d.id,P=d.permissions||[],own=d.is_owner,mg=own||P.some(x=>/^manage_(pins|nfc|face)/.test(x));
+ const T=[['control','Điều khiển'],mg&&['ways','Cách mở'],own&&['share','Chia sẻ'],own&&['set','Cài đặt']].filter(Boolean);if(!T.some(t=>t[0]===TAB))TAB='control';let b='';
+ const l=LIVE_DATA&&LIVE_DATA.id===id?LIVE_DATA:{},st=l.lock_state||d.lock_state,un=st==='unlocked',can=own||P.includes(un?'LOCK':'UNLOCK'),ico=ic(un?'open':'lock',64);
+ if(TAB==='control')b=`<div class="grid g2"><div class="card ctrl">${can?`<button class="orb ${st}${un?'':' hold'}" data-a="cmd" data-id="${id}" data-c="${un?'LOCK':'UNLOCK'}" aria-label="${un?'Khóa':'Giữ để mở'}">${ico}</button><div class="orb-h">${un?'Chạm để khóa':'Giữ để mở khóa'}</div>`:`<div class="lock ${st}" style="width:140px;height:140px;margin:0 auto 18px">${ico}</div>`}<div class="ctrl-s">${lockTxt[st]||'Chưa rõ'}</div><div class="chips"><span class="pill ${l.connected===false?'bad':'ok'}">${l.connected===false?'Mất kết nối':'Đang kết nối'}</span><span class="pill">${ic('battery',14)} ${l.battery??d.battery_level??'—'}%</span>${l.tamper?'<span class="pill bad">Cảnh báo phá khóa</span>':''}${l.locked_out?'<span class="pill warn">Đang khóa tạm</span>':''}</div>
+  ${d.bluetooth_enabled?`<button class="btn g s" data-a="bleOpen" data-id="${id}">${ic('bt',16)} Mở bằng Bluetooth</button>`:`<p class="sm mut" style="margin:0">Bluetooth đang tắt${own?'. Bật trong Cài đặt để mở khi không có Wi-Fi.':'. Chủ khóa có thể bật.'}</p>`}</div>
+  <div class="card"><h2>Lệnh gần đây</h2>${(S.commands||[]).filter(c=>c.device_id===id).slice(0,6).map(c=>`<div class="row"><b>${esc(c.command)}</b><span class="f mut sm">${esc(c.by||'')} · ${ago(c.created_at)}</span><span class="pill ${c.status==='acknowledged'?'ok':c.status==='pending'||c.status==='sent'?'warn':'bad'}">${esc(c.status)}</span></div>`).join('')||none('Chưa có lệnh nào gửi tới khóa này.')}</div></div>`;
+ if(TAB==='ways'){const R=ways(id);b=`<div class="card"><h2>Ai và cái gì mở được khóa này</h2>${R.map(r=>`<div class="row"><div class="ib ${r.ok?'ok':'bad'}">${ic(r.i,18)}</div><div class="f"><b>${esc(r.t)}</b> <span class="pill">${r.k}</span><div class="sm mut">${esc(r.s)}</div></div><span class="pill ${r.ok?'ok':'bad'}">${r.ok?'Hiệu lực':r.tg?'Đã tắt':'Hết hạn'}</span>${r.tg?`<button class="btn g s" data-a="${r.tg.a}" data-id="${r.tg.id}" data-v="${r.tg.v}">${r.tg.v?'Bật':'Tắt'}</button>`:''}<button class="btn d s" data-a="del" data-u="${r.u}" data-t="${r.m}">${r.b}</button></div>`).join('')||none('Chưa có cách mở nào ngoài app. Thêm thẻ NFC, mã PIN hoặc khuôn mặt.')}<div style="margin-top:14px"><button class="btn" data-a="addWay" data-id="${id}">${ic('plus',16)} Thêm cách mở</button> <button class="btn g" data-a="guest" data-id="${id}">Khách tạm thời</button></div></div>`}
+ if(TAB==='share'){const L=(S.shares_out||[]).filter(p=>p.device_id===id);b=`<div class="card"><h2>Người được chia sẻ</h2>${L.map(s=>`<div class="row">${avU(s.user)}<div class="f"><b>${esc(s.user.full_name||s.user.username)}</b><div class="sm mut">${s.permissions.length} quyền · ${s.expires_at?'hết hạn '+fdt(s.expires_at):'không hết hạn'}</div></div><button class="btn g s" data-a="shareEdit" data-id="${s.id}" data-dev="${id}">Sửa quyền</button><button class="btn d s" data-a="del" data-u="shares/${s.id}/" data-t="Thu hồi quyền truy cập?">Thu hồi</button></div>`).join('')||none('Chưa chia sẻ cho ai. Chọn vai trò như Gia đình, Khách hay Thợ sửa là xong.')}<div style="margin-top:14px"><button class="btn" data-a="shareNew" data-id="${id}">${ic('plus',16)} Chia sẻ khóa</button></div></div>`}
+ if(TAB==='set'){const sw=(k,t)=>`<div class="row"><div class="f">${t}</div><button class="tgl ${d[k]?'on':''}" role="switch" aria-checked="${!!d[k]}" aria-label="${t}" data-a="flag" data-id="${id}" data-k="${k}" data-v="${d[k]?0:1}"></button></div>`;
+  b=`<div class="grid g2"><form class="card" data-f="devEdit" data-id="${id}"><h2>Tên và vị trí</h2><label>Tên cửa</label><input name="name" value="${esc(d.name)}" required><label>Vị trí</label><input name="location" value="${esc(d.location)}"><button class="btn">Lưu</button><div class="sm mut" style="margin-top:12px">Mã ${esc(d.device_code)} · FW ${esc(d.firmware_version||'—')} · MAC ${esc(d.mac_address||'—')}</div></form>
+  <div class="card"><h2>Kênh kết nối</h2>${sw('wifi_enabled','Wi-Fi (điều khiển từ xa)')}${sw('bluetooth_enabled','Bluetooth')}${sw('nfc_enabled','Thẻ NFC')}<h2 style="margin-top:16px">Bảo mật khóa</h2><div class="row"><div class="f">Gỡ khóa tạm sau nhiều lần nhập sai</div><button class="btn g s" data-a="clearLock" data-id="${id}">Gỡ</button></div></div></div>
+  <div class="card danger"><h2>Vùng nguy hiểm</h2><div class="row"><div class="f"><b>Xoay secret thiết bị</b><div class="sm mut">Secret cũ ngừng hoạt động ngay.</div></div><button class="btn g s" data-a="rotate" data-id="${id}">Xoay</button></div><div class="row"><div class="f"><b>Gỡ khóa khỏi tài khoản</b><div class="sm mut">Thu hồi mọi PIN, thẻ, khuôn mặt và chia sẻ. Cần gõ lại mã khóa.</div></div><button class="btn d s" data-a="delDev" data-id="${id}">Gỡ khóa</button></div></div>`}
+ return shell(`<div class="tabs" role="tablist">${T.map(([k,t])=>`<button type="button" role="tab" aria-selected="${TAB===k}" data-a="tab" data-k="${k}" class="${TAB===k?'on':''}">${t}</button>`).join('')}</div>${b}`,esc(d.name),`<a data-l class="btn g s" href="/devices/">${ic('back',16)} Khóa</a> <span class="pill ${d.status==='online'?'ok':'bad'}">${d.status==='online'?'Online':'Offline'}</span>`)};
+V.devices=()=>shell(`<div class="rail">${(S.devices||[]).map(rail).join('')||`<div class="card" style="flex:1">${none('Chưa có khóa nào. Thêm khóa bằng mã thiết bị in trên khóa.')}</div>`}</div>`,'Khóa',`<button class="btn" data-a="claim">${ic('plus',16)} Thêm khóa</button>`);
+
+/* ---- 4. Wizard thêm cách mở: chọn loại → kiểm tra → thực hiện → hoàn tất ---- */
+const wiz=(t,b)=>modal(`<h2>${t}</h2>${b}`);
+ACT.addWay=el=>{const id=el.dataset.id;wiz('Thêm cách mở',[['pin','pin','Mã PIN khách','Mã dùng một lần hoặc có thời hạn'],['nfc','card','Thẻ NFC','Quét thẻ tại đầu đọc của khóa'],['face','face','Khuôn mặt','Đăng ký bằng camera, cần sự đồng ý']].map(([k,i,t,s])=>`<button class="pick" data-a="way" data-k="${k}" data-id="${id}"><div class="ib">${ic(i,18)}</div><div><b>${t}</b><small>${s}</small></div></button>`).join('')+`<button class="btn g" style="width:100%" data-a="close">Hủy</button>`)};
+ACT.way=el=>{const id=el.dataset.id,k=el.dataset.k,d=dev(id);
+ if(k!=='face'&&d.status!=='online')return wiz('Khóa đang offline',`<div class="err">Khóa đang offline, kiểm tra Wi-Fi tại cửa rồi thử lại.</div><button class="btn g" style="width:100%" data-a="addWay" data-id="${id}">Chọn cách khác</button>`);
+ if(k==='nfc'&&!d.nfc_enabled)return wiz('NFC đang tắt',`<p class="mut">Cần bật NFC trên khóa trước khi thêm thẻ.</p><button class="btn" style="width:100%;margin-bottom:8px" data-a="nfcOn" data-id="${id}">Bật NFC</button><button class="btn g" style="width:100%" data-a="close">Hủy</button>`);
+ if(k==='nfc'){closeModal();return ACT.enroll({dataset:{id,n:d.name}})}
+ if(k==='face'){closeModal();return ACT.faceNew({dataset:{id}})}
+ wiz('Tạo mã PIN khách',`<form data-f="pin" data-id="${id}"><div id="err"></div><label>Dùng cho ai</label><input name="label" placeholder="VD: Thợ sửa điện"><label>Có hiệu lực trong</label><div class="chipset" data-g="ttl_minutes">${[['1 giờ',60],['1 ngày',1440],['1 tuần',10080]].map(([t,v],i)=>`<button type="button" data-a="chip" data-v="${v}" class="${i==1?'on':''}">${t}</button>`).join('')}</div><label>Số lần dùng</label><div class="chipset" data-g="max_uses">${[['1 lần',1],['5 lần',5],['Không giới hạn',0]].map(([t,v],i)=>`<button type="button" data-a="chip" data-v="${v}" class="${i==0?'on':''}">${t}</button>`).join('')}</div><input type="hidden" name="ttl_minutes" value="1440"><input type="hidden" name="max_uses" value="1"><button class="btn" style="width:100%">Tạo mã</button></form>`)};
+ACT.chip=el=>{const g=el.parentElement;g.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===el));el.closest('form').elements[g.dataset.g].value=el.dataset.v};
+ACT.nfcOn=async el=>{const r=await api('PATCH',`devices/${el.dataset.id}/`,{nfc_enabled:true});if(!r.ok)return toast(em(r),1);await load(true);render();ACT.way({dataset:{id:el.dataset.id,k:'nfc'}})};
+FORMS.pin=async(b,e,id)=>{const r=await api('POST',`devices/${id}/pins/`,{label:b.label,ttl_minutes:+b.ttl_minutes,max_uses:+b.max_uses});if(!r.ok){e.innerHTML=`<div class="err">${esc(em(r))}</div>`;return}
+ await load(true);const exp=r.d.expires_at?fdt(r.d.expires_at):'khi hết lượt dùng',txt=`Mã vào cửa của bạn: ${r.d.plain_pin}. Dùng đến ${exp}.`;window._pt=txt;
+ modal(`<h2>Mã PIN đã sẵn sàng</h2><div class="pin">${esc(r.d.plain_pin)}</div><p class="sm mut">${esc(b.label||'Mã khách')} · hiệu lực đến ${esc(exp)}. Mã chỉ hiển thị một lần.</p><button class="btn" style="width:100%;margin-bottom:8px" data-a="sendPin">Gửi cho khách</button><a class="btn g" style="width:100%;margin-bottom:8px" href="sms:?&body=${encodeURIComponent(txt)}">Gửi qua SMS</a><button class="btn g" style="width:100%;margin-bottom:8px" data-a="copyPin">Sao chép tin nhắn</button><button class="lnk" style="width:100%" data-a="close">Xong</button>`);render()};
+ACT.copyPin=async()=>{try{await navigator.clipboard.writeText(window._pt);toast('Đã sao chép')}catch(e){toast('Không sao chép được, hãy chọn và chép thủ công.',1)}};
+ACT.sendPin=async()=>{if(navigator.share){try{await navigator.share({text:window._pt})}catch(e){}}else ACT.copyPin()};
+
+/* ---- 5. Hoạt động: Ra vào · Thông báo · Nhật ký + bộ lọc ---- */
+let ATAB='go',F={dev:'',fail:0,w:'',m:'',r:''};
+const actView=t=>{ATAB=t;const N=S.notifications||[],H=(S.history||[]).filter(e=>(!F.dev||e.device_id===F.dev)&&(!F.fail||!e.success)&&(!F.m||e.method===F.m)&&(!F.w||e.who===F.w)&&(!F.r||Date.now()-new Date(e.created_at)<F.r*864e5)),un=S.unread_count||0;let b='';
+ if(t==='go')b=`<div class="filt"><select data-chg="dev" aria-label="Lọc theo khóa"><option value="">Mọi khóa</option>${(S.devices||[]).map(d=>`<option value="${d.id}" ${F.dev===d.id?'selected':''}>${esc(d.name)}</option>`).join('')}</select><select data-chg="w" aria-label="Lọc theo người"><option value="">Mọi người</option>${[...new Set((S.history||[]).map(e=>e.who).filter(Boolean))].map(w=>`<option ${F.w===w?'selected':''}>${esc(w)}</option>`).join('')}</select><select data-chg="m" aria-label="Lọc theo cách mở"><option value="">Mọi cách mở</option>${Object.entries(MTH).map(([k,v])=>`<option value="${k}" ${F.m===k?'selected':''}>${v}</option>`).join('')}</select><select data-chg="r" aria-label="Khoảng thời gian">${[['','Mọi lúc'],['1','24 giờ qua'],['7','7 ngày qua'],['30','30 ngày qua']].map(([v,t])=>`<option value="${v}" ${F.r===v?'selected':''}>${t}</option>`).join('')}</select><label><input type="checkbox" data-chg="fail" ${F.fail?'checked':''}> Chỉ lần thất bại</label></div><div class="card tl">${H.map(evRow).join('')||none(F.dev||F.fail?'Không có lượt nào khớp bộ lọc. Thử bỏ bớt bộ lọc.':'Chưa có lượt ra vào nào.')}</div>`;
+ if(t==='notes')b=`<div class="card">${N.map(n=>`<div class="row" style="${n.is_read?'opacity:.6':''}"><div class="ib ${n.severity==='critical'?'bad':n.severity==='warning'?'warn':'ok'}">${ic(n.severity==='critical'||n.severity==='warning'?'alert':'bell',18)}</div><div class="f" ${n.is_read?'':`data-a="readOne" data-id="${n.id}" style="cursor:pointer"`}><b>${esc(n.title)}</b><div class="sm mut">${esc(n.message)}</div></div><span class="mut sm">${ago(n.created_at)}</span><button class="btn g s" data-a="del" data-u="notifications/${n.id}/" data-t="" aria-label="Xóa thông báo">✕</button></div>`).join('')||none('Không có thông báo. Cảnh báo pin yếu hay mở thất bại sẽ hiện ở đây.')}</div>`;
+ if(t==='audit')b=`<div class="card">${(S.audit||[]).map(a=>`<div class="row"><div class="ib ${a.success?'ok':'bad'}">${ic(a.success?'check':'alert',18)}</div><div class="f"><b>${esc(a.action)}</b><div class="sm mut">${esc(a.device||'')} ${esc(a.ip_address||'')}</div></div><span class="mut sm">${ago(a.created_at)}</span></div>`).join('')||none('Chưa có hoạt động tài khoản nào được ghi lại.')}</div>`;
+ const tb=[['go','Ra vào'],['notes','Thông báo'+(un?` (${un})`:'')],['audit','Nhật ký']];
+ return shell(`<div class="tabs" role="tablist">${tb.map(([k,x])=>`<button type="button" role="tab" aria-selected="${ATAB===k}" data-a="atab" data-k="${k}" class="${ATAB===k?'on':''}">${x}</button>`).join('')}</div>${b}`,'Hoạt động',t==='notes'?(un?`<button class="btn g s" data-a="readAll">Đọc tất cả</button>`:'')+`<button class="btn g s" data-a="clearRead">Xóa đã đọc</button>`:'')};
+V.history=()=>actView(ATAB);V.notes=()=>actView('notes');V.audit=()=>actView('audit');
+ACT.atab=el=>{ATAB=el.dataset.k;if(ROUTE.page!=='history')return go('/access/history/');render()};
+document.addEventListener('change',e=>{const el=e.target.closest('[data-chg]');if(!el)return;F[el.dataset.chg]=el.type==='checkbox'?+el.checked:el.value;render()});
+
+/* ---- 6. Hành động chung ---- */
+ACT.goTodo=()=>{const t=$('#todo');t&&t.scrollIntoView({behavior:'smooth',block:'start'})};
+ACT.lockAll=async()=>{const L=(S.devices||[]).filter(d=>d.is_owner||(d.permissions||[]).includes('LOCK'));if(!L.length)return toast('Bạn chưa có khóa nào để khóa.',1);if(!await ask('Khóa tất cả cửa ngay?','Khóa tất cả'))return;
+ const rs=await Promise.all(L.map(d=>api('POST',`devices/${d.id}/commands/`,{command:'LOCK'})));const bad=rs.filter(r=>!r.ok).length;toast(bad?`${bad}/${L.length} khóa chưa nhận lệnh, kiểm tra kết nối.`:`Đã gửi lệnh khóa tới ${L.length} khóa`,!!bad);await load(true);render()};
+</script>
+
+<script>
+/* ---- 7. Hoàn tất: hoàn tác, vai trò mẫu, khách tạm thời ---- */
+function undoToast(m,fn){const t=document.createElement('div');t.append(m+' ');const b=document.createElement('button');b.textContent='Hoàn tác';b.className='lnk';b.style.cssText='color:inherit;text-decoration:underline;min-height:0;padding:0 0 0 6px';b.onclick=()=>{t.remove();fn()};t.append(b);$('#toast').append(t);setTimeout(()=>t.remove(),6000)}
+const softTog=(url,name)=>async el=>{const on=el.dataset.v==='1',r=await api('PATCH',url(el.dataset.id),{is_active:on});if(!r.ok)return toast(em(r),1);await load(true);render();
+ undoToast((on?'Đã bật ':'Đã tắt ')+name,async()=>{await api('PATCH',url(el.dataset.id),{is_active:!on});await load(true);render()})};
+ACT.cardTog=softTog(i=>`cards/${i}/`,'thẻ');ACT.faceTog=softTog(i=>`faces/${i}/`,'khuôn mặt');
+ACT.shareNew=async el=>{await shareModal(el.dataset.id);const s=document.querySelector('.modal select[name=preset]');if(!s)return;
+ const h=document.createElement('input');h.type='hidden';h.name='preset';const c=document.createElement('div');c.className='chipset';c.dataset.g='preset';
+ c.innerHTML='<label style="width:100%">Vai trò</label>'+[...s.options].filter(x=>x.value).map(x=>`<button type="button" data-a="chip" data-v="${esc(x.value)}">${esc(x.text)}</button>`).join('')+'<button type="button" class="on" data-a="chip" data-v="">Tùy chỉnh</button>';
+ s.previousElementSibling&&s.previousElementSibling.remove();s.replaceWith(h);h.before(c);
+ const d=document.createElement('details');d.innerHTML='<summary style="cursor:pointer;min-height:44px;font-weight:600">Tùy chỉnh quyền chi tiết</summary>';let n=h.nextSibling;
+ while(n&&!(n.tagName==='LABEL'&&/Hết hạn/.test(n.textContent))){const x=n.nextSibling;d.append(n);n=x}h.after(d)};
+ACT.guest=el=>{ACT.way({dataset:{id:el.dataset.id,k:'pin'}});const f=document.querySelector('.modal form[data-f=pin]');if(!f)return;f.elements.label.value='Khách tạm';f.querySelector('[data-g=ttl_minutes] [data-v="60"]').click();f.querySelector('[data-g=max_uses] [data-v="0"]').click()};
+</script>
