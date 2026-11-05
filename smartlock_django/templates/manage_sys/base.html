@@ -181,6 +181,9 @@ a.stat-card:hover{box-shadow:0 20px 44px -20px rgba(0,0,0,.35)}
 :focus-visible{outline:2px solid var(--a);outline-offset:2px}
 </style>
 {% block extra_head %}{% if page == 'login' %}<meta name="robots" content="noindex,nofollow">{% endif %}{% endblock %}
+{# Vercel Web Analytics #}
+<script>window.va=window.va||function(){(window.vaq=window.vaq||[]).push(arguments)};</script>
+<script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
 {% block shell %}

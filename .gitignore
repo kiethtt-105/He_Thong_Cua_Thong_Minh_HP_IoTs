@@ -4,3 +4,4 @@ run_django.bat
 rundocker.bat
 share_ports.bat
 .env
+node_modules/
