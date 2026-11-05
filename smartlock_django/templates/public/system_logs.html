@@ -8,6 +8,10 @@
 <script>try{if(localStorage.sl_theme)document.documentElement.dataset.theme=localStorage.sl_theme}catch(e){}
 function slTheme(){var r=document.documentElement,dk=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme:dark)').matches,n=dk?'light':'dark';r.dataset.theme=n;try{localStorage.sl_theme=n}catch(e){}}</script>
 <title>Giám sát toàn hệ thống · SmartLock</title>
+<script>
+  window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
+</script>
+<script defer src="/_vercel/speed-insights/script.js"></script>
 <style>
 :root{color-scheme:light;--bg:#f2f2f7;--card:#fff;--card2:#fafafc;--ink:#1c1c1e;--mut:#8e8e93;--line:rgba(60,60,67,.12);--soft:rgba(120,120,128,.12);--a:#0a84ff;--a2:#5e5ce6;--ok:#28a745;--bad:#ff3b30;--warn:#ff9500;--r:26px;--sh:0 1px 2px rgba(0,0,0,.04),0 10px 28px -14px rgba(0,0,0,.14);--glow:rgba(10,132,255,.16);--e:cubic-bezier(.2,.7,.2,1)}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--bg:#000;--card:#1c1c1e;--card2:#2c2c2e;--ink:#fff;--mut:#98989f;--line:rgba(84,84,88,.5);--soft:rgba(120,120,128,.24);--ok:#30d158;--bad:#ff453a;--warn:#ff9f0a;--sh:none;--glow:rgba(10,132,255,.22)}}

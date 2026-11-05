@@ -1,0 +1,75 @@
+# Vercel Speed Insights Implementation Report
+
+## Summary
+Successfully installed and configured Vercel Speed Insights for this Django project following the latest official documentation from Vercel.
+
+## Changes Made
+
+### 1. Package Installation
+- **Installed**: `@vercel/speed-insights` version 2.0.0 via npm
+- **Updated Files**:
+  - `package.json` - Added @vercel/speed-insights dependency
+  - `package-lock.json` - Updated with new package and its dependencies
+
+### 2. Speed Insights Configuration
+Added Vercel Speed Insights to all base HTML templates in the project using the vanilla JavaScript implementation method as recommended in the official documentation for non-framework HTML pages.
+
+The implementation follows the pattern documented at https://vercel.com/docs/speed-insights/quickstart for vanilla HTML/JavaScript applications:
+
+```html
+<script>
+  window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
+</script>
+<script defer src="/_vercel/speed-insights/script.js"></script>
+```
+
+**Modified Templates**:
+- `templates/manage_sys/base.html` - Admin/management system base template
+- `templates/account/app.html` - User account application template  
+- `templates/public/system_logs.html` - Public system logs template
+
+### 3. Additional Improvements
+- **Created**: `.gitignore` file to properly exclude `node_modules/` from version control
+  - Prevents unnecessary npm packages from being committed to the repository
+  - Includes existing patterns for Python virtual environments and build artifacts
+
+## Implementation Details
+
+### Why This Approach?
+This project is a Django application deployed to Vercel. Since Django uses server-side rendered HTML templates (not a JavaScript framework like React, Next.js, or Vue), the vanilla JavaScript implementation of Speed Insights was the correct choice.
+
+The Speed Insights script automatically:
+- Tracks Core Web Vitals (LCP, FID, CLS, FCP, TTFB, INP)
+- Sends performance data to Vercel's analytics platform
+- Only collects data in production (disabled in development mode)
+- Loads asynchronously without blocking page rendering
+
+### How It Works
+1. The initialization script creates a queue (`window.siq`) to store events before the main script loads
+2. The deferred script (`/_vercel/speed-insights/script.js`) is loaded asynchronously from Vercel's infrastructure
+3. When deployed to Vercel, the path `/_vercel/speed-insights/` is automatically routed to Vercel's Speed Insights service
+4. Performance metrics are collected and sent to the project's Speed Insights dashboard
+
+## Verification
+
+To verify the implementation is working after deployment:
+
+1. **Deploy to Vercel**: Push these changes to your connected Git repository or run `vercel deploy`
+2. **Check Page Source**: View source on any page and verify the Speed Insights scripts are present in the `<head>` section
+3. **Check Network Tab**: In browser DevTools, confirm the script loads from `/_vercel/speed-insights/script.js`
+4. **View Dashboard**: After deployment and user visits, check your project's Speed Insights tab in the Vercel dashboard
+
+## Files Changed
+- ✅ `smartlock_django/package.json` - Added @vercel/speed-insights dependency
+- ✅ `smartlock_django/package-lock.json` - Updated lockfile with new packages
+- ✅ `smartlock_django/templates/manage_sys/base.html` - Added Speed Insights scripts
+- ✅ `smartlock_django/templates/account/app.html` - Added Speed Insights scripts
+- ✅ `smartlock_django/templates/public/system_logs.html` - Added Speed Insights scripts
+- ✅ `smartlock_django/.gitignore` - Created to exclude node_modules
+
+## Notes
+- Speed Insights only tracks data in production environments
+- The package was installed using npm (the project's existing package manager)
+- All changes preserve the existing code structure and styling
+- The implementation follows Vercel's official documentation fetched on 2026-11-05
+- No framework-specific imports were needed since this is a Django (server-side rendered) application
